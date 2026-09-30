@@ -19,6 +19,7 @@ export default defineRailway(() => {
     volumeMounts: {
       "/data": volume("flow-sheets-data", { region: "sfo", sizeMB: 5000 }),
     },
+    domains: ["sheets.freeflow.im"],
     // A volume can only be attached to a single replica.
     replicas: { sfo: 1 },
   });
