@@ -1,0 +1,185 @@
+import { describe, expect, it } from 'vitest';
+import { newTab, type Workbook } from '../../../shared/types.ts';
+import {
+  appendTabs,
+  applyStyle,
+  clearContents,
+  computeHiddenRows,
+  deleteLines,
+  detectDataRegion,
+  fillRange,
+  insertLines,
+  moveRange,
+  pasteClip,
+  readClip,
+  renameTab,
+  setInput,
+  sortRange,
+} from './ops.ts';
+import { WorkbookStore } from './store.ts';
+
+function makeStore(cells: Record<string, string>, other?: Record<string, string>) {
+  const t = newTab('t1', 'Sheet1');
+  for (const [k, v] of Object.entries(cells)) t.cells[k] = { v };
+  const wb: Workbook = { version: 1, tabs: [t] };
+  if (other) {
+    const o = newTab('t2', 'Other');
+    for (const [k, v] of Object.entries(other)) o.cells[k] = { v };
+    wb.tabs.push(o);
+  }
+  return new WorkbookStore(wb);
+}
+
+const raw = (s: WorkbookStore, key: string, tab = 't1') => s.getTab(tab)!.cells[key]?.v;
+
+describe('store undo/redo', () => {
+  it('undoes and redoes cell edits and recalculates', () => {
+    const s = makeStore({ A1: '1', A2: '=A1*10' });
+    s.transact((tx) => setInput(tx, 't1', 0, 0, '5'));
+    expect(s.value('t1', 1, 0)).toBe(50);
+    s.undo();
+    expect(s.value('t1', 1, 0)).toBe(10);
+    s.redo();
+    expect(s.value('t1', 1, 0)).toBe(50);
+  });
+
+  it('undoes structural changes interleaved with edits', () => {
+    const s = makeStore({ A1: '1', A2: '2', A3: '=SUM(A1:A2)' });
+    s.transact((tx) => insertLines(tx, 't1', 'row', 1, 2));
+    expect(raw(s, 'A5')).toBe('=SUM(A1:A4)');
+    expect(raw(s, 'A4')).toBe('2');
+    s.transact((tx) => setInput(tx, 't1', 1, 0, '10'));
+    expect(s.value('t1', 4, 0)).toBe(13);
+    s.undo();
+    s.undo();
+    expect(raw(s, 'A3')).toBe('=SUM(A1:A2)');
+    expect(s.value('t1', 2, 0)).toBe(3);
+    s.redo();
+    s.redo();
+    expect(s.value('t1', 4, 0)).toBe(13);
+  });
+});
+
+describe('structural ops', () => {
+  it('deletes rows and updates references in other tabs', () => {
+    const s = makeStore({ A1: 'a', A2: 'b', A3: 'c', A4: '=A3' }, { A1: '=Sheet1!A3', A2: '=Sheet1!A2' });
+    s.transact((tx) => deleteLines(tx, 't1', 'row', 1, 1));
+    expect(raw(s, 'A2')).toBe('c');
+    expect(raw(s, 'A3')).toBe('=A2');
+    expect(raw(s, 'A1', 't2')).toBe('=Sheet1!A2');
+    expect(raw(s, 'A2', 't2')).toBe('=Sheet1!#REF!'.replace('Sheet1!', ''));
+    expect(s.getTab('t1')!.rows).toBe(999);
+  });
+
+  it('inserts columns', () => {
+    const s = makeStore({ A1: '1', B1: '2', C1: '=A1+B1' });
+    s.transact((tx) => insertLines(tx, 't1', 'col', 1, 1));
+    expect(raw(s, 'D1')).toBe('=A1+C1');
+    expect(s.value('t1', 0, 3)).toBe(3);
+  });
+
+  it('renames tabs and rewrites references', () => {
+    const s = makeStore({ A1: '=Other!B1*2' }, { B1: '4' });
+    s.transact((tx) => renameTab(tx, 't2', 'Data Set'));
+    expect(raw(s, 'A1')).toBe("='Data Set'!B1*2");
+    expect(s.value('t1', 0, 0)).toBe(8);
+  });
+});
+
+describe('fill', () => {
+  it('extends numeric series, text counters and formulas', () => {
+    const s = makeStore({ A1: '1', A2: '3', B1: 'Item 1', C1: '=A1*2', D1: '1/30/2024' });
+    s.transact((tx) => fillRange(tx, 't1', { r1: 0, c1: 0, r2: 1, c2: 0 }, { r1: 0, c1: 0, r2: 4, c2: 0 }));
+    expect([raw(s, 'A3'), raw(s, 'A4'), raw(s, 'A5')]).toEqual(['5', '7', '9']);
+    s.transact((tx) => fillRange(tx, 't1', { r1: 0, c1: 1, r2: 0, c2: 3 }, { r1: 0, c1: 1, r2: 2, c2: 3 }));
+    expect(raw(s, 'B3')).toBe('Item 3');
+    expect(raw(s, 'C3')).toBe('=A3*2');
+    expect(raw(s, 'D3')).toBe('2/1/2024');
+  });
+
+  it('fills upward', () => {
+    const s = makeStore({ A3: '10', A4: '20' });
+    s.transact((tx) => fillRange(tx, 't1', { r1: 2, c1: 0, r2: 3, c2: 0 }, { r1: 0, c1: 0, r2: 3, c2: 0 }));
+    expect([raw(s, 'A1'), raw(s, 'A2')]).toEqual(['-10', '0']);
+  });
+});
+
+describe('sort, paste, move', () => {
+  it('sorts rows keeping formulas with their row', () => {
+    const s = makeStore({ A1: 'b', B1: '2', C1: '=B1*10', A2: 'a', B2: '1', C2: '=B2*10', B3: '9' });
+    s.transact((tx) => sortRange(tx, s as WorkbookStore<unknown>, 't1', { r1: 0, c1: 0, r2: 2, c2: 2 }, 0, true));
+    expect([raw(s, 'A1'), raw(s, 'A2'), raw(s, 'A3')]).toEqual(['a', 'b', undefined]);
+    expect(raw(s, 'C1')).toBe('=B1*10');
+    expect(s.value('t1', 0, 2)).toBe(10);
+    expect(raw(s, 'B3')).toBe('9'); // blank sort key stays last
+  });
+
+  it('pastes with relative shifting and tiling', () => {
+    const s = makeStore({ A1: '1', B1: '=A1+1' });
+    const clip = readClip(s.getTab('t1')!, { r1: 0, c1: 0, r2: 0, c2: 1 });
+    s.transact((tx) => pasteClip(tx, 't1', { r1: 2, c1: 0, r2: 3, c2: 1 }, clip));
+    expect(raw(s, 'B3')).toBe('=A3+1');
+    expect(raw(s, 'B4')).toBe('=A4+1');
+  });
+
+  it('moves ranges', () => {
+    const s = makeStore({ A1: '1', A2: '=A1' });
+    s.transact((tx) => moveRange(tx, 't1', { r1: 0, c1: 0, r2: 1, c2: 0 }, 't1', 0, 2));
+    expect(raw(s, 'A1')).toBeUndefined();
+    expect(raw(s, 'C1')).toBe('1');
+    expect(raw(s, 'C2')).toBe('=A1');
+  });
+
+  it('clears contents but keeps formatting', () => {
+    const s = makeStore({ A1: '1' });
+    s.transact((tx) => applyStyle(tx, 't1', [{ r1: 0, c1: 0, r2: 0, c2: 0 }], { b: true }));
+    s.transact((tx) => clearContents(tx, 't1', [{ r1: 0, c1: 0, r2: 0, c2: 0 }]));
+    expect(s.getTab('t1')!.cells.A1).toEqual({ v: '', st: { b: true } });
+  });
+});
+
+describe('filters', () => {
+  it('hides rows by value and condition', () => {
+    const s = makeStore({ A1: 'Fruit', B1: 'Qty', A2: 'apple', B2: '5', A3: 'pear', B3: '10', A4: 'fig', B4: '15' });
+    const tab = s.getTab('t1')!;
+    expect(detectDataRegion(tab, 1, 1)).toEqual({ r1: 0, c1: 0, r2: 3, c2: 1 });
+    tab.filter = { r1: 0, c1: 0, r2: 3, c2: 1, cols: { 0: { hidden: ['pear'] }, 1: { cond: { type: 'gt', value: '6' } } } };
+    expect([...computeHiddenRows(s as WorkbookStore<unknown>, tab)].sort()).toEqual([1, 2]);
+  });
+});
+
+describe('appendTabs', () => {
+  it('adds imported tabs, renaming clashes and fixing references between them', () => {
+    const s = makeStore({ A1: 'mine' }, { A1: 'existing other' });
+    const imp1 = newTab('x1', 'Sheet1');
+    imp1.cells.A1 = { v: '5' };
+    const imp2 = newTab('x2', 'Report');
+    imp2.cells.A1 = { v: '=Sheet1!A1*2' };
+    imp2.cells.A2 = { v: '=Other!A1' }; // "Other" also exists in the imported file below
+    const imp3 = newTab('x3', 'other');
+    imp3.cells.A1 = { v: 'imported other' };
+
+    let res: ReturnType<typeof appendTabs> | undefined;
+    s.transact((tx) => {
+      res = appendTabs(tx, [imp1, imp2, imp3]);
+    });
+    const names = s.workbook.tabs.map((t) => t.name);
+    expect(names).toEqual(['Sheet1', 'Other', 'Sheet1 2', 'Report', 'other 2']);
+    expect(res!.renamed).toEqual([
+      { from: 'Sheet1', to: 'Sheet1 2' },
+      { from: 'other', to: 'other 2' },
+    ]);
+    // New ids, originals untouched.
+    expect(res!.ids).not.toContain('x1');
+    expect(s.getTab('t1')!.cells.A1.v).toBe('mine');
+
+    const report = s.workbook.tabs[3];
+    expect(report.cells.A1.v).toBe("='Sheet1 2'!A1*2");
+    expect(report.cells.A2.v).toBe("='other 2'!A1");
+    expect(s.value(report.id, 0, 0)).toBe(10);
+    expect(s.value(report.id, 1, 0)).toBe('imported other');
+
+    s.undo();
+    expect(s.workbook.tabs.map((t) => t.name)).toEqual(['Sheet1', 'Other']);
+  });
+});
