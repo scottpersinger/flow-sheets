@@ -39,7 +39,7 @@ export async function buildApp(opts: AppOptions) {
   await sheets.init();
   auth.purgeExpiredSessions();
 
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024 });
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
   // Raw file uploads (xlsx import).
   app.addContentTypeParser([XLSX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
@@ -97,6 +97,16 @@ export async function buildApp(opts: AppOptions) {
   });
 
   app.get('/api/auth/me', async (req) => ({ user: req.user }));
+
+  // Liveness/readiness for the hosting platform: verifies the database is reachable.
+  app.get('/api/health', async (_req, reply) => {
+    try {
+      db.prepare('SELECT 1').get();
+      return { ok: true };
+    } catch {
+      return reply.code(503).send({ ok: false });
+    }
+  });
 
   // --- Sheets ----------------------------------------------------------------
   app.register(async (r) => {

@@ -16,4 +16,16 @@ const app = await buildApp({
   logger: true,
 });
 
-await app.listen({ port, host: process.env.HOST ?? '127.0.0.1' });
+// In production (e.g. Railway) listen on all interfaces; locally stay on loopback.
+await app.listen({ port, host: process.env.HOST ?? (production ? '0.0.0.0' : '127.0.0.1') });
+
+// Close cleanly on redeploy/shutdown so in-flight saves finish and SQLite is checkpointed.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    app.log.info({ signal }, 'shutting down');
+    app.close().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    );
+  });
+}

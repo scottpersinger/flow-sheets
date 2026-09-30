@@ -40,5 +40,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/scottpersinger/flow-sheets.git"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
