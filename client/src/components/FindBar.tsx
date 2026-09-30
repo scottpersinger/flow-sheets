@@ -80,7 +80,7 @@ export function FindBar({ ctl }: { ctl: SheetController }) {
       <Toggle on={s.allTabs} title="Search all sheets" onClick={() => toggle('allTabs')}>
         All sheets
       </Toggle>
-      <button className="find-close" title={`Close (Esc) · open with ${MOD}S`} aria-label="Close find" onClick={() => ctl.closeSearch()}>
+      <button className="find-close" title={`Close (Esc) · open with ${MOD}F`} aria-label="Close find" onClick={() => ctl.closeSearch()}>
         ✕
       </button>
     </div>

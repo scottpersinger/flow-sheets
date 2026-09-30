@@ -27,7 +27,7 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 
 ## Find
 
-Press **Ctrl+S** (⌘S on Mac), or use **Edit → Find…**, to open the find bar. The app saves automatically, so this shortcut replaces the browser's "Save page".
+Press **⌘F** (Ctrl+F on Windows and Linux), or use **Edit → Find…**, to open the find bar. Inside a spreadsheet it replaces the browser's page search.
 
 - Search runs as you type, highlights every match, and jumps to the nearest one.
 - **Enter** and **Shift+Enter** step through matches, and **Esc** closes the bar.

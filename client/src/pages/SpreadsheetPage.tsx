@@ -9,6 +9,7 @@ import {
   dataItems,
   editItems,
   fileItems,
+  isMac,
   formatItems,
   insertItems,
   tabContextItems,
@@ -221,8 +222,8 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       if (e.key === 'F11' && e.shiftKey) {
         e.preventDefault();
         ctl.addTab();
-      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') {
-        // Ctrl+S (⌘S on Mac) opens Find instead of the browser's "Save page"; the app autosaves anyway.
+      } else if ((isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
+        // ⌘F / Ctrl+F opens the spreadsheet's find bar instead of the browser's page search.
         e.preventDefault();
         ctl.openSearch();
       }
