@@ -738,6 +738,12 @@ textarea {
 }
 
 /* Grid */
+.grid-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
 .grid-wrap {
   position: relative;
   flex: 1;
@@ -1086,4 +1092,79 @@ textarea {
   .home-brand {
     min-width: 0;
   }
+}
+
+/* Find bar */
+.find-bar {
+  position: absolute;
+  top: 34px;
+  right: 22px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 8px 6px 10px;
+  box-shadow: 0 2px 6px 2px rgba(60, 64, 67, 0.15), 0 1px 2px rgba(60, 64, 67, 0.3);
+  font-size: 13px;
+  max-width: calc(100% - 44px);
+}
+.find-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.find-input {
+  border: none;
+  outline: none;
+  width: 200px;
+  min-width: 80px;
+  padding: 4px 6px;
+  font-size: 14px;
+}
+.find-status {
+  color: var(--muted);
+  min-width: 64px;
+  text-align: right;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.find-status.none {
+  color: var(--danger);
+}
+.find-nav,
+.find-close,
+.find-toggle {
+  border: none;
+  background: none;
+  border-radius: 4px;
+  cursor: pointer;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  color: #444746;
+  white-space: nowrap;
+}
+.find-nav:hover:not(:disabled),
+.find-close:hover,
+.find-toggle:hover {
+  background: #f1f3f4;
+}
+.find-nav:disabled {
+  color: #bdc1c6;
+  cursor: default;
+}
+.find-toggle {
+  font-size: 12px;
+  font-weight: 500;
+}
+.find-toggle.on {
+  background: #d3e3fd;
+  color: #041e49;
+}
+.find-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
 }

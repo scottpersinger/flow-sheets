@@ -25,6 +25,15 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 | `client/src/state/` | `WorkbookStore` (patch-based undo/redo, incremental recalculation), `AutoSaver`, spreadsheet operations (`ops.ts`) and `SheetController` (selection, editing, clipboard and commands). |
 | `client/src/grid/` | Canvas grid: virtualized rendering, frozen panes, hit testing, and the mouse and keyboard interaction. |
 
+## Find
+
+Press **Ctrl+S** (⌘S on Mac), or use **Edit → Find…**, to open the find bar. The app saves automatically, so this shortcut replaces the browser's "Save page".
+
+- Search runs as you type, highlights every match, and jumps to the nearest one.
+- **Enter** and **Shift+Enter** step through matches, and **Esc** closes the bar.
+- Options: match case, match the entire cell, also search formula text, and search all sheets.
+- It matches values as displayed (for example `$1,500`) and skips rows hidden by a filter.
+
 ## Excel import
 
 There are two ways to import an Excel workbook:

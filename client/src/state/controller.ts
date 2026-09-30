@@ -11,6 +11,7 @@ import { CellError, scalarToText } from '../../../shared/values.ts';
 import { parseTSV, toHTML, toTSV } from './clipboard.ts';
 import { isRefInsertPoint, normalizeFormula } from './formulaEdit.ts';
 import * as ops from './ops.ts';
+import { findMatches, type SearchHit, type SearchOptions } from './search.ts';
 import { AutoSaver, WorkbookStore, type Tx } from './store.ts';
 
 export interface Selection {
@@ -45,6 +46,13 @@ export interface FilterMenuState {
 
 type SelMeta = { tabId: string; sel: Selection };
 
+export interface SearchState extends SearchOptions {
+  /** Index into the current matches, or -1 when none is selected. */
+  current: number;
+  /** Bumped to ask the find bar to (re)focus its input. */
+  focusSeq: number;
+}
+
 interface InternalClipboard {
   text: string;
   clip: ops.ClipData;
@@ -64,6 +72,8 @@ export class SheetController {
   menu: MenuState | null = null;
   filterMenu: FilterMenuState | null = null;
   renamingTabId: string | null = null;
+  /** Find bar state; null when closed. */
+  search: SearchState | null = null;
   scrollRequest: { r: number; c: number; seq: number } | null = null;
   /** Number of rows that fit in the viewport; maintained by the grid for PageUp/PageDown. */
   pageRows = 20;
@@ -73,6 +83,7 @@ export class SheetController {
   private clipboard: InternalClipboard | null = null;
   private listeners = new Set<() => void>();
   private hiddenCache: { version: number; tab: Tab; set: Set<number> } | null = null;
+  private searchCache: { key: string; hits: SearchHit[] } | null = null;
 
   constructor(workbook: Workbook, save: (wb: Workbook) => Promise<void>) {
     this.store = new WorkbookStore<SelMeta>(workbook);
@@ -844,6 +855,83 @@ export class SheetController {
   setRenamingTab(id: string | null): void {
     this.renamingTabId = id;
     this.emit();
+  }
+
+  // -------------------------------------------------------------------------
+  // Find
+
+  openSearch(): void {
+    if (this.edit) this.commitEdit();
+    this.menu = null;
+    this.filterMenu = null;
+    const prev = this.search;
+    this.search = prev
+      ? { ...prev, focusSeq: prev.focusSeq + 1 }
+      : { query: '', matchCase: false, wholeCell: false, formulas: false, allTabs: false, current: -1, focusSeq: 1 };
+    this.emit();
+  }
+
+  closeSearch(): void {
+    if (!this.search) return;
+    this.search = null;
+    this.emit();
+  }
+
+  /** Current matches (cached per workbook version, options, and active tab). */
+  searchMatches(): SearchHit[] {
+    const s = this.search;
+    if (!s || !s.query) return [];
+    const tabs = s.allTabs ? this.store.workbook.tabs : [this.tab];
+    const key = JSON.stringify([this.store.version, s.query, s.matchCase, s.wholeCell, s.formulas, s.allTabs, s.allTabs ? '' : this.tab.id]);
+    if (this.searchCache?.key === key) return this.searchCache.hits;
+    const hits = findMatches(
+      {
+        display: (t, r, c) => this.store.display(t, r, c),
+        hiddenRows: (tab) => (tab === this.tab ? this.hiddenRows() : ops.computeHiddenRows(this.store as WorkbookStore<unknown>, tab)),
+      },
+      tabs,
+      s,
+    );
+    this.searchCache = { key, hits };
+    return hits;
+  }
+
+  /** Update the query/options and jump to the first match at or after the active cell. */
+  setSearchOptions(patch: Partial<SearchOptions>): void {
+    if (!this.search) return;
+    this.search = { ...this.search, ...patch, current: -1 };
+    const hits = this.searchMatches();
+    if (hits.length) {
+      const tabs = this.store.workbook.tabs;
+      const tabIdx = (id: string) => tabs.findIndex((t) => t.id === id);
+      const here = tabIdx(this.tab.id);
+      const { r, c } = this.sel.active;
+      let i = hits.findIndex((h) => {
+        const ti = tabIdx(h.tabId);
+        return ti > here || (ti === here && (h.r > r || (h.r === r && h.c >= c)));
+      });
+      if (i < 0) i = 0;
+      this.goToMatch(i);
+    } else {
+      this.emit();
+    }
+  }
+
+  /** Move to the next (1) or previous (-1) match, wrapping around. */
+  searchStep(dir: 1 | -1): void {
+    const hits = this.searchMatches();
+    if (!this.search || !hits.length) return;
+    const cur = this.search.current;
+    const next = cur < 0 ? (dir > 0 ? 0 : hits.length - 1) : (cur + dir + hits.length) % hits.length;
+    this.goToMatch(next);
+  }
+
+  private goToMatch(i: number): void {
+    const hit = this.searchMatches()[i];
+    if (!hit || !this.search) return;
+    this.search = { ...this.search, current: i };
+    if (hit.tabId !== this.tab.id) this.switchTab(hit.tabId);
+    this.selectCell({ r: hit.r, c: hit.c });
   }
 
   // -------------------------------------------------------------------------

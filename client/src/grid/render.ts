@@ -38,6 +38,9 @@ const C = {
   filterBorder: '#34a853',
   filterActive: '#188038',
   error: '#d93025',
+  searchHit: 'rgba(251, 188, 4, 0.30)',
+  searchCurrent: 'rgba(251, 140, 0, 0.55)',
+  searchCurrentBorder: '#e37400',
 };
 
 export interface RenderState {
@@ -51,6 +54,8 @@ export interface RenderState {
   fillPreview: Range | null;
   movePreview: Range | null;
   refs: (FormulaRef & { range: Range })[];
+  /** Find results on this tab ("r,c" keys) and the current match. */
+  searchHits: { cells: { r: number; c: number }[]; current: { r: number; c: number } | null } | null;
   dpr: number;
 }
 
@@ -317,6 +322,22 @@ function drawOverlays(ctx: CanvasRenderingContext2D, s: RenderState): void {
     const f = tab.filter;
     strokeRect(ctx, rangeRect(l, vp, f), C.filterBorder, 1);
     for (let c = f.c1; c <= f.c2; c++) drawFilterButton(ctx, s, f, c);
+  }
+
+  if (s.searchHits) {
+    ctx.fillStyle = C.searchHit;
+    for (const { r, c } of s.searchHits.cells) {
+      const rr = cellRect(l, vp, r, c);
+      if (rr.h === 0 || rr.x > vp.width || rr.y > vp.height || rr.x + rr.w < 0 || rr.y + rr.h < 0) continue;
+      ctx.fillRect(rr.x, rr.y, rr.w - 1, rr.h - 1);
+    }
+    const cur = s.searchHits.current;
+    if (cur) {
+      const rr = cellRect(l, vp, cur.r, cur.c);
+      ctx.fillStyle = C.searchCurrent;
+      ctx.fillRect(rr.x, rr.y, rr.w - 1, rr.h - 1);
+      strokeRect(ctx, rr, C.searchCurrentBorder, 2);
+    }
   }
 
   for (const ref of s.refs) {

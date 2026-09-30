@@ -16,6 +16,7 @@ import {
   type CommandHost,
 } from '../commands.ts';
 import { FilterMenu } from '../components/FilterMenu.tsx';
+import { FindBar } from '../components/FindBar.tsx';
 import { FormulaBar } from '../components/FormulaBar.tsx';
 import { Logo } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -214,16 +215,20 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
     };
   }, [ctl, ctl.menu]);
 
-  // Shift+F11: new sheet tab (global shortcut).
+  // Global shortcuts. Capture phase so they work wherever focus is (grid, formula bar, tab rename, ...).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'F11' && e.shiftKey) {
         e.preventDefault();
         ctl.addTab();
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') {
+        // Ctrl+S (⌘S on Mac) opens Find instead of the browser's "Save page"; the app autosaves anyway.
+        e.preventDefault();
+        ctl.openSearch();
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [ctl]);
 
   const menus: { key: string; label: string; items: () => MenuItem[] }[] = [
@@ -318,7 +323,10 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
         </div>
       )}
       <FormulaBar ctl={ctl} />
-      <Grid ctl={ctl} />
+      <div className="grid-area">
+        <Grid ctl={ctl} />
+        {ctl.search && <FindBar ctl={ctl} />}
+      </div>
       <TabBar host={host} />
 
       {ctxMenu && ctxItems && (

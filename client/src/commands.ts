@@ -61,6 +61,8 @@ export function editItems(host: CommandHost): MenuItem[] {
     { label: 'Undo', shortcut: `${MOD}Z`, action: () => ctl.undo(), disabled: !ctl.store.canUndo() },
     { label: 'Redo', shortcut: `${MOD}${isMac ? SHIFT + 'Z' : 'Y'}`, action: () => ctl.redo(), disabled: !ctl.store.canRedo() },
     'sep',
+    { label: 'Find…', shortcut: `${MOD}S`, action: () => ctl.openSearch() },
+    'sep',
     { label: 'Cut', shortcut: `${MOD}X`, action: () => copyVia(host, true) },
     { label: 'Copy', shortcut: `${MOD}C`, action: () => copyVia(host, false) },
     { label: 'Paste', shortcut: `${MOD}V`, action: () => void pasteFromSystem(host) },

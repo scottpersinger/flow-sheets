@@ -164,6 +164,15 @@ export function Grid({ ctl }: { ctl: SheetController }) {
       });
   }, [edit, tab]);
 
+  const search = ctl.search;
+  const allHits = search ? ctl.searchMatches() : null;
+  const searchHits = useMemo(() => {
+    if (!allHits) return null;
+    const cells = allHits.filter((h) => h.tabId === tab.id);
+    const cur = search && search.current >= 0 ? allHits[search.current] : undefined;
+    return { cells, current: cur && cur.tabId === tab.id ? cur : null };
+  }, [allHits, search, tab.id]);
+
   useLayoutEffect(() => {
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
@@ -185,6 +194,7 @@ export function Grid({ ctl }: { ctl: SheetController }) {
       fillPreview: previews.fill,
       movePreview: previews.move,
       refs,
+      searchHits,
       dpr,
     });
   });
@@ -726,7 +736,8 @@ export function Grid({ ctl }: { ctl: SheetController }) {
         ctl.clearSelection();
         return;
       case 'Escape':
-        ctl.clearCopyMark();
+        if (ctl.copyMark) ctl.clearCopyMark();
+        else ctl.closeSearch();
         return;
       case 'PageDown':
         e.preventDefault();
