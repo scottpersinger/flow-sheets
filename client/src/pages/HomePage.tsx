@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { SheetMeta } from '../../../shared/types.ts';
+import { AgentButton } from '../agent/AgentPanel.tsx';
+import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { Logo } from '../components/Logo.tsx';
@@ -47,9 +49,11 @@ export function HomePage() {
       .then((r) => setSheets(r.sheets))
       .catch((e: Error) => setError(e.message));
 
+  // Reload after the assistant finishes a request, in case it created a spreadsheet.
+  const { running: agentRunning } = useAgent();
   useEffect(() => {
-    void load();
-  }, []);
+    if (!agentRunning) void load();
+  }, [agentRunning]);
 
   useEffect(() => {
     if (!menuFor) return;
@@ -104,6 +108,7 @@ export function HomePage() {
         </div>
         <input className="home-search" placeholder="Search spreadsheets" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
+          <AgentButton />
           <span>{user?.email}</span>
           <button className="btn" onClick={() => void logout()}>
             Sign out

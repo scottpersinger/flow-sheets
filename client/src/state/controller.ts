@@ -356,6 +356,16 @@ export class SheetController {
     return changed;
   }
 
+  /** A change made by the agent. All changes with the same group (one agent request) undo as one step. */
+  runAgent(group: string, fn: (tx: Tx) => void): boolean {
+    if (this.edit) this.commitEdit();
+    const before = this.meta();
+    const changed = this.store.transact(fn, { before }, true, group);
+    if (changed) this.store.amendLastMeta(this.meta());
+    this.emit();
+    return changed;
+  }
+
   undo(): void {
     this.cancelEdit();
     const e = this.store.undo();

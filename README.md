@@ -14,7 +14,7 @@ npm run build && npm start   # production: serves dist/client and the API on :30
 
 Requires Node 22.18+. The server runs TypeScript directly through Node's built-in type stripping and uses the built-in `node:sqlite`.
 
-Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments.
+Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments. The assistant needs `ANTHROPIC_API_KEY`. For local development, copy `.env.example` to `.env` (git-ignored) and fill it in; the server loads it on start (`server/env.ts`), so restart it after editing. You can also set `AGENT_EFFORT` (`low`, `medium` (default) or `high`) and `AGENT_DAILY_REQUEST_LIMIT` (model calls per user per day, default 500).
 
 ## Layout
 
@@ -24,6 +24,22 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 | `server/` | Fastify API: auth (scrypt password hashes, hashed session tokens in httpOnly cookies) and sheet CRUD. |
 | `client/src/state/` | `WorkbookStore` (patch-based undo/redo, incremental recalculation), `AutoSaver`, spreadsheet operations (`ops.ts`) and `SheetController` (selection, editing, clipboard and commands). |
 | `client/src/grid/` | Canvas grid: virtualized rendering, frozen panes, hit testing, and the mouse and keyboard interaction. |
+
+## Assistant
+
+**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. You can ask it in plain language to read, edit, format, sort or restructure the open spreadsheet, or to find, read, create and open other spreadsheets. It knows which spreadsheet, tab and selection you're looking at. It uses Claude Sonnet 5.5 through one API key on the server.
+
+- **Edits appear immediately** and save like your own. Everything the assistant changes for one message undoes as a single step with ⌘Z. Deleting tabs, rows or columns, and clearing more than 100 cells, asks you first.
+- **One ongoing conversation per user**, kept across page loads and navigation. **New chat** starts over (old conversations stay in the database).
+- Click an action in the chat (such as "Wrote 8 cells at A1") to select that range.
+
+How it works:
+
+- The **server** (`server/agent/`) runs the agent loop and holds the API key, system prompt and tools. Conversations are stored in SQLite exactly as sent to the API and are only ever appended to. That keeps prompt caching effective and lets the model's thinking blocks be passed back unchanged.
+- **Account tools** (`list_sheets`, `read_other_sheet`, `create_sheet`) run on the server.
+- **Sheet tools** (`read_range`, `write_range`, `format_range`, `sort_range`, `open_sheet` and the others) run in the **browser**, on the live spreadsheet (`client/src/agent/clientTools.ts`). That way edits recalculate, render, autosave and undo like any other edit. When Claude calls one, the server streams the call to the browser and pauses. The browser runs it and posts the result back, and the loop continues.
+- Every request carries the current context: the page, the spreadsheet, its tabs, the active tab and the selection. It's added in front of the user's message, so the system prompt stays cacheable.
+- Tool inputs are checked against Zod schemas (`server/agent/tools.ts`) before anything runs. The same schemas generate the JSON Schema sent to Claude.
 
 ## Branches
 
@@ -69,5 +85,5 @@ Features the app doesn't support are reported in a banner after import: unsuppor
 
 ## Storage
 
-- `data/app.db`: SQLite database holding users, sessions and sheet metadata (owner, title, timestamps).
+- `data/app.db`: SQLite database holding users, sessions, sheet metadata (owner, title, timestamps), assistant conversations and per-user assistant usage.
 - `data/sheets/<id>.json`: one file per spreadsheet in the native JSON workbook format (`shared/types.ts`). Cells are stored sparsely by A1 address as the raw input plus optional style. Files are written atomically (temp file, then rename). The client autosaves the full workbook 800 ms after the last change.

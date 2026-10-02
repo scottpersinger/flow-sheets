@@ -1,6 +1,8 @@
 import { StrictMode, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { AgentPanel } from './agent/AgentPanel.tsx';
+import { AgentProvider, useAgent } from './agent/AgentProvider.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
 import { AuthPage } from './pages/AuthPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
@@ -21,10 +23,13 @@ function GuestOnly({ children }: { children: ReactElement }) {
   return children;
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <AuthProvider>
-      <BrowserRouter>
+/** The pages, with the assistant panel docked on the right when it is open. */
+function AppShell() {
+  const { user } = useAuth();
+  const { open } = useAgent();
+  return (
+    <div className="app-shell">
+      <div className="app-main">
         <Routes>
           <Route path="/login" element={<GuestOnly><AuthPage mode="login" /></GuestOnly>} />
           <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
@@ -32,6 +37,19 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/s/:id" element={<RequireAuth><SpreadsheetPage /></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+      </div>
+      {user && open && <AgentPanel />}
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <AuthProvider>
+      <BrowserRouter>
+        <AgentProvider>
+          <AppShell />
+        </AgentProvider>
       </BrowserRouter>
     </AuthProvider>
   </StrictMode>,

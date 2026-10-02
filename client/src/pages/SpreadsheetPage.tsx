@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { cellKey } from '../../../shared/cellref.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
+import { AgentButton } from '../agent/AgentPanel.tsx';
+import { useAgent, useRegisterSheet } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import {
@@ -57,6 +59,7 @@ function toCSV(ctl: SheetController): string {
 export function SpreadsheetPage() {
   const { id } = useParams<{ id: string }>();
   const [state, setState] = useState<{ meta: SheetMeta; ctl: SheetController } | { error: string } | null>(null);
+  const { sheetFailed } = useAgent();
 
   useEffect(() => {
     let ctl: SheetController | null = null;
@@ -72,7 +75,10 @@ export function SpreadsheetPage() {
         setState({ meta: sheet, ctl });
       })
       .catch((e: unknown) => {
-        if (!cancelled) setState({ error: e instanceof ApiError && e.status === 404 ? 'This spreadsheet does not exist or was deleted.' : String((e as Error).message ?? e) });
+        if (cancelled) return;
+        const error = e instanceof ApiError && e.status === 404 ? 'This spreadsheet does not exist or was deleted.' : String((e as Error).message ?? e);
+        setState({ error });
+        sheetFailed(id!, error);
       });
     return () => {
       cancelled = true;
@@ -81,7 +87,7 @@ export function SpreadsheetPage() {
         ctl.dispose();
       }
     };
-  }, [id]);
+  }, [id, sheetFailed]);
 
   if (!state) return <div className="page-loading">Loading spreadsheet…</div>;
   if ('error' in state) {
@@ -113,6 +119,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
     if (location.state) navigate(location.pathname, { replace: true, state: null });
   };
   const [meta, setMeta] = useState(initialMeta);
+  useRegisterSheet(ctl, meta);
   const [title, setTitle] = useState(initialMeta.title);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -334,6 +341,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
           </nav>
         </div>
         <div className="wb-user">
+          <AgentButton />
           <span title={user?.email}>{user?.email}</span>
           <button className="btn" onClick={() => void ctl.saver.flush().then(logout)}>
             Sign out
