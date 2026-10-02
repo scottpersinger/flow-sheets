@@ -43,6 +43,20 @@ const C = {
   searchCurrentBorder: '#e37400',
 };
 
+export type ChangeSide = 'mine' | 'theirs' | 'conflict';
+
+export interface CompareOverlay {
+  cells: { r: number; c: number; side: ChangeSide }[];
+  /** Rows present in the branch (tinted) or absent from it (drawn as a line before `at`). */
+  rows: { at: number; side: ChangeSide; inBranch: boolean }[];
+}
+
+export const CHANGE_COLORS: Record<ChangeSide, { solid: string; fill: string }> = {
+  mine: { solid: '#188038', fill: 'rgba(52, 168, 83, 0.20)' },
+  theirs: { solid: '#7e57c2', fill: 'rgba(126, 87, 194, 0.18)' },
+  conflict: { solid: '#d93025', fill: 'rgba(217, 48, 37, 0.20)' },
+};
+
 export interface RenderState {
   tab: Tab;
   store: WorkbookStore<unknown>;
@@ -54,6 +68,8 @@ export interface RenderState {
   fillPreview: Range | null;
   movePreview: Range | null;
   refs: (FormulaRef & { range: Range })[];
+  /** Branch comparison marks for this tab. */
+  compare: CompareOverlay | null;
   /** Find results on this tab ("r,c" keys) and the current match. */
   searchHits: { cells: { r: number; c: number }[]; current: { r: number; c: number } | null } | null;
   dpr: number;
@@ -324,6 +340,8 @@ function drawOverlays(ctx: CanvasRenderingContext2D, s: RenderState): void {
     for (let c = f.c1; c <= f.c2; c++) drawFilterButton(ctx, s, f, c);
   }
 
+  if (s.compare) drawCompare(ctx, s, s.compare);
+
   if (s.searchHits) {
     ctx.fillStyle = C.searchHit;
     for (const { r, c } of s.searchHits.cells) {
@@ -366,6 +384,54 @@ function drawOverlays(ctx: CanvasRenderingContext2D, s: RenderState): void {
   if (s.copyMark) strokeRect(ctx, rangeRect(l, vp, s.copyMark), C.selBorder, 2, [5, 3]);
   if (s.fillPreview) strokeRect(ctx, rangeRect(l, vp, s.fillPreview), '#5f6368', 1, [4, 3]);
   if (s.movePreview) strokeRect(ctx, rangeRect(l, vp, s.movePreview), '#5f6368', 3);
+}
+
+function drawCompare(ctx: CanvasRenderingContext2D, s: RenderState, cmp: CompareOverlay): void {
+  const { layout: l, vp } = s;
+  const right = Math.min(vp.width, colX(l, vp, l.cols.count - 1) + l.cols.size(l.cols.count - 1));
+  for (const row of cmp.rows) {
+    const color = CHANGE_COLORS[row.side];
+    if (row.inBranch) {
+      if (row.at >= l.rows.count || !l.rows.size(row.at)) continue;
+      const y = rowY(l, vp, row.at);
+      ctx.fillStyle = color.fill;
+      ctx.fillRect(ROW_HEADER_W, y, right - ROW_HEADER_W, l.rows.size(row.at) - 1);
+    } else {
+      // A row that exists only on the other side: a bold line where it would be.
+      const y = row.at < l.rows.count ? rowY(l, vp, row.at) : rowY(l, vp, l.rows.count - 1) + l.rows.size(l.rows.count - 1);
+      ctx.fillStyle = color.solid;
+      ctx.fillRect(ROW_HEADER_W, y - 2, right - ROW_HEADER_W, 3);
+    }
+  }
+  for (const cell of cmp.cells) {
+    const rr = cellRect(l, vp, cell.r, cell.c);
+    if (rr.h === 0 || rr.x > vp.width || rr.y > vp.height || rr.x + rr.w < 0 || rr.y + rr.h < 0) continue;
+    const color = CHANGE_COLORS[cell.side];
+    ctx.fillStyle = color.fill;
+    ctx.fillRect(rr.x, rr.y, rr.w - 1, rr.h - 1);
+    strokeRect(ctx, rr, color.solid, 1);
+  }
+}
+
+/** Colored markers in the row header for rows that differ. */
+function drawCompareRowHeaders(ctx: CanvasRenderingContext2D, s: RenderState, cmp: CompareOverlay): void {
+  const { layout: l, vp } = s;
+  for (const row of cmp.rows) {
+    const color = CHANGE_COLORS[row.side].solid;
+    ctx.fillStyle = color;
+    if (row.inBranch) {
+      if (row.at >= l.rows.count || !l.rows.size(row.at)) continue;
+      ctx.fillRect(0, rowY(l, vp, row.at), 4, l.rows.size(row.at) - 1);
+    } else {
+      const y = row.at < l.rows.count ? rowY(l, vp, row.at) : rowY(l, vp, l.rows.count - 1) + l.rows.size(l.rows.count - 1);
+      ctx.beginPath();
+      ctx.moveTo(0, y - 6);
+      ctx.lineTo(8, y);
+      ctx.lineTo(0, y + 6);
+      ctx.fill();
+      ctx.fillRect(0, y - 2, ROW_HEADER_W, 3);
+    }
+  }
 }
 
 export function filterButtonRect(l: Layout, vp: Viewport, f: FilterState, c: number): Rect {
@@ -476,6 +542,15 @@ function drawHeaders(ctx: CanvasRenderingContext2D, s: RenderState, rows: [numbe
         ctx.fillRect(0, Math.floor(y + h) - 2, ROW_HEADER_W, 2);
       }
     }
+    ctx.restore();
+  }
+
+  if (s.compare) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, COL_HEADER_H, ROW_HEADER_W, vp.height);
+    ctx.clip();
+    drawCompareRowHeaders(ctx, s, s.compare);
     ctx.restore();
   }
 

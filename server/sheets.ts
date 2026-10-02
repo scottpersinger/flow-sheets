@@ -11,9 +11,36 @@ interface SheetRow {
   file: string;
   created_at: string;
   updated_at: string;
+  parent_id: string | null;
+  parent_title: string | null;
+  branched_at: string | null;
+  /** Joined: the parent's current title (null if the parent no longer exists). */
+  live_parent_title: string | null;
 }
 
-const toMeta = (r: SheetRow): SheetMeta => ({ id: r.id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at });
+// Every metadata read joins the parent so branch info (current title, detached) is always fresh.
+const SELECT_SHEETS = `
+  SELECT s.*, p.title AS live_parent_title
+  FROM sheets s LEFT JOIN sheets p ON p.id = s.parent_id AND p.owner_id = s.owner_id`;
+
+const toMeta = (r: SheetRow): SheetMeta => ({
+  id: r.id,
+  title: r.title,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+  ...(r.parent_id
+    ? {
+        branch: {
+          parentId: r.parent_id,
+          parentTitle: r.live_parent_title ?? r.parent_title ?? 'Deleted spreadsheet',
+          branchedAt: r.branched_at ?? r.created_at,
+          detached: r.live_parent_title === null,
+        },
+      }
+    : {}),
+});
+
+const baseFileOf = (id: string) => `${id}.base.json`;
 
 /** Structural validation of an uploaded workbook (guards against malformed saves, not a full schema). */
 export function validateWorkbook(wb: unknown): string | null {
@@ -66,13 +93,13 @@ export class SheetStore {
 
   list(ownerId: string): SheetMeta[] {
     const rows = this.db
-      .prepare('SELECT * FROM sheets WHERE owner_id = ? ORDER BY updated_at DESC')
+      .prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? ORDER BY s.updated_at DESC`)
       .all(ownerId) as unknown as SheetRow[];
     return rows.map(toMeta);
   }
 
   private row(ownerId: string, id: string): SheetRow | undefined {
-    return this.db.prepare('SELECT * FROM sheets WHERE id = ? AND owner_id = ?').get(id, ownerId) as SheetRow | undefined;
+    return this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ? AND s.owner_id = ?`).get(id, ownerId) as SheetRow | undefined;
   }
 
   get(ownerId: string, id: string): SheetMeta | null {
@@ -89,6 +116,34 @@ export class SheetStore {
       .prepare('INSERT INTO sheets (id, owner_id, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, ownerId, title, file, now, now);
     return { id, title, createdAt: now, updatedAt: now };
+  }
+
+  /** Create a branch: a copy of the sheet that remembers its original and keeps a snapshot (base) of it. */
+  async branch(ownerId: string, sourceId: string, title: string): Promise<SheetMeta | null> {
+    const src = await this.load(ownerId, sourceId);
+    if (!src) return null;
+    const id = randomUUID();
+    const file = `${id}.json`;
+    await this.writeAtomic(file, src.workbook);
+    await this.writeAtomic(baseFileOf(id), src.workbook);
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO sheets (id, owner_id, title, file, created_at, updated_at, parent_id, parent_title, branched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, ownerId, title, file, now, now, sourceId, src.meta.title, now);
+    return this.get(ownerId, id);
+  }
+
+  /** Everything needed to compare a branch: its base snapshot and the original's current state. */
+  async compareData(ownerId: string, id: string): Promise<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null } | 'not-branch' | null> {
+    const r = this.row(ownerId, id);
+    if (!r) return null;
+    if (!r.parent_id) return 'not-branch';
+    const base = JSON.parse(await readFile(this.filePath(baseFileOf(id)), 'utf8')) as Workbook;
+    const parent = await this.load(ownerId, r.parent_id);
+    return { meta: toMeta(r), base, original: parent?.workbook ?? null, parent: parent?.meta ?? null };
   }
 
   async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook } | null> {
@@ -126,6 +181,7 @@ export class SheetStore {
     await this.writeChains.get(id);
     this.writeChains.delete(id);
     await rm(this.filePath(r.file), { force: true });
+    await rm(this.filePath(baseFileOf(id)), { force: true });
     return true;
   }
 

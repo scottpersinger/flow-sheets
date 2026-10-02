@@ -15,6 +15,9 @@ export interface CommandHost {
   deleteSheet(): void;
   newSheet(): void;
   importXlsx(): void;
+  createBranch(): void;
+  compareWithOriginal(): void;
+  isBranch: boolean;
   goHome(): void;
   download(kind: 'csv' | 'json'): void;
   deleteTab(tabId: string): void;
@@ -186,6 +189,8 @@ export function fileItems(host: CommandHost): MenuItem[] {
     { label: 'Import Excel file (.xlsx, .xls)…', action: () => host.importXlsx() },
     'sep',
     { label: 'Rename', action: () => host.renameSheet() },
+    { label: 'Create branch…', action: () => host.createBranch() },
+    ...(host.isBranch ? [{ label: 'Compare with original', action: () => host.compareWithOriginal() } as MenuItem] : []),
     {
       label: 'Download',
       submenu: [

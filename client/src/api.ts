@@ -58,6 +58,9 @@ export const api = {
     uploadExcel<{ sheet: SheetMeta; warnings: string[] }>(`/api/sheets/import?title=${encodeURIComponent(title)}`, file),
   /** Convert an Excel file (.xlsx or .xls) to workbook tabs without creating a spreadsheet. */
   convertXlsx: (file: File) => uploadExcel<{ workbook: Workbook; warnings: string[] }>('/api/import/xlsx', file),
+  branchSheet: (id: string, title?: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/branch`, { title }),
+  compareSheet: (id: string) =>
+    request<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null }>('GET', `/api/sheets/${encodeURIComponent(id)}/compare`),
   renameSheet: (id: string, title: string) => request<{ sheet: SheetMeta }>('PATCH', `/api/sheets/${encodeURIComponent(id)}`, { title }),
   deleteSheet: (id: string) => request<{ ok: true }>('DELETE', `/api/sheets/${encodeURIComponent(id)}`),
 };

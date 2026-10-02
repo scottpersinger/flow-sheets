@@ -33,5 +33,16 @@ export function openDb(file: string): DB {
     );
     CREATE INDEX IF NOT EXISTS sheets_owner ON sheets(owner_id, updated_at);
   `);
+  migrate(db);
   return db;
+}
+
+/** Additive schema changes for databases created by earlier versions. */
+function migrate(db: DB): void {
+  const cols = new Set((db.prepare('PRAGMA table_info(sheets)').all() as { name: string }[]).map((c) => c.name));
+  // Branches: parent_id deliberately has no foreign key, so deleting the original leaves its branches "detached".
+  if (!cols.has('parent_id')) db.exec('ALTER TABLE sheets ADD COLUMN parent_id TEXT');
+  if (!cols.has('parent_title')) db.exec('ALTER TABLE sheets ADD COLUMN parent_title TEXT');
+  if (!cols.has('branched_at')) db.exec('ALTER TABLE sheets ADD COLUMN branched_at TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS sheets_parent ON sheets(parent_id)');
 }

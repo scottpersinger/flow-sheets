@@ -90,6 +90,15 @@ export interface SheetMeta {
   title: string;
   createdAt: string;
   updatedAt: string;
+  /** Set when this sheet is a branch of another sheet. */
+  branch?: {
+    parentId: string;
+    /** Current title of the original, or its title when branched if it has been deleted. */
+    parentTitle: string;
+    branchedAt: string;
+    /** The original has been deleted; only the base snapshot remains for comparison. */
+    detached: boolean;
+  };
 }
 
 export const DEFAULT_ROWS = 1000;

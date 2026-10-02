@@ -166,6 +166,24 @@ export async function buildApp(opts: AppOptions) {
       return { sheet: res.meta, workbook: res.workbook };
     });
 
+    // Branch: a copy that stays connected to its original for comparison.
+    r.post('/api/sheets/:id/branch', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
+      const source = sheets.get(req.user!.id, id);
+      if (!source) return reply.code(404).send({ error: 'Sheet not found' });
+      const sheet = await sheets.branch(req.user!.id, id, title ?? `${source.title} (branch)`);
+      return { sheet };
+    });
+
+    r.get('/api/sheets/:id/compare', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const data = await sheets.compareData(req.user!.id, id);
+      if (data === null) return reply.code(404).send({ error: 'Sheet not found' });
+      if (data === 'not-branch') return reply.code(400).send({ error: 'This spreadsheet is not a branch.' });
+      return data;
+    });
+
     r.put('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       const workbook = (req.body as { workbook?: Workbook } | undefined)?.workbook;

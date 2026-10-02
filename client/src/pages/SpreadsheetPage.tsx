@@ -17,6 +17,7 @@ import {
   type CommandHost,
 } from '../commands.ts';
 import { FilterMenu } from '../components/FilterMenu.tsx';
+import { ComparePanel } from '../components/ComparePanel.tsx';
 import { FindBar } from '../components/FindBar.tsx';
 import { FormulaBar } from '../components/FormulaBar.tsx';
 import { Logo } from '../components/Logo.tsx';
@@ -96,7 +97,7 @@ export function SpreadsheetPage() {
   return <Workbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
 }
 
-type Dialog = { kind: 'rename' } | { kind: 'deleteSheet' } | { kind: 'deleteTab'; tabId: string } | null;
+type Dialog = { kind: 'rename' } | { kind: 'deleteSheet' } | { kind: 'deleteTab'; tabId: string } | { kind: 'branch' } | null;
 
 function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetController }) {
   useController(ctl);
@@ -120,6 +121,17 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
+
+  // Branches can be compared with their original; refresh metadata (e.g. the original's title) on each fetch.
+  useEffect(() => {
+    ctl.compareLoader = meta.branch
+      ? async () => {
+          const r = await api.compareSheet(meta.id);
+          setMeta(r.meta);
+          return { base: r.base, original: r.original, parentTitle: r.meta.branch?.parentTitle ?? '', fetchedAt: Date.now() };
+        }
+      : null;
+  }, [ctl, meta.id, meta.branch]);
 
   useEffect(() => {
     document.title = `${meta.title} - Sheets`;
@@ -157,6 +169,9 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       ctl,
       notify,
       renameSheet: () => setDialog({ kind: 'rename' }),
+      createBranch: () => setDialog({ kind: 'branch' }),
+      compareWithOriginal: () => void ctl.openCompare(),
+      isBranch: !!meta.branch,
       deleteSheet: () => setDialog({ kind: 'deleteSheet' }),
       deleteTab: (tabId) => setDialog({ kind: 'deleteTab', tabId }),
       newSheet: async () => {
@@ -190,7 +205,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ctl, notify, meta.title],
+    [ctl, notify, meta.title, meta.branch],
   );
 
   // Close top menus on outside click.
@@ -280,6 +295,24 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
               }}
             />
             <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
+            {meta.branch && (
+              <span className="branch-chip" title={`Branched ${new Date(meta.branch.branchedAt).toLocaleString()}`}>
+                <BranchIcon />
+                Branch of{' '}
+                {meta.branch.detached ? (
+                  <em>“{meta.branch.parentTitle}” (deleted)</em>
+                ) : (
+                  <Link to={`/s/${meta.branch.parentId}`} onClick={() => void ctl.saver.flush()}>
+                    {meta.branch.parentTitle}
+                  </Link>
+                )}
+              </span>
+            )}
+            {meta.branch && (
+              <button className={`btn compare-btn${ctl.compare ? ' active' : ''}`} onClick={() => (ctl.compare ? ctl.closeCompare() : void ctl.openCompare())}>
+                {ctl.compare ? 'Close comparison' : 'Compare with original'}
+              </button>
+            )}
           </div>
           <nav className="menubar" onMouseDown={(e) => e.stopPropagation()}>
             {menus.map((m) => (
@@ -325,8 +358,11 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       )}
       <FormulaBar ctl={ctl} />
       <div className="grid-area">
-        <Grid ctl={ctl} />
-        {ctl.search && <FindBar ctl={ctl} />}
+        <div className="grid-main">
+          <Grid ctl={ctl} />
+          {ctl.search && <FindBar ctl={ctl} />}
+        </div>
+        {ctl.compare && <ComparePanel ctl={ctl} />}
       </div>
       <TabBar host={host} />
 
@@ -337,6 +373,21 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       )}
       {ctl.filterMenu && ctl.tab.filter && <FilterMenu key={`${ctl.tab.id}:${ctl.filterMenu.col}`} ctl={ctl} />}
 
+      {dialog?.kind === 'branch' && (
+        <PromptModal
+          title="Create branch"
+          label="Branch name"
+          initial={`${meta.title} (branch)`}
+          confirmText="Create branch"
+          onConfirm={async (t) => {
+            if (ctl.edit) ctl.commitEdit();
+            await ctl.saver.flush();
+            const { sheet } = await api.branchSheet(meta.id, t);
+            navigate(`/s/${sheet.id}`);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {dialog?.kind === 'rename' && (
         <PromptModal title="Rename spreadsheet" label="Name" initial={meta.title} confirmText="Rename" onConfirm={renameSheet} onClose={() => setDialog(null)} />
       )}
@@ -366,5 +417,16 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       )}
       {toast && <div className="toast">{toast}</div>}
     </div>
+  );
+}
+
+function BranchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="4" cy="3" r="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="4" cy="13" r="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="12" cy="5" r="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4 4.8v6.4M12 6.8c0 3-8 2-8 4.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
   );
 }

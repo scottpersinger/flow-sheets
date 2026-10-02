@@ -12,6 +12,7 @@ import { parseTSV, toHTML, toTSV } from './clipboard.ts';
 import { isRefInsertPoint, normalizeFormula } from './formulaEdit.ts';
 import * as ops from './ops.ts';
 import { findMatches, type SearchHit, type SearchOptions } from './search.ts';
+import { diffWorkbooks, type Side, type WorkbookDiff } from '../../../shared/diff.ts';
 import { AutoSaver, WorkbookStore, type Tx } from './store.ts';
 
 export interface Selection {
@@ -46,6 +47,23 @@ export interface FilterMenuState {
 
 type SelMeta = { tabId: string; sel: Selection };
 
+export interface CompareData {
+  base: Workbook;
+  /** The original's current state, or null when it has been deleted (compare against the base only). */
+  original: Workbook | null;
+  parentTitle: string;
+  fetchedAt: number;
+}
+
+export interface CompareState {
+  status: 'loading' | 'ready' | 'error';
+  error?: string;
+  data?: CompareData;
+  diff?: WorkbookDiff;
+  /** Which kinds of change are shown on the grid and in the list. */
+  show: Record<Side, boolean>;
+}
+
 export interface SearchState extends SearchOptions {
   /** Index into the current matches, or -1 when none is selected. */
   current: number;
@@ -74,6 +92,11 @@ export class SheetController {
   renamingTabId: string | null = null;
   /** Find bar state; null when closed. */
   search: SearchState | null = null;
+  /** Branch comparison state; null when not comparing. */
+  compare: CompareState | null = null;
+  /** Fetches comparison data for this sheet (set by the page for branches). */
+  compareLoader: (() => Promise<CompareData>) | null = null;
+  private compareTimer: ReturnType<typeof setTimeout> | null = null;
   scrollRequest: { r: number; c: number; seq: number } | null = null;
   /** Number of rows that fit in the viewport; maintained by the grid for PageUp/PageDown. */
   pageRows = 20;
@@ -91,12 +114,18 @@ export class SheetController {
     this.activeTabId = workbook.tabs[0].id;
     this.store.subscribe(() => {
       this.clampSelections();
+      // Keep the comparison current with edits to the branch (debounced; diffing is O(cells)).
+      if (this.compare?.status === 'ready') {
+        if (this.compareTimer) clearTimeout(this.compareTimer);
+        this.compareTimer = setTimeout(() => this.recomputeDiff(), 250);
+      }
       this.emit();
     });
   }
 
   dispose(): void {
     this.saver.dispose();
+    if (this.compareTimer) clearTimeout(this.compareTimer);
   }
 
   subscribe = (fn: () => void): (() => void) => {
@@ -855,6 +884,54 @@ export class SheetController {
   setRenamingTab(id: string | null): void {
     this.renamingTabId = id;
     this.emit();
+  }
+
+  // -------------------------------------------------------------------------
+  // Branch comparison
+
+  async openCompare(): Promise<void> {
+    if (!this.compareLoader) return;
+    if (this.edit) this.commitEdit();
+    this.compare = { status: 'loading', show: this.compare?.show ?? { mine: true, theirs: true, conflict: true }, data: this.compare?.data, diff: this.compare?.diff };
+    this.emit();
+    try {
+      const data = await this.compareLoader();
+      if (!this.compare) return; // closed while loading
+      this.compare = { ...this.compare, status: 'ready', data, error: undefined };
+      this.recomputeDiff();
+    } catch (e) {
+      if (!this.compare) return;
+      this.compare = { ...this.compare, status: 'error', error: e instanceof Error ? e.message : String(e) };
+      this.emit();
+    }
+  }
+
+  closeCompare(): void {
+    if (this.compareTimer) clearTimeout(this.compareTimer);
+    this.compare = null;
+    this.emit();
+  }
+
+  setCompareFilter(side: Side, on: boolean): void {
+    if (!this.compare) return;
+    this.compare = { ...this.compare, show: { ...this.compare.show, [side]: on } };
+    this.emit();
+  }
+
+  private recomputeDiff(): void {
+    const c = this.compare;
+    if (!c?.data) return;
+    const { base, original } = c.data;
+    // A detached branch (original deleted) is compared with the base alone: every difference is "mine".
+    const diff = diffWorkbooks(base, this.store.workbook, original ?? base);
+    this.compare = { ...c, diff };
+    this.emit();
+  }
+
+  /** Jump to a cell in the branch (used by the change list). */
+  revealCell(tabId: string, r: number, c: number): void {
+    if (tabId !== this.tab.id) this.switchTab(tabId);
+    this.selectCell({ r: Math.min(r, this.tab.rows - 1), c: Math.min(c, this.tab.cols - 1) });
   }
 
   // -------------------------------------------------------------------------
