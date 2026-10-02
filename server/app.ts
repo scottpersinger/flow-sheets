@@ -1,9 +1,13 @@
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import Anthropic from '@anthropic-ai/sdk';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import type { Workbook } from '../shared/types.ts';
+import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
+import { AgentStore } from './agent/store.ts';
 import { AuthService, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
 import { openDb } from './db.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
@@ -24,6 +28,7 @@ export interface AppOptions {
   staticDir?: string;
   secureCookies?: boolean;
   logger?: boolean;
+  agent?: AgentOptions;
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -32,12 +37,22 @@ function cleanTitle(t: unknown): string | null {
   return s || null;
 }
 
+function agentErrorMessage(e: unknown): string {
+  if (e instanceof AgentError) return e.message;
+  if (e instanceof Anthropic.RateLimitError) return 'The assistant is getting too many requests right now. Try again in a minute.';
+  if (e instanceof Anthropic.AuthenticationError) return 'The assistant is not configured correctly on this server (API key).';
+  if (e instanceof Anthropic.APIError && e.status && e.status >= 500) return 'The AI service had a problem. Try again in a moment.';
+  if (e instanceof Anthropic.AnthropicError && /api ?key|authentication/i.test(e.message)) return 'The assistant is not configured on this server (no API key).';
+  return 'Something went wrong while the assistant was working. Try again.';
+}
+
 export async function buildApp(opts: AppOptions) {
   const db = openDb(path.join(opts.dataDir, 'app.db'));
   const auth = new AuthService(db);
   const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
   auth.purgeExpiredSessions();
+  const agent = new AgentService(new AgentStore(db), sheets, opts.agent);
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
@@ -166,6 +181,24 @@ export async function buildApp(opts: AppOptions) {
       return { sheet: res.meta, workbook: res.workbook };
     });
 
+    // Branch: a copy that stays connected to its original for comparison.
+    r.post('/api/sheets/:id/branch', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
+      const source = sheets.get(req.user!.id, id);
+      if (!source) return reply.code(404).send({ error: 'Sheet not found' });
+      const sheet = await sheets.branch(req.user!.id, id, title ?? `${source.title} (branch)`);
+      return { sheet };
+    });
+
+    r.get('/api/sheets/:id/compare', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const data = await sheets.compareData(req.user!.id, id);
+      if (data === null) return reply.code(404).send({ error: 'Sheet not found' });
+      if (data === 'not-branch') return reply.code(400).send({ error: 'This spreadsheet is not a branch.' });
+      return data;
+    });
+
     r.put('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       const workbook = (req.body as { workbook?: Workbook } | undefined)?.workbook;
@@ -189,6 +222,55 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       if (!(await sheets.delete(req.user!.id, id))) return reply.code(404).send({ error: 'Sheet not found' });
       return { ok: true };
+    });
+  });
+
+  // --- Agent ---------------------------------------------------------------
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    r.get('/api/agent', async (req) => ({ items: agent.transcript(req.user!.id) }));
+
+    r.post('/api/agent/reset', async (req, reply) => {
+      try {
+        agent.reset(req.user!.id);
+      } catch (e) {
+        if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+        throw e;
+      }
+      return { ok: true };
+    });
+
+    // Runs or resumes a turn, streaming AgentEvents as server-sent events.
+    r.post('/api/agent/turn', async (req, reply) => {
+      const body = (req.body ?? {}) as AgentTurnRequest;
+      try {
+        agent.checkTurn(req.user!.id, body);
+      } catch (e) {
+        if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+        throw e;
+      }
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      const abort = new AbortController();
+      // The browser stopped the request (Stop button, navigation): abort the model call too.
+      res.on('close', () => {
+        if (!res.writableEnded) abort.abort();
+      });
+      const emit = (e: AgentEvent) => {
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`);
+      };
+      try {
+        await agent.runTurn(req.user!.id, body, emit, abort.signal);
+      } catch (e) {
+        if (!abort.signal.aborted) {
+          req.log.error({ err: e }, 'agent turn failed');
+          emit({ type: 'error', message: agentErrorMessage(e) });
+        }
+      } finally {
+        res.end();
+      }
     });
   });
 

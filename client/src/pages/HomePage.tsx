@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { SheetMeta } from '../../../shared/types.ts';
+import { AgentButton } from '../agent/AgentPanel.tsx';
+import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { Logo } from '../components/Logo.tsx';
@@ -47,9 +49,11 @@ export function HomePage() {
       .then((r) => setSheets(r.sheets))
       .catch((e: Error) => setError(e.message));
 
+  // Reload after the assistant finishes a request, in case it created a spreadsheet.
+  const { running: agentRunning } = useAgent();
   useEffect(() => {
-    void load();
-  }, []);
+    if (!agentRunning) void load();
+  }, [agentRunning]);
 
   useEffect(() => {
     if (!menuFor) return;
@@ -58,7 +62,26 @@ export function HomePage() {
     return () => window.removeEventListener('click', close);
   }, [menuFor]);
 
-  const visible = sheets?.filter((s) => s.title.toLowerCase().includes(filter.trim().toLowerCase())) ?? [];
+  const q = filter.trim().toLowerCase();
+  // Show each branch right under its original (recursively); searching flattens the list.
+  const visible: { s: SheetMeta; depth: number }[] = [];
+  if (sheets) {
+    if (q) for (const s of sheets) s.title.toLowerCase().includes(q) && visible.push({ s, depth: 0 });
+    else {
+      const ids = new Set(sheets.map((s) => s.id));
+      const children = new Map<string, SheetMeta[]>();
+      for (const s of sheets) {
+        const p = s.branch && ids.has(s.branch.parentId) ? s.branch.parentId : null;
+        if (p) children.set(p, [...(children.get(p) ?? []), s]);
+      }
+      const add = (s: SheetMeta, depth: number) => {
+        visible.push({ s, depth });
+        for (const c of children.get(s.id) ?? []) add(c, depth + 1);
+      };
+      for (const s of sheets) if (!(s.branch && ids.has(s.branch.parentId))) add(s, 0);
+    }
+  }
+  const [branching, setBranching] = useState<SheetMeta | null>(null);
 
   return (
     <div
@@ -85,6 +108,7 @@ export function HomePage() {
         </div>
         <input className="home-search" placeholder="Search spreadsheets" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
+          <AgentButton />
           <span>{user?.email}</span>
           <button className="btn" onClick={() => void logout()}>
             Sign out
@@ -141,11 +165,14 @@ export function HomePage() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((s) => (
+              {visible.map(({ s, depth }) => (
                 <tr key={s.id} onClick={() => navigate(`/s/${s.id}`)}>
                   <td>
                     <Link to={`/s/${s.id}`} className="sheet-title" onClick={(e) => e.stopPropagation()}>
+                      <span style={{ width: depth * 22 }} className="tree-indent" />
+                      {depth > 0 ? <span className="tree-elbow">└</span> : null}
                       <Logo size={18} /> {s.title}
+                      {s.branch && <span className={`branch-tag${s.branch.detached ? ' detached' : ''}`}>{s.branch.detached ? `branch of deleted “${s.branch.parentTitle}”` : depth ? 'branch' : `branch of ${s.branch.parentTitle}`}</span>}
                     </Link>
                   </td>
                   <td>{formatWhen(s.updatedAt)}</td>
@@ -166,6 +193,7 @@ export function HomePage() {
                         <button onClick={() => navigate(`/s/${s.id}`)}>Open</button>
                         <button onClick={() => (setMenuFor(null), window.open(`/s/${s.id}`, '_blank'))}>Open in new tab</button>
                         <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>
+                        <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>
                         <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
                           Delete
                         </button>
@@ -199,6 +227,19 @@ export function HomePage() {
             navigate(`/s/${sheet.id}`);
           }}
           onClose={() => setCreating(false)}
+        />
+      )}
+      {branching && (
+        <PromptModal
+          title="Create branch"
+          label="Branch name"
+          initial={`${branching.title} (branch)`}
+          confirmText="Create branch"
+          onConfirm={async (title) => {
+            const { sheet } = await api.branchSheet(branching.id, title);
+            navigate(`/s/${sheet.id}`);
+          }}
+          onClose={() => setBranching(null)}
         />
       )}
       {renaming && (

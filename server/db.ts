@@ -32,6 +32,47 @@ export function openDb(file: string): DB {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS sheets_owner ON sheets(owner_id, updated_at);
+
+    -- Agent chat. Each user has one active conversation (ended_at IS NULL); resetting ends it and starts a new one.
+    CREATE TABLE IF NOT EXISTS agent_conversations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      ended_at TEXT,
+      -- JSON: tool calls of the last assistant message that still need results (see server/agent/store.ts).
+      pending TEXT
+    );
+    CREATE INDEX IF NOT EXISTS agent_conversations_user ON agent_conversations(user_id, ended_at);
+
+    -- Messages exactly as sent to the Claude API, append-only.
+    CREATE TABLE IF NOT EXISTS agent_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_messages_conv ON agent_messages(conversation_id, id);
+
+    CREATE TABLE IF NOT EXISTS agent_usage (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      requests INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, day)
+    );
   `);
+  migrate(db);
   return db;
+}
+
+/** Additive schema changes for databases created by earlier versions. */
+function migrate(db: DB): void {
+  const cols = new Set((db.prepare('PRAGMA table_info(sheets)').all() as { name: string }[]).map((c) => c.name));
+  // Branches: parent_id deliberately has no foreign key, so deleting the original leaves its branches "detached".
+  if (!cols.has('parent_id')) db.exec('ALTER TABLE sheets ADD COLUMN parent_id TEXT');
+  if (!cols.has('parent_title')) db.exec('ALTER TABLE sheets ADD COLUMN parent_title TEXT');
+  if (!cols.has('branched_at')) db.exec('ALTER TABLE sheets ADD COLUMN branched_at TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS sheets_parent ON sheets(parent_id)');
 }

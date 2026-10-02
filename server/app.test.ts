@@ -100,3 +100,61 @@ describe('sheets', () => {
     expect(res.json().sheets).toEqual([]);
   });
 });
+
+describe('branches', () => {
+  it('branches a sheet, compares against the live original, and detaches when it is deleted', async () => {
+    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'br@x.com', password: 'password123' } });
+    const cookie = cookieFrom(res);
+    const put = (id: string, workbook: unknown) => app.inject({ method: 'PUT', url: `/api/sheets/${id}`, headers: { cookie }, payload: { workbook } });
+
+    res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Plan' } });
+    const orig = res.json().sheet;
+    const wb = (await app.inject({ method: 'GET', url: `/api/sheets/${orig.id}`, headers: { cookie } })).json().workbook;
+    wb.tabs[0].cells.A1 = { v: 'v1' };
+    await put(orig.id, wb);
+
+    res = await app.inject({ method: 'POST', url: `/api/sheets/${orig.id}/branch`, headers: { cookie }, payload: {} });
+    const branch = res.json().sheet;
+    expect(branch.title).toBe('Plan (branch)');
+    expect(branch.branch).toMatchObject({ parentId: orig.id, parentTitle: 'Plan', detached: false });
+    expect(readdirSync(path.join(dir, 'sheets'))).toContain(`${branch.id}.base.json`);
+
+    // The original moves on; compare returns the base snapshot plus the original's current state.
+    wb.tabs[0].cells.A1 = { v: 'v2' };
+    await put(orig.id, wb);
+    await app.inject({ method: 'PATCH', url: `/api/sheets/${orig.id}`, headers: { cookie }, payload: { title: 'Plan 2027' } });
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${branch.id}/compare`, headers: { cookie } });
+    const cmp = res.json();
+    expect(cmp.base.tabs[0].cells.A1.v).toBe('v1');
+    expect(cmp.original.tabs[0].cells.A1.v).toBe('v2');
+    expect(cmp.meta.branch.parentTitle).toBe('Plan 2027');
+
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${orig.id}/compare`, headers: { cookie } });
+    expect(res.statusCode).toBe(400);
+
+    // Deleting the original detaches the branch but keeps it comparable against the base.
+    await app.inject({ method: 'DELETE', url: `/api/sheets/${orig.id}`, headers: { cookie } });
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${branch.id}/compare`, headers: { cookie } });
+    expect(res.json().original).toBe(null);
+    expect(res.json().meta.branch).toMatchObject({ detached: true, parentTitle: 'Plan' });
+
+    await app.inject({ method: 'DELETE', url: `/api/sheets/${branch.id}`, headers: { cookie } });
+    expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${branch.id}.base.json`);
+  });
+
+  it('migrates a database created before branches existed', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const { openDb } = await import('./db.ts');
+    const file = path.join(dir, 'old.db');
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE sheets (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL, file TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      INSERT INTO sheets VALUES ('s1', 'u1', 'Old', 's1.json', 'x', 'x');`);
+    old.close();
+    const db = openDb(file);
+    const cols = (db.prepare('PRAGMA table_info(sheets)').all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(['parent_id', 'parent_title', 'branched_at']));
+    expect((db.prepare('SELECT title, parent_id FROM sheets').get() as { title: string; parent_id: null }).parent_id).toBe(null);
+    db.close();
+  });
+});

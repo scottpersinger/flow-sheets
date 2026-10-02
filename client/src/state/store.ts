@@ -13,6 +13,8 @@ export interface UndoEntry<M = unknown> {
   /** Opaque UI state (e.g. selection) captured before/after the change, restored on undo/redo. */
   metaBefore?: M;
   metaAfter?: M;
+  /** Transactions with the same group that follow each other merge into one undo step (e.g. one agent request). */
+  group?: string;
 }
 
 const STRUCTURAL_PROPS = new Set<keyof Tab>(['name', 'rows', 'cols']);
@@ -124,15 +126,24 @@ export class WorkbookStore<M = unknown> {
     return formatValue(v, cell.st, implied);
   }
 
-  /** Run a mutation as one undoable step. Returns false if nothing changed. */
-  transact(fn: (tx: Tx) => void, meta?: { before?: M; after?: M }, undoable = true): boolean {
+  /**
+   * Run a mutation as one undoable step. Returns false if nothing changed.
+   * With a group, the step merges into the previous one if that is the most recent step and has the same group.
+   */
+  transact(fn: (tx: Tx) => void, meta?: { before?: M; after?: M }, undoable = true, group?: string): boolean {
     const tx = new Tx(this);
     fn(tx);
     if (!tx.patches.length) return false;
     this.recalc(tx.structural, tx.changedCells);
     if (undoable) {
-      this.undoStack.push({ patches: tx.patches, metaBefore: meta?.before, metaAfter: meta?.after });
-      if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+      const top = this.undoStack[this.undoStack.length - 1];
+      if (group && top?.group === group && !this.redoStack.length) {
+        top.patches.push(...tx.patches);
+        top.metaAfter = meta?.after;
+      } else {
+        this.undoStack.push({ patches: tx.patches, metaBefore: meta?.before, metaAfter: meta?.after, group });
+        if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+      }
       this.redoStack = [];
     }
     this.emit();

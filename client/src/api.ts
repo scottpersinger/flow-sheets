@@ -1,3 +1,4 @@
+import type { AgentEvent, AgentTurnRequest, ChatItem } from '../../shared/agent/protocol.ts';
 import type { SheetMeta, Workbook } from '../../shared/types.ts';
 
 export interface User {
@@ -58,6 +59,43 @@ export const api = {
     uploadExcel<{ sheet: SheetMeta; warnings: string[] }>(`/api/sheets/import?title=${encodeURIComponent(title)}`, file),
   /** Convert an Excel file (.xlsx or .xls) to workbook tabs without creating a spreadsheet. */
   convertXlsx: (file: File) => uploadExcel<{ workbook: Workbook; warnings: string[] }>('/api/import/xlsx', file),
+  branchSheet: (id: string, title?: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/branch`, { title }),
+  compareSheet: (id: string) =>
+    request<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null }>('GET', `/api/sheets/${encodeURIComponent(id)}/compare`),
   renameSheet: (id: string, title: string) => request<{ sheet: SheetMeta }>('PATCH', `/api/sheets/${encodeURIComponent(id)}`, { title }),
   deleteSheet: (id: string) => request<{ ok: true }>('DELETE', `/api/sheets/${encodeURIComponent(id)}`),
+
+  agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
+  agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),
+  agentTurn: streamAgentTurn,
 };
+
+/** Run or resume an agent turn, calling onEvent for each server-sent event until the stream ends. */
+async function streamAgentTurn(body: AgentTurnRequest, signal: AbortSignal, onEvent: (e: AgentEvent) => void): Promise<void> {
+  const res = await fetch('/api/agent/turn', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (data as { error?: string }).error ?? `Request failed (${res.status})`);
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let end;
+    while ((end = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, end);
+      buf = buf.slice(end + 2);
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)) as AgentEvent);
+      }
+    }
+  }
+}

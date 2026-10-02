@@ -31,7 +31,20 @@ import {
   rowY,
   type Viewport,
 } from './layout.ts';
-import { cellFont, drawGrid, fillHandleRect, filterButtonRect, measure, rangeRect, FONT_FAMILY, FONT_SIZE } from './render.ts';
+import {
+  CHANGE_COLORS,
+  cellFont,
+  drawGrid,
+  fillHandleRect,
+  filterButtonRect,
+  measure,
+  rangeRect,
+  FONT_FAMILY,
+  FONT_SIZE,
+  type ChangeSide,
+  type CompareOverlay,
+} from './render.ts';
+import type { CellDiff } from '../../../shared/diff.ts';
 
 type Hit =
   | { area: 'corner' }
@@ -64,7 +77,7 @@ export function Grid({ ctl }: { ctl: SheetController }) {
   const [scroll, setScroll] = useState({ x: 0, y: 0 });
   const [resizePreview, setResizePreview] = useState<{ axis: 'col' | 'row'; idx: number[]; size: number } | null>(null);
   const [previews, setPreviews] = useState<{ fill: Range | null; move: Range | null }>({ fill: null, move: null });
-  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [tip, setTip] = useState<{ x: number; y: number; title: string; lines: string[]; kind: 'error' | ChangeSide } | null>(null);
   const [acIndex, setAcIndex] = useState(0);
   const [acDismissed, setAcDismissed] = useState<string | null>(null);
   const [addRowsCount, setAddRowsCount] = useState('1000');
@@ -164,6 +177,21 @@ export function Grid({ ctl }: { ctl: SheetController }) {
       });
   }, [edit, tab]);
 
+  // Branch comparison marks for this tab (respecting the Yours / Original / Conflict filters).
+  const cmp = ctl.compare;
+  const tabDiff = cmp?.diff?.tabs.find((t) => t.tabId === tab.id);
+  const { compareOverlay, compareCells } = useMemo(() => {
+    const cells = new Map<string, CellDiff>();
+    if (!cmp || !tabDiff) return { compareOverlay: null as CompareOverlay | null, compareCells: cells };
+    const visible = tabDiff.cells.filter((c) => cmp.show[c.side]);
+    for (const c of visible) cells.set(`${c.r},${c.c}`, c);
+    const overlay: CompareOverlay = {
+      cells: visible.map((c) => ({ r: c.r, c: c.c, side: c.side })),
+      rows: tabDiff.rows.filter((r) => cmp.show[r.side]).map((r) => ({ at: r.at, side: r.side, inBranch: r.inBranch })),
+    };
+    return { compareOverlay: overlay, compareCells: cells };
+  }, [cmp, tabDiff]);
+
   const search = ctl.search;
   const allHits = search ? ctl.searchMatches() : null;
   const searchHits = useMemo(() => {
@@ -194,6 +222,7 @@ export function Grid({ ctl }: { ctl: SheetController }) {
       fillPreview: previews.fill,
       movePreview: previews.move,
       refs,
+      compare: compareOverlay,
       searchHits,
       dpr,
     });
@@ -558,10 +587,18 @@ export function Grid({ ctl }: { ctl: SheetController }) {
     else if (h.area === 'cell') cursor = 'cell';
     canvasRef.current!.style.cursor = cursor;
     if (h.area === 'cell' && !h.fillHandle) {
+      const rect = cellRect(layout, vp, h.r, h.c);
+      const show = (t: NonNullable<typeof tip>) => {
+        if (!tip || tip.title !== t.title || tip.x !== t.x || tip.y !== t.y || tip.lines.join() !== t.lines.join()) setTip(t);
+      };
+      const change = compareCells.get(`${h.r},${h.c}`);
+      if (change) {
+        show({ x: rect.x + rect.w, y: rect.y, kind: change.side, title: CHANGE_TITLES[change.side] + (change.formatOnly ? ' (formatting)' : ''), lines: describeChange(change) });
+        return;
+      }
       const msg = store.engine.getErrorMessage(ctl.tab.id, h.r, h.c);
       if (msg) {
-        const rect = cellRect(layout, vp, h.r, h.c);
-        if (!tip || tip.text !== msg || tip.x !== rect.x + rect.w) setTip({ x: rect.x + rect.w, y: rect.y, text: msg });
+        show({ x: rect.x + rect.w, y: rect.y, kind: 'error', title: 'Error', lines: [msg] });
         return;
       }
     }
@@ -889,9 +926,14 @@ export function Grid({ ctl }: { ctl: SheetController }) {
         </div>
       )}
       {tip && (
-        <div className="cell-tip" style={{ left: tip.x + 4, top: tip.y }}>
-          <strong>Error</strong>
-          <div>{tip.text}</div>
+        <div
+          className="cell-tip"
+          style={{ left: Math.min(tip.x + 4, size.width - 330), top: tip.y, borderLeftColor: tip.kind === 'error' ? undefined : CHANGE_COLORS[tip.kind].solid }}
+        >
+          <strong style={{ color: tip.kind === 'error' ? undefined : CHANGE_COLORS[tip.kind].solid }}>{tip.title}</strong>
+          {tip.lines.map((ln, i) => (
+            <div key={i}>{ln}</div>
+          ))}
         </div>
       )}
     </div>
@@ -917,4 +959,13 @@ function HintSyntax({ syntax, arg }: { syntax: string; arg: number }) {
       )
     </div>
   );
+}
+
+const CHANGE_TITLES: Record<ChangeSide, string> = { mine: 'Changed in your branch', theirs: 'Changed in the original', conflict: 'Changed in both' };
+
+function describeChange(c: CellDiff): string[] {
+  const v = (x: { v: string } | undefined) => (x?.v ? x.v : '(empty)');
+  if (c.side === 'mine') return [`Original: ${v(c.base)}`, `Yours: ${v(c.branch)}`];
+  if (c.side === 'theirs') return [`Yours (unchanged): ${v(c.branch)}`, `Original now: ${v(c.original)}`];
+  return [`When branched: ${v(c.base)}`, `Yours: ${v(c.branch)}`, `Original now: ${v(c.original)}`];
 }
