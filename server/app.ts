@@ -9,9 +9,10 @@ import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { AgentStore } from './agent/store.ts';
-import { AuthService, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
+import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
 import { openDb } from './db.ts';
 import { ImageStore } from './images.ts';
+import { mailerFromEnv, type Mailer } from './mail.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 
@@ -33,6 +34,10 @@ export interface AppOptions {
   agent?: AgentOptions;
   /** Starts the worker for an app-change job. Tests pass a stub; the default runs server/agent/worker.ts. */
   launchJob?: Launcher;
+  /** Sends email (password reset links). Tests pass a stub; the default comes from the environment. */
+  sendMail?: Mailer;
+  /** Public origin for links in email, e.g. https://sheets.example.com. Defaults to the request's own origin. */
+  appUrl?: string;
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -53,6 +58,9 @@ function agentErrorMessage(e: unknown): string {
 export async function buildApp(opts: AppOptions) {
   const db = openDb(path.join(opts.dataDir, 'app.db'));
   const auth = new AuthService(db);
+  const sendMail = opts.sendMail ?? mailerFromEnv((msg) => app.log.info(msg));
+  // Forgot-password requests per email, to keep the mailbox and the mailer quiet under abuse.
+  const resetRequests = new Map<string, number[]>();
   const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
@@ -113,6 +121,53 @@ export async function buildApp(opts: AppOptions) {
     }
     const user = await auth.login(email, password);
     if (!user) return reply.code(401).send({ error: 'Invalid email or password.' });
+    setSessionCookie(reply, user.id);
+    return { user };
+  });
+
+  // Password reset: always answers OK so the response doesn't reveal whether an account exists.
+  app.post('/api/auth/forgot', async (req, reply) => {
+    const { email } = (req.body ?? {}) as { email?: unknown };
+    if (typeof email !== 'string' || !email.trim()) return reply.code(400).send({ error: 'Please enter your email address.' });
+    const key = email.trim().toLowerCase();
+    const now = Date.now();
+    const recent = (resetRequests.get(key) ?? []).filter((t) => now - t < 60 * 60 * 1000);
+    if (recent.length >= 5) return reply.code(429).send({ error: 'Too many reset requests for this address. Try again in an hour.' });
+    resetRequests.set(key, [...recent, now]);
+
+    const reset = auth.createPasswordReset(email);
+    if (reset) {
+      const origin = opts.appUrl ?? process.env.APP_URL ?? `${req.headers['x-forwarded-proto'] ?? req.protocol}://${req.headers.host}`;
+      const link = `${origin.replace(/\/$/, '')}/reset?token=${reset.token}`;
+      const minutes = Math.round(RESET_TTL_MS / 60000);
+      try {
+        await sendMail({
+          to: reset.user.email,
+          subject: 'Reset your Sheets password',
+          text: `Someone asked to reset the password for ${reset.user.email} on Sheets.\n\nSet a new password here (the link works once and expires in ${minutes} minutes):\n${link}\n\nIf you didn't ask for this, you can ignore this email; your password stays the same.`,
+        });
+      } catch (e) {
+        req.log.error({ err: e }, 'password reset email failed');
+        return reply.code(500).send({ error: 'The reset email could not be sent. Try again later.' });
+      }
+    }
+    return { ok: true };
+  });
+
+  app.get('/api/auth/reset', async (req, reply) => {
+    const { token } = req.query as { token?: string };
+    const user = typeof token === 'string' ? auth.userForResetToken(token) : null;
+    if (!user) return reply.code(400).send({ error: 'This reset link is invalid or has expired. Request a new one.' });
+    return { email: user.email };
+  });
+
+  app.post('/api/auth/reset', async (req, reply) => {
+    const { token, password } = (req.body ?? {}) as { token?: unknown; password?: unknown };
+    if (typeof token !== 'string') return reply.code(400).send({ error: 'This reset link is invalid or has expired. Request a new one.' });
+    const problem = validateCredentials('reset@example.com', password);
+    if (problem) return reply.code(400).send({ error: problem });
+    const user = await auth.resetPassword(token, password as string);
+    if (!user) return reply.code(400).send({ error: 'This reset link is invalid or has expired. Request a new one.' });
     setSessionCookie(reply, user.id);
     return { user };
   });

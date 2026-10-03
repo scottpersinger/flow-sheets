@@ -7,6 +7,8 @@ interface AuthState {
   login(email: string, password: string): Promise<void>;
   register(email: string, password: string): Promise<void>;
   logout(): Promise<void>;
+  /** Mark the user as signed in after a flow that set the session cookie elsewhere (password reset). */
+  setUser(user: User | null): void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -52,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading, login, register, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

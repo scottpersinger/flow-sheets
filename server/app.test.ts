@@ -7,9 +7,11 @@ import { buildApp } from './app.ts';
 let dir: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
 
+const sentMail: { to: string; subject: string; text: string }[] = [];
+
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-test-'));
-  app = await buildApp({ dataDir: dir });
+  app = await buildApp({ dataDir: dir, sendMail: async (m) => void sentMail.push(m), appUrl: 'https://sheets.test' });
 });
 
 afterAll(async () => {
@@ -22,6 +24,50 @@ function cookieFrom(res: { headers: Record<string, unknown> }): string {
   const first = Array.isArray(sc) ? sc[0] : String(sc);
   return first.split(';')[0];
 }
+
+describe('password reset', () => {
+  it('emails a one-time link that sets a new password and signs the user in', async () => {
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'reset@x.com', password: 'oldpassword1' } });
+
+    // Unknown address: same answer, no mail.
+    let res = await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: 'nobody@x.com' } });
+    expect(res.statusCode).toBe(200);
+    expect(sentMail).toHaveLength(0);
+
+    res = await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: 'Reset@x.com' } });
+    expect(res.statusCode).toBe(200);
+    expect(sentMail).toHaveLength(1);
+    expect(sentMail[0].to).toBe('reset@x.com');
+    const link = /https:\/\/sheets\.test\/reset\?token=([A-Za-z0-9_-]+)/.exec(sentMail[0].text);
+    expect(link).not.toBeNull();
+    const token = link![1];
+
+    res = await app.inject({ method: 'GET', url: `/api/auth/reset?token=${token}` });
+    expect(res.json()).toEqual({ email: 'reset@x.com' });
+    res = await app.inject({ method: 'GET', url: '/api/auth/reset?token=bogus' });
+    expect(res.statusCode).toBe(400);
+
+    res = await app.inject({ method: 'POST', url: '/api/auth/reset', payload: { token, password: 'short' } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'POST', url: '/api/auth/reset', payload: { token, password: 'newpassword1' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user.email).toBe('reset@x.com');
+    const cookie = cookieFrom(res);
+    expect((await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } })).json().user.email).toBe('reset@x.com');
+
+    // The link works once; the old password is gone; the new one works.
+    res = await app.inject({ method: 'POST', url: '/api/auth/reset', payload: { token, password: 'anotherpass1' } });
+    expect(res.statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'reset@x.com', password: 'oldpassword1' } })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'reset@x.com', password: 'newpassword1' } })).statusCode).toBe(200);
+  });
+
+  it('limits reset requests per address', async () => {
+    for (let i = 0; i < 5; i++) await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: 'limited@x.com' } });
+    const res = await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: 'limited@x.com' } });
+    expect(res.statusCode).toBe(429);
+  });
+});
 
 describe('auth', () => {
   it('registers, logs in and out', async () => {

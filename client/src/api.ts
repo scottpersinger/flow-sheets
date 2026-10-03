@@ -60,6 +60,9 @@ export const api = {
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
   register: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/register', { email, password }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
+  forgotPassword: (email: string) => request<{ ok: true }>('POST', '/api/auth/forgot', { email }),
+  checkResetToken: (token: string) => request<{ email: string }>('GET', `/api/auth/reset?token=${encodeURIComponent(token)}`),
+  resetPassword: (token: string, password: string) => request<{ user: User }>('POST', '/api/auth/reset', { token, password }),
 
   listSheets: () => request<{ sheets: SheetMeta[] }>('GET', '/api/sheets'),
   createSheet: (title: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title }),

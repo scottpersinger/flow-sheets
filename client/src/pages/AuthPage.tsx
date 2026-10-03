@@ -73,6 +73,8 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
           {isLogin ? (
             <>
               New here? <Link to="/register">Create an account</Link>
+              <span className="auth-sep">·</span>
+              <Link to="/forgot">Forgot your password?</Link>
             </>
           ) : (
             <>

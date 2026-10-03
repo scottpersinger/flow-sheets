@@ -6,6 +6,7 @@ const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number,
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 64 };
 export const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
+export const RESET_TTL_MS = 60 * 60 * 1000;
 
 export interface User {
   id: string;
@@ -102,5 +103,43 @@ export class AuthService {
 
   purgeExpiredSessions(): void {
     this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString());
+    this.db.prepare('DELETE FROM password_resets WHERE expires_at < ?').run(new Date().toISOString());
+  }
+
+  // --- Password reset ---------------------------------------------------------
+
+  /** Start a reset for the account with this email. Returns the one-time token to email, or null if no account. */
+  createPasswordReset(email: string): { user: User; token: string; expires: Date } | null {
+    const row = this.db.prepare('SELECT id, email FROM users WHERE email = ?').get(normalizeEmail(email)) as User | undefined;
+    if (!row) return null;
+    // Any earlier link for this account stops working.
+    this.db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(row.id);
+    const token = randomBytes(32).toString('base64url');
+    const now = new Date();
+    const expires = new Date(now.getTime() + RESET_TTL_MS);
+    this.db
+      .prepare('INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+      .run(sha256(token), row.id, now.toISOString(), expires.toISOString());
+    return { user: row, token, expires };
+  }
+
+  /** The account a reset token belongs to, if the token is valid, unused and not expired. */
+  userForResetToken(token: string): User | null {
+    const row = this.db
+      .prepare('SELECT u.id, u.email, r.expires_at, r.used_at FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash = ?')
+      .get(sha256(token)) as { id: string; email: string; expires_at: string; used_at: string | null } | undefined;
+    if (!row || row.used_at || new Date(row.expires_at).getTime() < Date.now()) return null;
+    return { id: row.id, email: row.email };
+  }
+
+  /** Set a new password with a reset token. Uses up the token and signs the account out everywhere. */
+  async resetPassword(token: string, password: string): Promise<User | null> {
+    const user = this.userForResetToken(token);
+    if (!user) return null;
+    const hash = await hashPassword(password);
+    this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+    this.db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ?').run(new Date().toISOString(), sha256(token));
+    this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+    return user;
   }
 }

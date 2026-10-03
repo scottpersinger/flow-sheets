@@ -188,6 +188,21 @@ textarea {
 .auth-switch a {
   color: var(--blue);
 }
+.auth-sep {
+  margin: 0 8px;
+}
+.auth-text {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.form-ok {
+  color: #188038;
+  background: #e6f4ea;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
 
 /* ------------------------------------------------------------------ Home */
 .home {
