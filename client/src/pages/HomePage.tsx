@@ -108,6 +108,9 @@ export function HomePage() {
         </div>
         <input className="home-search" placeholder="Search spreadsheets" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
+          <Link to="/changes" className="home-changes" title="Changes the assistant made to the app">
+            Changes
+          </Link>
           <AgentButton />
           <span>{user?.email}</span>
           <button className="btn" onClick={() => void logout()}>

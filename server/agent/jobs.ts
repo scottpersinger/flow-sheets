@@ -1,24 +1,26 @@
-// Jobs that change the app's own source code. The assistant files one (request_app_change); after the turn
-// ends the runner starts a detached worker process (server/agent/worker.ts) that drives Claude Code in the
-// repository, verifies the result and records progress here. The worker is detached because editing files
-// under server/ or shared/ restarts the dev server, and the job must survive that.
+// Jobs that change the app's own source code. The assistant files one (request_app_change) or a user asks
+// for a revert on the Changes page; after the current turn ends the runner starts a detached worker process
+// (server/agent/worker.ts) that drives Claude Code in the repository, verifies the result, restarts the app
+// in production, publishes the change to GitHub, and records progress here. The worker is detached because
+// editing files under server/ or shared/ restarts the dev server, and the job must survive that.
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdirSync, openSync } from 'node:fs';
 import path from 'node:path';
-import type { AgentJob, AgentJobStatus } from '../../shared/agent/protocol.ts';
+import { JOB_ACTIVE_STATUSES, type AgentJob, type AgentJobStatus } from '../../shared/agent/protocol.ts';
 import type { DB } from '../db.ts';
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 
-const ACTIVE: AgentJobStatus[] = ['queued', 'starting', 'coding', 'verifying'];
-/** A job that has not reported progress for this long is considered dead. */
-const STALE_MS = 30 * 60 * 1000;
-const MAX_LOG_LINES = 200;
+const ACTIVE = [...JOB_ACTIVE_STATUSES];
+/** A job that has not finished after this long is considered dead. */
+const STALE_MS = 45 * 60 * 1000;
+const MAX_LOG_LINES = 300;
 
 interface Row {
   id: string;
   user_id: string;
+  kind: 'change' | 'revert';
   title: string;
   spec: string;
   status: AgentJobStatus;
@@ -28,44 +30,77 @@ interface Row {
   error: string | null;
   files: string | null;
   cost_usd: number | null;
+  requested_by: string | null;
+  branch: string | null;
+  commit_sha: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  merged_sha: string | null;
+  patch: string | null;
+  reverts_job_id: string | null;
+  reverted_by_job_id: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
   acknowledged_at: string | null;
-  updated_at?: string;
 }
 
 export interface JobRecord extends AgentJob {
   userId: string;
-  spec: string;
   pid: number | null;
+  patch?: string;
+}
+
+export interface JobPatch {
+  pid?: number;
+  summary?: string;
+  error?: string;
+  files?: string[];
+  costUsd?: number;
+  branch?: string;
+  commitSha?: string;
+  prNumber?: number;
+  prUrl?: string;
+  mergedSha?: string;
+  patch?: string;
 }
 
 const now = () => new Date().toISOString();
+const opt = <T>(v: T | null): T | undefined => (v === null ? undefined : v);
 
 function toJob(r: Row): JobRecord {
   return {
     id: r.id,
     userId: r.user_id,
+    kind: r.kind,
     title: r.title,
     spec: r.spec,
     status: r.status,
     pid: r.pid,
     log: JSON.parse(r.log) as string[],
-    summary: r.summary ?? undefined,
-    error: r.error ?? undefined,
+    summary: opt(r.summary),
+    error: opt(r.error),
     files: r.files ? (JSON.parse(r.files) as string[]) : undefined,
-    costUsd: r.cost_usd ?? undefined,
+    costUsd: opt(r.cost_usd),
+    requestedBy: opt(r.requested_by),
+    branch: opt(r.branch),
+    commitSha: opt(r.commit_sha),
+    prNumber: opt(r.pr_number),
+    prUrl: opt(r.pr_url),
+    mergedSha: opt(r.merged_sha),
+    patch: opt(r.patch),
+    revertsJobId: opt(r.reverts_job_id),
+    revertedByJobId: opt(r.reverted_by_job_id),
     createdAt: r.created_at,
-    startedAt: r.started_at ?? undefined,
-    finishedAt: r.finished_at ?? undefined,
+    startedAt: opt(r.started_at),
+    finishedAt: opt(r.finished_at),
     acknowledged: !!r.acknowledged_at,
   };
 }
 
 /** The part of a job the browser sees. */
 export function publicJob(j: JobRecord): AgentJob {
-  const { userId: _u, spec: _s, pid: _p, ...pub } = j;
+  const { userId: _u, pid: _p, patch: _patch, ...pub } = j;
   return pub;
 }
 
@@ -76,11 +111,11 @@ export class JobStore {
     this.db = db;
   }
 
-  create(userId: string, title: string, spec: string): JobRecord {
+  create(userId: string, title: string, spec: string, opts: { kind?: 'change' | 'revert'; requestedBy?: string; revertsJobId?: string } = {}): JobRecord {
     const id = randomUUID();
     this.db
-      .prepare('INSERT INTO agent_jobs (id, user_id, title, spec, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, userId, title, spec, 'queued', now());
+      .prepare('INSERT INTO agent_jobs (id, user_id, kind, title, spec, status, requested_by, reverts_job_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, userId, opts.kind ?? 'change', title, spec, 'queued', opts.requestedBy ?? null, opts.revertsJobId ?? null, now());
     return this.get(id)!;
   }
 
@@ -93,6 +128,11 @@ export class JobStore {
   latest(userId: string): JobRecord | null {
     const row = this.db.prepare('SELECT * FROM agent_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').get(userId) as Row | undefined;
     return row ? toJob(row) : null;
+  }
+
+  /** Every job, newest first: the app's change history. */
+  list(limit = 200): JobRecord[] {
+    return (this.db.prepare('SELECT * FROM agent_jobs ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as Row[]).map(toJob);
   }
 
   /** The job that is queued or running, if any. Only one job at a time: they all edit the same working tree. */
@@ -111,14 +151,37 @@ export class JobStore {
     return res.changes ? this.get(row.id) : null;
   }
 
-  setStatus(id: string, status: AgentJobStatus, patch: { pid?: number; summary?: string; error?: string; files?: string[]; costUsd?: number } = {}): void {
+  setStatus(id: string, status: AgentJobStatus, patch: JobPatch = {}): void {
     const finished = status === 'done' || status === 'failed';
     this.db
       .prepare(
         `UPDATE agent_jobs SET status = ?, pid = COALESCE(?, pid), summary = COALESCE(?, summary), error = COALESCE(?, error),
-         files = COALESCE(?, files), cost_usd = COALESCE(?, cost_usd), finished_at = CASE WHEN ? THEN ? ELSE finished_at END WHERE id = ?`,
+         files = COALESCE(?, files), cost_usd = COALESCE(?, cost_usd), branch = COALESCE(?, branch), commit_sha = COALESCE(?, commit_sha),
+         pr_number = COALESCE(?, pr_number), pr_url = COALESCE(?, pr_url), merged_sha = COALESCE(?, merged_sha), patch = COALESCE(?, patch),
+         finished_at = CASE WHEN ? THEN ? ELSE finished_at END WHERE id = ?`,
       )
-      .run(status, patch.pid ?? null, patch.summary ?? null, patch.error ?? null, patch.files ? JSON.stringify(patch.files) : null, patch.costUsd ?? null, finished ? 1 : 0, now(), id);
+      .run(
+        status,
+        patch.pid ?? null,
+        patch.summary ?? null,
+        patch.error ?? null,
+        patch.files ? JSON.stringify(patch.files) : null,
+        patch.costUsd ?? null,
+        patch.branch ?? null,
+        patch.commitSha ?? null,
+        patch.prNumber ?? null,
+        patch.prUrl ?? null,
+        patch.mergedSha ?? null,
+        patch.patch ?? null,
+        finished ? 1 : 0,
+        now(),
+        id,
+      );
+  }
+
+  /** Record that a change has been undone by a revert job. */
+  markReverted(id: string, byJobId: string): void {
+    this.db.prepare('UPDATE agent_jobs SET reverted_by_job_id = ? WHERE id = ?').run(byJobId, id);
   }
 
   appendLog(id: string, line: string): void {
@@ -146,7 +209,8 @@ export function workerLauncher(dataDir: string): Launcher {
       cwd: REPO_ROOT,
       detached: true,
       stdio: ['ignore', out, out],
-      env: { ...process.env, DATA_DIR: dataDir },
+      // The worker asks this server to restart once the change is verified (production only).
+      env: { ...process.env, DATA_DIR: dataDir, AGENT_SERVER_PID: String(process.pid) },
     });
     child.unref();
     return child.pid;

@@ -83,6 +83,8 @@ export const api = {
   createJob: (title: string, spec: string) => request<{ job: AgentJob }>('POST', '/api/agent/jobs', { title, spec }),
   latestJob: () => request<{ job: AgentJob | null }>('GET', '/api/agent/jobs/latest'),
   acknowledgeJob: (id: string) => request<{ ok: true }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/ack`, {}),
+  listJobs: () => request<{ jobs: AgentJob[] }>('GET', '/api/agent/jobs'),
+  revertJob: (id: string) => request<{ job: AgentJob }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/revert`, {}),
 };
 
 /** Run or resume an agent turn, calling onEvent for each server-sent event until the stream ends. */

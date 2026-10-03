@@ -108,4 +108,21 @@ function migrate(db: DB): void {
   if (!cols.has('parent_title')) db.exec('ALTER TABLE sheets ADD COLUMN parent_title TEXT');
   if (!cols.has('branched_at')) db.exec('ALTER TABLE sheets ADD COLUMN branched_at TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS sheets_parent ON sheets(parent_id)');
+
+  // Agent jobs: the record of a change (who asked, what was committed and merged) and revert links.
+  const jobCols = new Set((db.prepare('PRAGMA table_info(agent_jobs)').all() as { name: string }[]).map((c) => c.name));
+  const jobAdds: [string, string][] = [
+    ['kind', "TEXT NOT NULL DEFAULT 'change'"],
+    ['requested_by', 'TEXT'],
+    ['branch', 'TEXT'],
+    ['commit_sha', 'TEXT'],
+    ['pr_number', 'INTEGER'],
+    ['pr_url', 'TEXT'],
+    ['merged_sha', 'TEXT'],
+    // The job's changes as a unified diff, so a revert can apply it in reverse.
+    ['patch', 'TEXT'],
+    ['reverts_job_id', 'TEXT'],
+    ['reverted_by_job_id', 'TEXT'],
+  ];
+  for (const [name, type] of jobAdds) if (!jobCols.has(name)) db.exec(`ALTER TABLE agent_jobs ADD COLUMN ${name} ${type}`);
 }

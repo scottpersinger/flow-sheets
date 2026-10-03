@@ -76,8 +76,28 @@ describe('app-change jobs', () => {
     expect(store.acknowledge(job.id, userId)).toBe(false);
     const pub = publicJob(store.get(job.id)!) as unknown as Record<string, unknown>;
     expect(pub.acknowledged).toBe(true);
-    expect(pub.spec).toBeUndefined();
+    expect(pub.spec).toBe('spec'); // shown on the Changes page
     expect(pub.pid).toBeUndefined();
     expect(pub.userId).toBeUndefined();
+  });
+
+  it('records the change and links a revert to it', () => {
+    const job = store.create(userId, 'Images', 'spec', { requestedBy: 'j@x.com' });
+    expect(job.kind).toBe('change');
+    expect(job.requestedBy).toBe('j@x.com');
+    store.setStatus(job.id, 'publishing', { branch: 'assistant/x', commitSha: 'c1', patch: 'diff --git a b' });
+    store.setStatus(job.id, 'publishing', { prNumber: 3, prUrl: 'https://github.com/a/b/pull/3' });
+    store.setStatus(job.id, 'done', { mergedSha: 'm1' });
+    const done = store.get(job.id)!;
+    expect(done).toMatchObject({ branch: 'assistant/x', commitSha: 'c1', prNumber: 3, mergedSha: 'm1', patch: 'diff --git a b' });
+    expect((publicJob(done) as unknown as Record<string, unknown>).patch).toBeUndefined();
+
+    const revert = store.create(userId, job.title, 'Revert', { kind: 'revert', revertsJobId: job.id, requestedBy: 'j@x.com' });
+    expect(revert.kind).toBe('revert');
+    expect(revert.revertsJobId).toBe(job.id);
+    store.markReverted(job.id, revert.id);
+    expect(store.get(job.id)?.revertedByJobId).toBe(revert.id);
+    expect(store.list().map((j) => j.id)).toContain(revert.id);
+    expect(store.list()[0].id).toBe(revert.id); // newest first
   });
 });

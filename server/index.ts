@@ -30,3 +30,13 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     );
   });
 }
+
+// An app-change job sends SIGUSR2 once new code is verified; under the supervisor (npm start) exit code 75
+// means "start me again". In development node --watch restarts on file changes instead.
+process.once('SIGUSR2', () => {
+  app.log.info('restarting to load new code');
+  app.close().then(
+    () => process.exit(75),
+    () => process.exit(75),
+  );
+});

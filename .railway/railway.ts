@@ -15,6 +15,13 @@ export default defineRailway(() => {
       DATA_DIR: "/data",
       // Railway serves over HTTPS, so session cookies can be Secure.
       SECURE_COOKIES: "1",
+      // Self-improvement: app-change jobs run Claude Code in this container, so the image needs git and the
+      // dev dependencies (vite, vitest, tsc) to rebuild and verify. GITHUB_TOKEN (contents + pull requests,
+      // read/write) is set in the dashboard, not here.
+      RAILPACK_DEPLOY_APT_PACKAGES: "git",
+      RAILPACK_PRUNE_DEPS: "false",
+      // Give in-flight requests a moment to finish when a deploy replaces the container.
+      RAILWAY_DEPLOYMENT_DRAINING_SECONDS: "15",
     },
     volumeMounts: {
       "/data": volume("flow-sheets-data", { region: "sfo", sizeMB: 5000 }),

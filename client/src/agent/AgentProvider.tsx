@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { JOB_ACTIVE_STATUSES, type AgentContext, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { isJobLive, JOB_ACTIVE_STATUSES, type AgentContext, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
@@ -101,7 +101,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         setItems((prev) => (prev.length ? prev : r.items));
         const { job } = await api.latestJob();
         if (cancelled || !job) return;
-        if (job.status === 'done' && !job.acknowledged) {
+        if (isJobLive(job) && !job.acknowledged) {
           // Acknowledge before exposing the job, or the reload effect below would reload again.
           await api.acknowledgeJob(job.id);
           if (cancelled) return;
@@ -141,7 +141,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   }, [job]);
 
   useEffect(() => {
-    if (job?.status === 'done' && !job.acknowledged && !running) location.reload();
+    if (job && isJobLive(job) && !job.acknowledged && !running) location.reload();
   }, [job, running]);
 
   const dismissJob = useCallback(() => {

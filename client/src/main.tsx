@@ -5,6 +5,7 @@ import { AgentPanel } from './agent/AgentPanel.tsx';
 import { AgentProvider, useAgent } from './agent/AgentProvider.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
 import { AuthPage } from './pages/AuthPage.tsx';
+import { ChangesPage } from './pages/ChangesPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
 import './styles.css';
@@ -35,6 +36,7 @@ function AppShell() {
           <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
           <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
           <Route path="/s/:id" element={<RequireAuth><SpreadsheetPage /></RequireAuth>} />
+          <Route path="/changes" element={<RequireAuth><ChangesPage /></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

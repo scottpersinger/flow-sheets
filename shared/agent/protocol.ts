@@ -59,21 +59,43 @@ export type ChatItem =
       error?: string;
     };
 
-export type AgentJobStatus = 'queued' | 'starting' | 'coding' | 'verifying' | 'done' | 'failed';
+/**
+ * queued → starting → coding → verifying → building (production: rebuild the client) → restarting (production:
+ * the server restarts itself) → publishing (commit, push, PR, merge) → done. A job is "live" (the change is
+ * running) from publishing on.
+ */
+export type AgentJobStatus = 'queued' | 'starting' | 'coding' | 'verifying' | 'building' | 'restarting' | 'publishing' | 'done' | 'failed';
 
-/** A change to the app's own code requested through the assistant, as shown in the panel. */
+/** A change to the app's own code requested through the assistant: the record of the change. */
 export interface AgentJob {
   id: string;
+  /** A change, or the revert of an earlier change. */
+  kind: 'change' | 'revert';
   title: string;
+  /** The request given to the coding agent. */
+  spec: string;
   status: AgentJobStatus;
   /** Progress lines, oldest first. */
   log: string[];
   /** What changed, written by the coding agent (when done). */
   summary?: string;
   error?: string;
-  /** Files changed in the working tree. */
+  /** Files the job changed. */
   files?: string[];
   costUsd?: number;
+  /** Email of the user who asked for it. */
+  requestedBy?: string;
+  /** Git branch, commit and pull request, when the change was published to GitHub. */
+  branch?: string;
+  commitSha?: string;
+  prNumber?: number;
+  prUrl?: string;
+  /** The commit on main after the pull request was merged. */
+  mergedSha?: string;
+  /** For a revert: the job it undoes. */
+  revertsJobId?: string;
+  /** Set on a change once a revert of it has succeeded. */
+  revertedByJobId?: string;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -81,7 +103,12 @@ export interface AgentJob {
   acknowledged: boolean;
 }
 
-export const JOB_ACTIVE_STATUSES: ReadonlySet<AgentJobStatus> = new Set(['queued', 'starting', 'coding', 'verifying']);
+export const JOB_ACTIVE_STATUSES: ReadonlySet<AgentJobStatus> = new Set(['queued', 'starting', 'coding', 'verifying', 'building', 'restarting', 'publishing']);
+
+/** The change is running in the app (publishing to GitHub may still be in progress). */
+export function isJobLive(job: AgentJob): boolean {
+  return job.status === 'publishing' || job.status === 'done';
+}
 
 /** Tools the browser executes; every other tool runs on the server. */
 export const CLIENT_TOOLS = new Set([

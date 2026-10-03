@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
 import { useAgent } from './AgentProvider.tsx';
@@ -57,6 +58,9 @@ export function AgentPanel() {
       <div className="agent-head">
         <SparkIcon />
         <span className="agent-title">Assistant</span>
+        <Link className="link agent-changes" to="/changes" title="Changes the assistant made to the app">
+          Changes
+        </Link>
         <button className="link agent-new" onClick={() => void agent.reset()} disabled={agent.running || !agent.items.length} title="Start a new conversation">
           New chat
         </button>
@@ -180,7 +184,10 @@ const JOB_STATUS: Record<AgentJob['status'], string> = {
   starting: 'Starting the coding agent',
   coding: 'Changing the code',
   verifying: 'Running the checks',
-  done: 'Live. Reloading…',
+  building: 'Building the app',
+  restarting: 'Restarting the app',
+  publishing: 'Live. Publishing to GitHub…',
+  done: 'Live',
   failed: 'Failed',
 };
 
@@ -196,8 +203,19 @@ function JobCard({ job, onDismiss }: { job: AgentJob; onDismiss(): void }) {
         </span>
         <span className="agent-job-title">Changing the app: {job.title}</span>
       </div>
-      <div className="agent-job-status">{JOB_STATUS[job.status]}</div>
-      {active && recent.length > 0 && (
+      <div className="agent-job-status">
+        {JOB_STATUS[job.status]}
+        {job.status === 'done' && !job.acknowledged ? ' Reloading…' : ''}
+        {job.prUrl ? (
+          <>
+            {' · '}
+            <a href={job.prUrl} target="_blank" rel="noreferrer">
+              PR #{job.prNumber}
+            </a>
+          </>
+        ) : null}
+      </div>
+      {active && job.status !== 'publishing' && recent.length > 0 && (
         <ul className="agent-job-log">
           {recent.map((line, i) => (
             <li key={`${job.log.length - recent.length + i}`}>{line}</li>

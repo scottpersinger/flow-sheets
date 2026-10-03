@@ -321,7 +321,30 @@ export async function buildApp(opts: AppOptions) {
       if (!title || !spec) return reply.code(400).send({ error: 'A title and a spec are required.' });
       const active = jobs.active();
       if (active) return reply.code(409).send({ error: `A change is already in progress: "${active.title}". Wait for it to finish.` });
-      return { job: publicJob(jobs.create(req.user!.id, title.slice(0, 120), spec.slice(0, 8000))) };
+      return { job: publicJob(jobs.create(req.user!.id, title.slice(0, 120), spec.slice(0, 8000), { requestedBy: req.user!.email })) };
+    });
+
+    // The app's change history, for the Changes page.
+    r.get('/api/agent/jobs', async () => ({ jobs: jobs.list().map(publicJob) }));
+
+    // Undo a change: a job that applies its patch in reverse (or has the coding agent undo it), then goes
+    // through the same verify, restart and publish steps. Starts right away; nothing is streaming to this user.
+    r.post('/api/agent/jobs/:id/revert', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const target = jobs.get(id);
+      if (!target) return reply.code(404).send({ error: 'Change not found' });
+      if (target.kind !== 'change') return reply.code(400).send({ error: 'Only changes can be reverted, not reverts.' });
+      if (target.status !== 'done') return reply.code(400).send({ error: 'Only a finished change can be reverted.' });
+      if (target.revertedByJobId) return reply.code(400).send({ error: 'That change has already been reverted.' });
+      const active = jobs.active();
+      if (active) return reply.code(409).send({ error: `A change is already in progress: "${active.title}". Wait for it to finish.` });
+      const job = jobs.create(req.user!.id, target.title, `Revert the change "${target.title}" (job ${target.id}).`, {
+        kind: 'revert',
+        requestedBy: req.user!.email,
+        revertsJobId: target.id,
+      });
+      jobRunner.startQueued();
+      return { job: publicJob(jobs.get(job.id)!) };
     });
 
     r.get('/api/agent/jobs/latest', async (req) => {

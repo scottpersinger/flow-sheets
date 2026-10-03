@@ -218,5 +218,11 @@ describe('agent', () => {
     const ack = await app.inject({ method: 'POST', url: `/api/agent/jobs/${job.id}/ack`, headers: { cookie } });
     expect(ack.statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: '/api/agent/jobs/latest', headers: { cookie } })).json()).toMatchObject({ job: { acknowledged: true } });
+
+    // The change history lists it with who asked; a running change cannot be reverted.
+    const list = (await app.inject({ method: 'GET', url: '/api/agent/jobs', headers: { cookie } })).json() as { jobs: { id: string; requestedBy: string }[] };
+    expect(list.jobs.map((j) => j.id)).toEqual([job.id]);
+    expect(list.jobs[0].requestedBy).toBe('agent@x.com');
+    expect((await app.inject({ method: 'POST', url: `/api/agent/jobs/${job.id}/revert`, headers: { cookie } })).statusCode).toBe(400);
   });
 });

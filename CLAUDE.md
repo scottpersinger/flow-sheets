@@ -54,6 +54,7 @@ display values and/or a `cond`); rows hidden by a filter are computed in `ops.ts
 When a change is made by the assistant's coding job (see `server/agent/worker.ts`):
 
 - Make the smallest change that fully implements the request, following the patterns above.
-- Do not modify `data/`, `.env*`, `server/auth.ts`, `server/agent/jobs.ts` or `server/agent/worker.ts`.
-- Do not commit. Leave the changes in the working tree for the user to review.
+- Do not modify `CHANGELOG.md` (the job writes it), `data/`, `.env*`, `server/auth.ts`, or anything under
+  `server/agent/` other than `tools.ts` and `prompt.ts`.
+- Do not commit. The job commits, opens a pull request and merges it after the checks pass.
 - Run `npm run typecheck` and `npm test` and fix any failures before finishing.
