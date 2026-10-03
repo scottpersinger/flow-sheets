@@ -2,10 +2,12 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentContext, AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import type { ModelCall } from './agent/agent.ts';
+import { resetSearchRateLimit, runServerTool, validateToolInput } from './agent/tools.ts';
 import { buildApp } from './app.ts';
+import type { SheetStore } from './sheets.ts';
 
 type Params = Parameters<ModelCall>[0];
 type Block = Anthropic.Beta.BetaContentBlock;
@@ -224,5 +226,83 @@ describe('agent', () => {
     expect(list.jobs.map((j) => j.id)).toEqual([job.id]);
     expect(list.jobs[0].requestedBy).toBe('agent@x.com');
     expect((await app.inject({ method: 'POST', url: `/api/agent/jobs/${job.id}/revert`, headers: { cookie } })).statusCode).toBe(400);
+  });
+});
+
+describe('web and image search tools', () => {
+  const env = { userId: 'search-user', sheets: {} as SheetStore, context: home };
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+  beforeEach(() => {
+    resetSearchRateLimit();
+    vi.stubEnv('BRAVE_SEARCH_API_KEY', 'test-key');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('returns web results as plain text', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      json({
+        web: {
+          results: [
+            { title: 'Eat a <strong>Peach</strong>', url: 'https://en.wikipedia.org/wiki/Eat_a_Peach', description: 'An album &amp; more' },
+            { title: 'bad', url: 'javascript:x' },
+          ],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const out = JSON.parse(await runServerTool('web_search', { query: 'Eat a Peach', max_results: 3 }, env));
+    expect(out.results).toEqual([{ title: 'Eat a Peach', url: 'https://en.wikipedia.org/wiki/Eat_a_Peach', snippet: 'An album & more' }]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/web/search?q=Eat+a+Peach&count=3');
+    expect((init?.headers as Record<string, string>)['X-Subscription-Token']).toBe('test-key');
+  });
+
+  it('returns only directly loadable images, hotlink-friendly hosts first', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes('api.search.brave.com')) {
+          return json({
+            results: [
+              { title: 'Cover (blog)', url: 'https://blog.example.com/p', properties: { url: 'https://blog.example.com/cover.jpg', width: 500, height: 500 } },
+              { title: 'Cover (wiki)', url: 'https://en.wikipedia.org/wiki/Eat_a_Peach', properties: { url: 'https://upload.wikimedia.org/a/Eat_a_Peach.png', width: 300, height: 300 } },
+              { title: 'Broken', url: 'https://x.example.com', properties: { url: 'https://x.example.com/missing.jpg' } },
+              { title: 'Not an image file', url: 'https://y.example.com', properties: { url: 'https://y.example.com/page.html' } },
+              { title: 'Internal', url: 'http://10.0.0.1', properties: { url: 'http://10.0.0.1/a.png' } },
+            ],
+          });
+        }
+        if (url.includes('missing')) return new Response(null, { status: 404 });
+        return new Response(null, { status: 200, headers: { 'content-type': url.endsWith('.png') ? 'image/png' : 'image/jpeg' } });
+      }),
+    );
+    const out = JSON.parse(await runServerTool('image_search', { query: 'Allman Brothers Band Eat a Peach album cover' }, env));
+    expect(out.results).toEqual([
+      { title: 'Cover (wiki)', image_url: 'https://upload.wikimedia.org/a/Eat_a_Peach.png', source_page_url: 'https://en.wikipedia.org/wiki/Eat_a_Peach', width: 300, height: 300 },
+      { title: 'Cover (blog)', image_url: 'https://blog.example.com/cover.jpg', source_page_url: 'https://blog.example.com/p', width: 500, height: 500 },
+    ]);
+  });
+
+  it('reports empty results, API errors, a missing key and the rate limit clearly', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ results: [] })));
+    await expect(runServerTool('image_search', { query: 'zzz' }, env)).rejects.toThrow(/No loadable .* images found/);
+    vi.stubGlobal('fetch', vi.fn(async () => json({}, 500)));
+    await expect(runServerTool('web_search', { query: 'zzz' }, env)).rejects.toThrow(/HTTP 500/);
+    vi.stubEnv('BRAVE_SEARCH_API_KEY', '');
+    await expect(runServerTool('web_search', { query: 'zzz' }, env)).rejects.toThrow(/not set up/);
+
+    resetSearchRateLimit();
+    for (let i = 0; i < 20; i++) await runServerTool('web_search', { query: 'q' }, env).catch(() => {});
+    await expect(runServerTool('web_search', { query: 'q' }, env)).rejects.toThrow(/rate limit/);
+  });
+
+  it('validates the inputs', () => {
+    expect(validateToolInput('web_search', { query: 'x', max_results: 11 }).ok).toBe(false);
+    expect(validateToolInput('image_search', { query: '' }).ok).toBe(false);
+    expect(validateToolInput('image_search', { query: 'x', max_results: 10 }).ok).toBe(true);
   });
 });
