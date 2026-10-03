@@ -82,6 +82,16 @@ const schemas = {
     .describe(
       'Show an image inside a cell, scaled to fit the cell. Replaces the cell\'s value; keeps its formatting. read_range reports such cells as "[image]". Remove an image with clear_range. Make the row taller / column wider (set_row_height, set_column_width) if the image should appear larger.',
     ),
+  set_cell_link: z
+    .object({
+      tab,
+      range: range.describe('Cell to turn into a link, e.g. "D2". A range makes every cell of it the same link.'),
+      url: z.string().describe('Address the link opens in a new browser tab: an http(s) or mailto: URL.'),
+      label: z.string().optional().describe('Text shown in the cell. Defaults to the URL.'),
+    })
+    .describe(
+      'Make cells show a clickable hyperlink (blue, underlined; opens in a new tab). Replaces the cell\'s value with =HYPERLINK(url, label); keeps its formatting. Plain-text cells that are a full http(s) URL are already clickable and need no change. read_range lists link cells and their URLs under "links".',
+    ),
   set_filter: z
     .object({ tab, range: range.optional().describe('Range to put a filter on, header row first. Omit to remove the filter.') })
     .describe('Turn on a filter (with header dropdowns) for a range, or remove the tab\'s filter.'),

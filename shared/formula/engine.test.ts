@@ -22,6 +22,37 @@ function val(e: Engine, key: string, tab = 't1') {
   return e.getValue(tab, +m[2] - 1, c);
 }
 
+describe('links', () => {
+  it('evaluates HYPERLINK to its label and detects plain-text URLs', () => {
+    const e = new Engine(
+      wb({
+        A1: '=HYPERLINK("https://example.com", "Example")',
+        A2: '=HYPERLINK("https://example.com/a")',
+        A3: '=HYPERLINK(B1, B2)',
+        A4: '=HYPERLINK("javascript:alert(1)", "x")',
+        A5: 'https://en.wikipedia.org/wiki/Eat_a_Peach',
+        A6: 'n/a (original)',
+        A7: 'see https://example.com',
+        A8: '=HYPERLINK("mailto:a@b.co", "Mail")',
+        B1: 'http://x.org',
+        B2: 'X',
+      }),
+    );
+    expect(val(e, 'A1')).toBe('Example');
+    expect(e.getLink('t1', 0, 0)).toBe('https://example.com');
+    expect(val(e, 'A2')).toBe('https://example.com/a');
+    expect(e.getLink('t1', 1, 0)).toBe('https://example.com/a');
+    expect(val(e, 'A3')).toBe('X');
+    expect(e.getLink('t1', 2, 0)).toBe('http://x.org');
+    expect(val(e, 'A4')).toBe('x');
+    expect(e.getLink('t1', 3, 0)).toBeNull();
+    expect(e.getLink('t1', 4, 0)).toBe('https://en.wikipedia.org/wiki/Eat_a_Peach');
+    expect(e.getLink('t1', 5, 0)).toBeNull();
+    expect(e.getLink('t1', 6, 0)).toBeNull();
+    expect(e.getLink('t1', 7, 0)).toBe('mailto:a@b.co');
+  });
+});
+
 describe('engine basics', () => {
   it('evaluates arithmetic with precedence', () => {
     const e = new Engine(wb({ A1: '=1+2*3', A2: '=(1+2)*3', A3: '=-2^2', A4: '=2^3^2', A5: '=10%', A6: '="a"&1&TRUE' }));

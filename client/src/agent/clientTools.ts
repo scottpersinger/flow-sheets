@@ -4,6 +4,7 @@
 import { MAX_COLS, colToName, nameToCol, rangeToString, type Range } from '../../../shared/cellref.ts';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '../../../shared/agent/sheetRead.ts';
+import { hyperlinkFormula, safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage, hasContent, isDataImage, type CellStyle, type Tab } from '../../../shared/types.ts';
 import { CellError } from '../../../shared/values.ts';
 import type { SheetController } from '../state/controller.ts';
@@ -265,6 +266,20 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       });
       show(ctl, tab.id);
       return JSON.stringify({ image_in: `${tab.name}!${rangeToString(range)}` });
+    }
+
+    case 'set_cell_link': {
+      const { tab, range } = rangeOf(ctl, str(i.tab), String(i.range));
+      const url = safeLinkUrl(String(i.url ?? ''));
+      if (!url) throw new ToolError('url must be an http(s) or mailto: URL, such as https://example.com.');
+      const n = (range.r2 - range.r1 + 1) * (range.c2 - range.c1 + 1);
+      if (n > MAX_WRITE_CELLS) throw new ToolError(`${rangeToString(range)} has ${n} cells; add links to at most ${MAX_WRITE_CELLS} cells at once.`);
+      const formula = hyperlinkFormula(url, str(i.label));
+      run((tx) => {
+        for (let r = range.r1; r <= range.r2; r++) for (let c = range.c1; c <= range.c2; c++) ops.setInput(tx, tab.id, r, c, formula);
+      });
+      show(ctl, tab.id);
+      return JSON.stringify({ linked: `${tab.name}!${rangeToString(range)}`, url, label: ctl.store.display(tab.id, range.r1, range.c1) });
     }
 
     case 'set_filter': {

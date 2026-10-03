@@ -42,6 +42,8 @@ export function toolLabel(name: string, i: Input): string {
       return `Sorted ${where(i)} by column ${String(i.by_column).toUpperCase()}`;
     case 'set_cell_image':
       return `Added an image to ${where(i)}`;
+    case 'set_cell_link':
+      return `Added a link to ${where(i)}`;
     case 'set_filter':
       return typeof i.range === 'string' ? `Added a filter to ${where(i)}` : 'Removed the filter';
     case 'set_filter_criteria':

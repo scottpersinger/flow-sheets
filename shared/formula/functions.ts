@@ -1128,6 +1128,20 @@ F.XLOOKUP = (args, ctx) => {
   return vertical ? cellAt(ctx, ret, i, 0) : cellAt(ctx, ret, 0, i);
 };
 
+// --- Links --------------------------------------------------------------------
+// Evaluates to the label; the engine reads the URL from the first argument (Engine.getLink).
+F.HYPERLINK = (args, ctx) => {
+  const e = argCount(args, 1, 2, 'HYPERLINK');
+  if (e) return e;
+  const url = scalarArg(ctx, args[0]);
+  if (isErr(url)) return url;
+  if (args[1] && args[1].t !== 'empty') {
+    const label = scalarArg(ctx, args[1]);
+    if (label !== null && label !== '') return label;
+  }
+  return scalarToText(url);
+};
+
 // --- Date & time ------------------------------------------------------------
 F.TODAY = () => todaySerial();
 F.NOW = () => nowSerial();
@@ -1350,6 +1364,7 @@ export const FUNCTION_DOCS: Record<string, { syntax: string; desc: string }> = {
   XLOOKUP: { syntax: 'XLOOKUP(search_key, lookup_range, result_range, [missing_value])', desc: 'Exact-match lookup.' },
   MATCH: { syntax: 'MATCH(search_key, range, [search_type])', desc: 'Position of a value in a range.' },
   INDEX: { syntax: 'INDEX(reference, [row], [column])', desc: 'Cell at a row/column offset.' },
+  HYPERLINK: { syntax: 'HYPERLINK(url, [link_label])', desc: 'A link that opens url in a new tab.' },
   TODAY: { syntax: 'TODAY()', desc: "Today's date." },
   NOW: { syntax: 'NOW()', desc: 'Current date and time.' },
   DATE: { syntax: 'DATE(year, month, day)', desc: 'Build a date.' },
