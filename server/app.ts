@@ -2,14 +2,16 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
-import type { Workbook } from '../shared/types.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
+import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { AgentStore } from './agent/store.ts';
 import { AuthService, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
 import { openDb } from './db.ts';
+import { ImageStore } from './images.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 
@@ -29,6 +31,8 @@ export interface AppOptions {
   secureCookies?: boolean;
   logger?: boolean;
   agent?: AgentOptions;
+  /** Starts the worker for an app-change job. Tests pass a stub; the default runs server/agent/worker.ts. */
+  launchJob?: Launcher;
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -51,8 +55,14 @@ export async function buildApp(opts: AppOptions) {
   const auth = new AuthService(db);
   const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
+  const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
+  await images.init();
   auth.purgeExpiredSessions();
   const agent = new AgentService(new AgentStore(db), sheets, opts.agent);
+  const jobs = new JobStore(db);
+  const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
+  // A previous server process may have died (or been restarted by the job itself) with a job in flight.
+  jobRunner.reconcile();
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
@@ -60,6 +70,9 @@ export async function buildApp(opts: AppOptions) {
   app.addContentTypeParser([XLSX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
     done(null, body),
   );
+  // Raw cell image uploads. Images are stored as files and cells only reference them, so workbook saves
+  // (JSON, under the default body limit) stay small however large the images are.
+  app.addContentTypeParser(CELL_IMAGE_TYPES, { parseAs: 'buffer', bodyLimit: MAX_CELL_IMAGE_BYTES }, (_req, body, done) => done(null, body));
 
   app.decorateRequest('user', null);
   app.addHook('onRequest', async (req) => {
@@ -225,6 +238,30 @@ export async function buildApp(opts: AppOptions) {
     });
   });
 
+  // --- Cell images -------------------------------------------------------------
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    // Upload an image (the raw file as the body, with its image/* content type); returns its URL for a cell.
+    r.post('/api/images', async (req, reply) => {
+      const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+      const body = req.body;
+      if (!CELL_IMAGE_TYPES.includes(type) || !Buffer.isBuffer(body) || body.length === 0) {
+        return reply.code(400).send({ error: 'Upload a PNG, JPEG, GIF or WebP image as the request body.' });
+      }
+      return { url: await images.create(req.user!.id, type, body) };
+    });
+
+    r.get('/api/images/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const img = /^[0-9a-f-]{36}$/.test(id) ? images.get(req.user!.id, id) : null;
+      if (!img) return reply.code(404).send({ error: 'Image not found' });
+      // Images never change once uploaded.
+      reply.header('Content-Type', img.type).header('Cache-Control', 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff');
+      return reply.send(createReadStream(img.file));
+    });
+  });
+
   // --- Agent ---------------------------------------------------------------
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
@@ -270,7 +307,34 @@ export async function buildApp(opts: AppOptions) {
         }
       } finally {
         res.end();
+        // Jobs queued during the turn start only now: the worker's edits restart the dev server, which would
+        // cut off a reply still streaming.
+        jobRunner.startQueued();
       }
+    });
+
+    // --- App-change jobs (self-improvement) ---
+    r.post('/api/agent/jobs', async (req, reply) => {
+      const body = (req.body ?? {}) as { title?: unknown; spec?: unknown };
+      const title = typeof body.title === 'string' ? body.title.trim() : '';
+      const spec = typeof body.spec === 'string' ? body.spec.trim() : '';
+      if (!title || !spec) return reply.code(400).send({ error: 'A title and a spec are required.' });
+      const active = jobs.active();
+      if (active) return reply.code(409).send({ error: `A change is already in progress: "${active.title}". Wait for it to finish.` });
+      return { job: publicJob(jobs.create(req.user!.id, title.slice(0, 120), spec.slice(0, 8000))) };
+    });
+
+    r.get('/api/agent/jobs/latest', async (req) => {
+      const job = jobs.latest(req.user!.id);
+      return { job: job ? publicJob(job) : null };
+    });
+
+    r.post('/api/agent/jobs/:id/ack', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const job = jobs.get(id);
+      if (!job || job.userId !== req.user!.id) return reply.code(404).send({ error: 'Job not found' });
+      jobs.acknowledge(id, req.user!.id);
+      return { ok: true };
     });
   });
 

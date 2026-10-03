@@ -45,6 +45,7 @@ export function resolveRange(wb: Workbook, tabArg: string | undefined, rangeArg:
 export function displayValue(src: SheetSource, tab: Tab, r: number, c: number): string {
   const cell = tab.cells[cellKey(r, c)];
   if (!cell) return '';
+  if (cell.img && cell.v === '') return '[image]';
   const v = src.engine.getValue(tab.id, r, c);
   const implied = typeof v === 'number' ? src.engine.getImpliedFormat(tab.id, r, c) : undefined;
   return formatValue(v, cell.st, implied);

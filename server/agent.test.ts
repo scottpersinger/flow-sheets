@@ -37,10 +37,18 @@ const toolUse = (id: string, name: string, input: unknown): Block => ({ type: 't
 let dir: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
 let cookie: string;
+const launchedJobs: string[] = [];
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-agent-test-'));
-  app = await buildApp({ dataDir: dir, agent: { model: fakeModel } });
+  app = await buildApp({
+    dataDir: dir,
+    agent: { model: fakeModel },
+    launchJob: (job) => {
+      launchedJobs.push(job.id);
+      return process.pid;
+    },
+  });
   const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'agent@x.com', password: 'password123' } });
   cookie = String(res.headers['set-cookie']).split(';')[0];
 });
@@ -184,5 +192,31 @@ describe('agent', () => {
   it('validates the request before streaming', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home } });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('queues an app change and starts it after the turn ends', async () => {
+    replies.push(() => ({ content: [toolUse('t1', 'request_app_change', { title: 'Add set_filter_values', spec: 'Let the assistant set which values a filter column shows.' })] }));
+    const events = await turn({ message: 'add a tool to set filter criteria', context: home });
+    // request_app_change runs in the browser (so the user can confirm there); the server does not run it.
+    expect(events.find((e) => e.type === 'client_tools')).toMatchObject({ calls: [{ name: 'request_app_change' }] });
+    expect(launchedJobs).toEqual([]);
+
+    const created = await app.inject({ method: 'POST', url: '/api/agent/jobs', headers: { cookie }, payload: { title: 'Add set_filter_values', spec: 'Let the assistant set which values a filter column shows.' } });
+    expect(created.statusCode).toBe(200);
+    const { job } = created.json() as { job: { id: string; status: string; acknowledged: boolean } };
+    expect(job.status).toBe('queued');
+    const dup = await app.inject({ method: 'POST', url: '/api/agent/jobs', headers: { cookie }, payload: { title: 'Another', spec: 'Something else entirely.' } });
+    expect(dup.statusCode).toBe(409);
+    expect(launchedJobs).toEqual([]); // not started mid-turn
+
+    replies.push(() => ({ content: [text('Working on it.')] }));
+    await turn({ context: home, toolResults: [{ id: 't1', content: JSON.stringify({ job_id: job.id, status: 'queued' }) }] });
+    expect(launchedJobs).toEqual([job.id]);
+
+    const latest = await app.inject({ method: 'GET', url: '/api/agent/jobs/latest', headers: { cookie } });
+    expect(latest.json()).toMatchObject({ job: { id: job.id, status: 'starting', acknowledged: false } });
+    const ack = await app.inject({ method: 'POST', url: `/api/agent/jobs/${job.id}/ack`, headers: { cookie } });
+    expect(ack.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/agent/jobs/latest', headers: { cookie } })).json()).toMatchObject({ job: { acknowledged: true } });
   });
 });

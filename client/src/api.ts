@@ -1,5 +1,5 @@
-import type { AgentEvent, AgentTurnRequest, ChatItem } from '../../shared/agent/protocol.ts';
-import type { SheetMeta, Workbook } from '../../shared/types.ts';
+import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../shared/agent/protocol.ts';
+import { CELL_IMAGE_TOO_LARGE, type SheetMeta, type Workbook } from '../../shared/types.ts';
 
 export interface User {
   id: string;
@@ -43,7 +43,19 @@ async function uploadExcel<T>(url: string, file: File): Promise<T> {
   return data as T;
 }
 
+/** Store a cell image on the server; resolves to its URL. */
+async function uploadImage(file: Blob): Promise<string> {
+  const res = await fetch('/api/images', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': file.type }, body: file });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = res.status === 413 ? `${CELL_IMAGE_TOO_LARGE}.` : (data as { error?: string }).error;
+    throw new ApiError(res.status, msg ?? `Image upload failed (${res.status})`);
+  }
+  return (data as { url: string }).url;
+}
+
 export const api = {
+  uploadImage,
   me: () => request<{ user: User | null }>('GET', '/api/auth/me'),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
   register: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/register', { email, password }),
@@ -68,6 +80,9 @@ export const api = {
   agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
   agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),
   agentTurn: streamAgentTurn,
+  createJob: (title: string, spec: string) => request<{ job: AgentJob }>('POST', '/api/agent/jobs', { title, spec }),
+  latestJob: () => request<{ job: AgentJob | null }>('GET', '/api/agent/jobs/latest'),
+  acknowledgeJob: (id: string) => request<{ ok: true }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/ack`, {}),
 };
 
 /** Run or resume an agent turn, calling onEvent for each server-sent event until the stream ends. */
@@ -85,6 +100,9 @@ async function streamAgentTurn(body: AgentTurnRequest, signal: AbortSignal, onEv
   }
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = '';
+  // The server always ends a turn with done, client_tools or error; a stream that stops without one was cut
+  // off (for example by the server restarting).
+  let ended = false;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -94,8 +112,12 @@ async function streamAgentTurn(body: AgentTurnRequest, signal: AbortSignal, onEv
       const chunk = buf.slice(0, end);
       buf = buf.slice(end + 2);
       for (const line of chunk.split('\n')) {
-        if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)) as AgentEvent);
+        if (!line.startsWith('data: ')) continue;
+        const event = JSON.parse(line.slice(6)) as AgentEvent;
+        if (event.type === 'done' || event.type === 'client_tools' || event.type === 'error') ended = true;
+        onEvent(event);
       }
     }
   }
+  if (!ended) throw new ApiError(0, 'The connection to the server was interrupted. Send your message again.');
 }

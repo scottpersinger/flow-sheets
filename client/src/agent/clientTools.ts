@@ -4,7 +4,7 @@
 import { MAX_COLS, colToName, nameToCol, rangeToString, type Range } from '../../../shared/cellref.ts';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '../../../shared/agent/sheetRead.ts';
-import type { CellStyle, Tab } from '../../../shared/types.ts';
+import { checkCellImage, hasContent, isDataImage, type CellStyle, type Tab } from '../../../shared/types.ts';
 import { CellError } from '../../../shared/values.ts';
 import type { SheetController } from '../state/controller.ts';
 import * as ops from '../state/ops.ts';
@@ -17,6 +17,10 @@ export interface ClientToolEnv {
   group: string;
   /** Navigate to a spreadsheet and resolve once it has loaded. */
   openSheet(id: string): Promise<SheetController>;
+  /** Queue a change to the app's own code; resolves with the job id. */
+  requestAppChange(title: string, spec: string): Promise<{ id: string }>;
+  /** Store an image file on the server; resolves to its URL for a cell. */
+  uploadImage(file: Blob): Promise<string>;
 }
 
 export class ToolError extends Error {}
@@ -71,13 +75,16 @@ function errorsIn(ctl: SheetController, tab: Tab, rg: Range, limit = 20): { cell
 }
 
 function nonEmptyCount(tab: Tab, rg: Range): number {
-  return ops.existingKeysIn(tab, rg).filter(({ key }) => tab.cells[key].v !== '').length;
+  return ops.existingKeysIn(tab, rg).filter(({ key }) => hasContent(tab.cells[key])).length;
 }
 
 /** A question to ask the user before running a destructive call, or null if it can run straight away. */
 export function confirmationFor(call: ClientToolCall, ctl: SheetController | null): string | null {
-  if (!ctl) return null;
   const i = call.input;
+  if (call.name === 'request_app_change') {
+    return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.`;
+  }
+  if (!ctl) return null;
   try {
     switch (call.name) {
       case 'delete_tab':
@@ -107,6 +114,14 @@ export function confirmationFor(call: ClientToolCall, ctl: SheetController | nul
 /** Run a client tool. Returns the result for Claude; throws ToolError for errors Claude should see. */
 export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): Promise<string> {
   const i = call.input;
+  if (call.name === 'request_app_change') {
+    const { id } = await env.requestAppChange(String(i.title), String(i.spec));
+    return JSON.stringify({
+      job_id: id,
+      status: 'queued',
+      note: 'The change starts after this reply ends. Tell the user it is in progress and stop; you will get a message when it is live.',
+    });
+  }
   if (call.name === 'open_sheet') {
     const ctl = await env.openSheet(String(i.sheet_id));
     return JSON.stringify({ opened: true, ...sheetOverview(source(ctl), { activeTabId: ctl.tab.id, selection: ctl.sel.ranges.map(rangeToString) }) });
@@ -236,6 +251,22 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       return JSON.stringify({ sorted: `${tab.name}!${rangeToString(rg)}`, by_column: String(i.by_column).toUpperCase(), ascending: i.ascending !== false });
     }
 
+    case 'set_cell_image': {
+      const { tab, range } = rangeOf(ctl, str(i.tab), String(i.range));
+      let url = String(i.url ?? '').trim();
+      const problem = checkCellImage(url);
+      if (problem) throw new ToolError(`${problem}.`);
+      const n = (range.r2 - range.r1 + 1) * (range.c2 - range.c1 + 1);
+      if (n > 100) throw new ToolError(`${rangeToString(range)} has ${n} cells; put an image in at most 100 cells at once.`);
+      // Store inline images on the server like uploads, so the workbook only holds a short reference.
+      if (isDataImage(url)) url = await env.uploadImage(await (await fetch(url)).blob());
+      run((tx) => {
+        for (let r = range.r1; r <= range.r2; r++) for (let c = range.c1; c <= range.c2; c++) ops.setImage(tx, tab.id, r, c, url);
+      });
+      show(ctl, tab.id);
+      return JSON.stringify({ image_in: `${tab.name}!${rangeToString(range)}` });
+    }
+
     case 'set_filter': {
       if (typeof i.range !== 'string') {
         const tab = tabOf(ctl, str(i.tab));
@@ -251,6 +282,35 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       return JSON.stringify({ filter: `${tab.name}!${rangeToString(filter)}` });
     }
 
+    case 'set_filter_criteria': {
+      const tab = tabOf(ctl, str(i.tab));
+      const f = tab.filter;
+      if (!f) throw new ToolError(`“${tab.name}” has no filter. Use set_filter to add one first.`);
+      const letter = String(i.column).toUpperCase();
+      const col = columnOf(letter);
+      if (col < f.c1 || col > f.c2) throw new ToolError(`Column ${letter} is not inside the filter range ${rangeToString(f)}.`);
+      const cols = { ...f.cols };
+      if (i.clear) delete cols[col];
+      else {
+        if (!Array.isArray(i.values)) throw new ToolError('Pass values (or clear: true).');
+        // Like unchecking values in the header dropdown: hide every display value not in the list.
+        const keep = new Set((i.values as string[]).map((v) => v.toLowerCase()));
+        const hidden = new Set<string>();
+        for (let r = f.r1 + 1; r <= f.r2; r++) {
+          const d = ctl.store.display(tab.id, r, col);
+          if (!keep.has(d.toLowerCase())) hidden.add(d);
+        }
+        const cond = cols[col]?.cond;
+        if (hidden.size || (cond && cond.type !== 'none')) cols[col] = { hidden: hidden.size ? [...hidden] : undefined, cond };
+        else delete cols[col];
+      }
+      run((tx) => tx.setTabProp(tab.id, 'filter', { ...f, cols }));
+      show(ctl, tab.id);
+      const updated = ctl.store.workbook.tabs.find((t) => t.id === tab.id)!;
+      const visible = f.r2 - f.r1 - ops.computeHiddenRows(ctl.store as WorkbookStore<unknown>, updated).size;
+      return JSON.stringify({ filter: `${tab.name}!${rangeToString(f)}`, column: letter, visible_rows: visible });
+    }
+
     case 'set_column_width': {
       const tab = tabOf(ctl, str(i.tab));
       const m = /^([A-Za-z]{1,3})(?::([A-Za-z]{1,3}))?$/.exec(String(i.columns).trim());
@@ -263,6 +323,23 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       });
       show(ctl, tab.id);
       return JSON.stringify({ columns: String(i.columns).toUpperCase(), width: i.width });
+    }
+
+    case 'set_row_height': {
+      const tab = tabOf(ctl, str(i.tab));
+      const m = /^(\d+)(?::(\d+))?$/.exec(String(i.rows).trim());
+      if (!m) throw new ToolError(`"${i.rows}" is not a row or row span, such as 1 or 1:3.`);
+      const [a, b] = [Number(m[1]) - 1, Number(m[2] ?? m[1]) - 1].sort((x, y) => x - y);
+      if (a < 0) throw new ToolError('Rows are numbered from 1.');
+      if (a >= tab.rows) throw new ToolError(`The tab only has ${tab.rows} rows.`);
+      const to = Math.min(b, tab.rows - 1);
+      run((tx) => {
+        const next = { ...tab.rowHeights };
+        for (let r = a; r <= to; r++) next[r] = Number(i.height);
+        tx.setTabProp(tab.id, 'rowHeights', next);
+      });
+      show(ctl, tab.id);
+      return JSON.stringify({ tab: tab.name, rows: a === to ? `${a + 1}` : `${a + 1}:${to + 1}`, height: i.height });
     }
 
     case 'freeze': {

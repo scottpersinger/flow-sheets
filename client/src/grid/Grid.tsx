@@ -38,6 +38,7 @@ import {
   fillHandleRect,
   filterButtonRect,
   measure,
+  onCellImageLoad,
   rangeRect,
   FONT_FAMILY,
   FONT_SIZE,
@@ -45,6 +46,8 @@ import {
   type CompareOverlay,
 } from './render.ts';
 import type { CellDiff } from '../../../shared/diff.ts';
+import { hasContent } from '../../../shared/types.ts';
+import { clipboardImage, uploadImageFile } from '../cellImage.ts';
 
 type Hit =
   | { area: 'corner' }
@@ -63,8 +66,11 @@ type Drag =
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
-export function Grid({ ctl }: { ctl: SheetController }) {
+export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: string) => void }) {
   useController(ctl);
+  // Redraw when a cell image finishes loading.
+  const [, setImagesLoaded] = useState(0);
+  useEffect(() => onCellImageLoad(() => setImagesLoaded((n) => n + 1)), []);
   const tab = ctl.tab;
   const sel = ctl.sel;
   const edit = ctl.edit;
@@ -544,7 +550,7 @@ export function Grid({ ctl }: { ctl: SheetController }) {
   const fillToAdjacent = () => {
     const p = ctl.primary;
     const t = ctl.tab;
-    const has = (r: number, c: number) => c >= 0 && c < t.cols && !!t.cells[cellKey(r, c)]?.v;
+    const has = (r: number, c: number) => c >= 0 && c < t.cols && hasContent(t.cells[cellKey(r, c)]);
     const adj = has(p.r2 + 1, p.c1 - 1) ? p.c1 - 1 : has(p.r2 + 1, p.c2 + 1) ? p.c2 + 1 : -1;
     if (adj < 0) return;
     let last = p.r2;
@@ -816,7 +822,21 @@ export function Grid({ ctl }: { ctl: SheetController }) {
     const text = e.clipboardData.getData('text/plain');
     const valuesOnly = pasteValuesOnly.current;
     pasteValuesOnly.current = false;
-    if (text) ctl.paste(text, valuesOnly);
+    if (text) return ctl.paste(text, valuesOnly);
+    // No text: paste an image (e.g. a screenshot) into the active cell.
+    const file = clipboardImage(e.clipboardData);
+    if (!file) {
+      // Cells copied here that have no text (e.g. only images) put an empty string on the clipboard.
+      if (ctl.internalClipboardText() === '') ctl.paste('', valuesOnly);
+      return;
+    }
+    const at = { tabId: ctl.tab.id, ...ctl.sel.active };
+    uploadImageFile(file)
+      .then((src) => {
+        const problem = ctl.insertImage(src, at);
+        if (problem) notify?.(problem);
+      })
+      .catch((err: Error) => notify?.(err.message));
   };
 
   // Editor geometry

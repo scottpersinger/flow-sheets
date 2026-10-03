@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ChatItem } from '../../../shared/agent/protocol.ts';
+import { JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
 import { useAgent } from './AgentProvider.tsx';
 import { targetOf } from './clientTools.ts';
@@ -33,7 +33,7 @@ export function AgentPanel() {
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [agent.items, agent.confirm, agent.error, agent.running]);
+  }, [agent.items, agent.confirm, agent.error, agent.running, agent.job]);
 
   // Grow the input with its text, up to a limit.
   useLayoutEffect(() => {
@@ -89,6 +89,7 @@ export function AgentPanel() {
             <ToolRow key={it.id} item={it} />
           ),
         )}
+        {agent.job && (JOB_ACTIVE_STATUSES.has(agent.job.status) || !agent.job.acknowledged) && <JobCard job={agent.job} onDismiss={agent.dismissJob} />}
         {agent.confirm && (
           <div className="agent-confirm" role="alertdialog">
             <div>{agent.confirm.question}</div>
@@ -170,6 +171,50 @@ function ToolRow({ item }: { item: ToolItem }) {
         <span className="agent-tool-label">{label}</span>
       )}
       {item.status === 'error' && <span className="agent-tool-error">{failureLabel(item.error)}</span>}
+    </div>
+  );
+}
+
+const JOB_STATUS: Record<AgentJob['status'], string> = {
+  queued: 'Waiting to start',
+  starting: 'Starting the coding agent',
+  coding: 'Changing the code',
+  verifying: 'Running the checks',
+  done: 'Live. Reloading…',
+  failed: 'Failed',
+};
+
+/** Progress of a change to the app's own code. */
+function JobCard({ job, onDismiss }: { job: AgentJob; onDismiss(): void }) {
+  const active = JOB_ACTIVE_STATUSES.has(job.status);
+  const recent = job.log.slice(-3);
+  return (
+    <div className={`agent-job ${job.status}`} aria-live="polite">
+      <div className="agent-job-head">
+        <span className="agent-tool-icon" aria-hidden="true">
+          {active || job.status === 'done' ? <span className="agent-spinner" /> : '!'}
+        </span>
+        <span className="agent-job-title">Changing the app: {job.title}</span>
+      </div>
+      <div className="agent-job-status">{JOB_STATUS[job.status]}</div>
+      {active && recent.length > 0 && (
+        <ul className="agent-job-log">
+          {recent.map((line, i) => (
+            <li key={`${job.log.length - recent.length + i}`}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {job.status === 'failed' && (
+        <>
+          <pre className="agent-job-error">{job.error}</pre>
+          {job.files && job.files.length > 0 && <div className="agent-job-files">Files left changed: {job.files.join(', ')}</div>}
+          <div className="agent-confirm-actions">
+            <button className="btn" onClick={onDismiss}>
+              Dismiss
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

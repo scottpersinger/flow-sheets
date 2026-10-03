@@ -14,6 +14,12 @@ npm run build && npm start   # production: serves dist/client and the API on :30
 
 Requires Node 22.18+. The server runs TypeScript directly through Node's built-in type stripping and uses the built-in `node:sqlite`.
 
+## Self-improvement (local development)
+
+When the assistant can't do something, it offers to add the capability to the app. If the user agrees, it calls `request_app_change` with a spec, the user confirms in the panel, and after the reply ends the server starts a detached worker (`server/agent/worker.ts`) that runs Claude Code in the repository through the Claude Agent SDK. Claude Code reads `CLAUDE.md` (which explains how to add an assistant tool), makes the change, and runs typecheck and tests; the worker verifies both again. The dev server restarts and Vite hot-reloads as files change; when the job is done the browser reloads and sends the assistant a message with the summary, and it finishes the original request with its new tool. The code is left uncommitted in the working tree for review (`git diff`).
+
+Jobs are stored in the `agent_jobs` table; one runs at a time. Their full Claude Code output is in `data/jobs/<id>.log`. The worker uses `ANTHROPIC_API_KEY`. This only works where the repository, `git` and `node` are available (local development); the production container is built from the repository, so there it is a no-op until a hosted coding path exists.
+
 Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments. The assistant needs `ANTHROPIC_API_KEY`. For local development, copy `.env.example` to `.env` (git-ignored) and fill it in; the server loads it on start (`server/env.ts`), so restart it after editing. You can also set `AGENT_EFFORT` (`low`, `medium` (default) or `high`) and `AGENT_DAILY_REQUEST_LIMIT` (model calls per user per day, default 500).
 
 ## Layout

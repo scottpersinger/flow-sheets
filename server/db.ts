@@ -33,6 +33,15 @@ export function openDb(file: string): DB {
     );
     CREATE INDEX IF NOT EXISTS sheets_owner ON sheets(owner_id, updated_at);
 
+    -- Cell images uploaded or pasted by a user; the bytes are stored as files (see server/images.ts).
+    CREATE TABLE IF NOT EXISTS images (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     -- Agent chat. Each user has one active conversation (ended_at IS NULL); resetting ends it and starts a new one.
     CREATE TABLE IF NOT EXISTS agent_conversations (
       id TEXT PRIMARY KEY,
@@ -53,6 +62,30 @@ export function openDb(file: string): DB {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS agent_messages_conv ON agent_messages(conversation_id, id);
+
+    -- Changes to the app's own code requested through the assistant, run by server/agent/worker.ts.
+    CREATE TABLE IF NOT EXISTS agent_jobs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      spec TEXT NOT NULL,
+      -- queued | starting | coding | verifying | done | failed
+      status TEXT NOT NULL,
+      pid INTEGER,
+      -- JSON array of progress lines
+      log TEXT NOT NULL DEFAULT '[]',
+      summary TEXT,
+      error TEXT,
+      -- JSON array of changed file paths
+      files TEXT,
+      cost_usd REAL,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      -- Set once the browser has shown the outcome to the user (and told the assistant).
+      acknowledged_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS agent_jobs_user ON agent_jobs(user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS agent_usage (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

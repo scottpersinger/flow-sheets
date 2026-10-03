@@ -44,9 +44,9 @@ export class Tx {
   setCell(tabId: string, key: string, cell: CellData | undefined): void {
     const tab = this.tab(tabId);
     const before = tab.cells[key];
-    if (cell && cell.v === '' && (!cell.st || Object.keys(cell.st).length === 0)) cell = undefined;
+    if (cell && cell.v === '' && !cell.img && (!cell.st || Object.keys(cell.st).length === 0)) cell = undefined;
     if (before === cell) return;
-    if (before && cell && before.v === cell.v && JSON.stringify(before.st) === JSON.stringify(cell.st)) return;
+    if (before && cell && before.v === cell.v && before.img === cell.img && JSON.stringify(before.st) === JSON.stringify(cell.st)) return;
     applyCell(tab, key, cell);
     this.patches.push({ k: 'cell', tabId, key, before, after: cell });
     this.changedCells.push({ tabId, key });

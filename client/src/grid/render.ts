@@ -1,5 +1,5 @@
 import { cellKey, colToName, type Range } from '../../../shared/cellref.ts';
-import type { FilterState, Tab } from '../../../shared/types.ts';
+import { hasContent, type FilterState, type Tab } from '../../../shared/types.ts';
 import { CellError, type Scalar } from '../../../shared/values.ts';
 import type { EditState, Selection } from '../state/controller.ts';
 import type { FormulaRef } from '../state/formulaEdit.ts';
@@ -220,6 +220,7 @@ function drawCells(ctx: CanvasRenderingContext2D, s: RenderState, reg: Region): 
     const y = rowY(l, vp, r);
     for (let c = c1; c <= c2; c++) {
       const cell = tab.cells[cellKey(r, c)];
+      if (cell?.img) drawCellImage(ctx, cell.img, colX(l, vp, c), y, l.cols.size(c), h);
       if (!cell || cell.v === '') continue;
       if (editing && editing.r === r && editing.c === c) continue;
       const v = store.value(tab.id, r, c);
@@ -238,6 +239,72 @@ function drawCells(ctx: CanvasRenderingContext2D, s: RenderState, reg: Region): 
       drawCellText(ctx, s, r, c, x, y, w, h, text, v, reg, filter);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cell images: decoded once per source and drawn scaled to fit inside the cell.
+
+/** Large images are kept downscaled to this size (longest side), so redraws don't rescale huge bitmaps. */
+const MAX_DRAWN_IMAGE_PX = 2048;
+
+interface CachedImage {
+  /** What to draw once loaded: the decoded image, or a downscaled copy of a large one. */
+  drawable: CanvasImageSource | null;
+  w: number;
+  h: number;
+}
+
+const imageCache = new Map<string, CachedImage>();
+const imageListeners = new Set<() => void>();
+
+/** Called whenever a cell image finishes loading, so the grid can redraw. */
+export function onCellImageLoad(fn: () => void): () => void {
+  imageListeners.add(fn);
+  return () => imageListeners.delete(fn);
+}
+
+function cellImage(src: string): CachedImage {
+  let entry = imageCache.get(src);
+  if (!entry) {
+    if (imageCache.size > 500) imageCache.clear();
+    const e: CachedImage = { drawable: null, w: 0, h: 0 };
+    entry = e;
+    const img = new Image();
+    img.decoding = 'async';
+    const ready = (d: CanvasImageSource) => {
+      Object.assign(e, { drawable: d, w: img.naturalWidth, h: img.naturalHeight });
+      imageListeners.forEach((l) => l());
+    };
+    img.onload = () => {
+      const scale = MAX_DRAWN_IMAGE_PX / Math.max(img.naturalWidth, img.naturalHeight);
+      if (scale >= 1 || typeof createImageBitmap !== 'function') return ready(img);
+      const resizeWidth = Math.max(1, Math.round(img.naturalWidth * scale));
+      const resizeHeight = Math.max(1, Math.round(img.naturalHeight * scale));
+      createImageBitmap(img, { resizeWidth, resizeHeight, resizeQuality: 'high' }).then(ready, () => ready(img));
+    };
+    img.src = src;
+    imageCache.set(src, e);
+  }
+  return entry;
+}
+
+/** Largest rect with the image's aspect ratio that fits inside the box (minus padding), centered. */
+export function fitImage(iw: number, ih: number, x: number, y: number, w: number, h: number, pad = 2): Rect {
+  const bw = Math.max(0, w - 1 - pad * 2);
+  const bh = Math.max(0, h - 1 - pad * 2);
+  if (!iw || !ih || !bw || !bh) return { x, y, w: 0, h: 0 };
+  const scale = Math.min(bw / iw, bh / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  return { x: x + pad + (bw - dw) / 2, y: y + pad + (bh - dh) / 2, w: dw, h: dh };
+}
+
+function drawCellImage(ctx: CanvasRenderingContext2D, src: string, x: number, y: number, w: number, h: number): void {
+  const img = cellImage(src);
+  if (!img.drawable) return;
+  const fit = fitImage(img.w, img.h, x, y, w, h);
+  if (!fit.w || !fit.h) return;
+  ctx.drawImage(img.drawable, fit.x, fit.y, fit.w, fit.h);
 }
 
 function drawCellText(
@@ -268,7 +335,7 @@ function drawCellText(
   if (align === 'left' && typeof v === 'string' && tw + pad * 2 > w && !reserve) {
     let cc = c + 1;
     let edge = x + w;
-    while (cc <= reg.cols[1] && edge < x + tw + pad * 2 && !tab.cells[cellKey(r, cc)]?.v) {
+    while (cc <= reg.cols[1] && edge < x + tw + pad * 2 && !hasContent(tab.cells[cellKey(r, cc)])) {
       const nx = colX(l, vp, cc);
       const nw = l.cols.size(cc);
       // Hide the gridlines the text passes over.

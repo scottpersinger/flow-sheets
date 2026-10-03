@@ -40,10 +40,18 @@ export function toolLabel(name: string, i: Input): string {
       return `Deleted ${i.from_column === i.to_column ? 'column' : 'columns'} ${span(String(i.from_column).toUpperCase(), String(i.to_column).toUpperCase())}`;
     case 'sort_range':
       return `Sorted ${where(i)} by column ${String(i.by_column).toUpperCase()}`;
+    case 'set_cell_image':
+      return `Added an image to ${where(i)}`;
     case 'set_filter':
       return typeof i.range === 'string' ? `Added a filter to ${where(i)}` : 'Removed the filter';
+    case 'set_filter_criteria':
+      return i.clear
+        ? `Cleared the filter on column ${String(i.column).toUpperCase()}`
+        : `Filtered column ${String(i.column).toUpperCase()} to ${Array.isArray(i.values) ? i.values.map((v) => `“${v}”`).join(', ') : 'chosen values'}`;
     case 'set_column_width':
       return `Resized column ${String(i.columns).toUpperCase()}`;
+    case 'set_row_height':
+      return `Resized ${String(i.rows).includes(':') ? 'rows' : 'row'} ${String(i.rows).trim()} to ${i.height}px`;
     case 'freeze':
       return 'Changed frozen rows and columns';
     case 'add_tab':
@@ -56,6 +64,8 @@ export function toolLabel(name: string, i: Input): string {
       return `Selected ${where(i)}`;
     case 'open_sheet':
       return 'Opened a spreadsheet';
+    case 'request_app_change':
+      return `Requested an app change: ${String(i.title ?? '')}`;
     case 'list_sheets':
       return typeof i.query === 'string' && i.query ? `Searched your spreadsheets for “${i.query}”` : 'Listed your spreadsheets';
     case 'read_other_sheet':

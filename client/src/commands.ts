@@ -1,6 +1,7 @@
 // Menu definitions shared by the menu bar and context menus.
 import { colToName } from '../../shared/cellref.ts';
 import type { NumberFormat } from '../../shared/types.ts';
+import { pickImageFile, uploadImageFile } from './cellImage.ts';
 import type { MenuItem } from './components/Menu.tsx';
 import type { SheetController } from './state/controller.ts';
 
@@ -87,8 +88,25 @@ export function insertItems(host: CommandHost): MenuItem[] {
     { label: `Insert ${plural(s.nCols, 'column')} left`, action: () => ctl.insertCols('left') },
     { label: `Insert ${plural(s.nCols, 'column')} right`, action: () => ctl.insertCols('right') },
     'sep',
+    { label: 'Upload image in cell…', action: () => void uploadImage(host) },
+    'sep',
     { label: 'New sheet tab', shortcut: `${SHIFT}F11`, action: () => ctl.addTab() },
   ];
+}
+
+/** Pick an image file and place it in the active cell. */
+export async function uploadImage(host: CommandHost): Promise<void> {
+  const { ctl } = host;
+  const at = { tabId: ctl.tab.id, ...ctl.sel.active };
+  const file = await pickImageFile();
+  if (!file) return;
+  try {
+    const src = await uploadImageFile(file);
+    const problem = ctl.insertImage(src, at);
+    if (problem) host.notify(problem);
+  } catch (e) {
+    host.notify(e instanceof Error ? e.message : String(e));
+  }
 }
 
 const FORMATS: { fmt: NumberFormat; label: string; example: string }[] = [
@@ -257,6 +275,7 @@ export function cellContextItems(host: CommandHost, kind: 'cell' | 'row' | 'col'
     delRow,
     delCol,
     { label: 'Delete values', action: () => ctl.clearSelection() },
+    { label: 'Upload image in cell…', action: () => void uploadImage(host) },
     'sep',
     { label: 'Sort range A → Z', action: () => ctl.sortSelection(true) },
     { label: 'Sort range Z → A', action: () => ctl.sortSelection(false) },

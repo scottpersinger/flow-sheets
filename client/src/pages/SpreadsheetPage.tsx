@@ -367,7 +367,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       <FormulaBar ctl={ctl} />
       <div className="grid-area">
         <div className="grid-main">
-          <Grid ctl={ctl} />
+          <Grid ctl={ctl} notify={notify} />
           {ctl.search && <FindBar ctl={ctl} />}
         </div>
         {ctl.compare && <ComparePanel ctl={ctl} />}

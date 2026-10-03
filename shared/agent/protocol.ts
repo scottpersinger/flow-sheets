@@ -59,6 +59,30 @@ export type ChatItem =
       error?: string;
     };
 
+export type AgentJobStatus = 'queued' | 'starting' | 'coding' | 'verifying' | 'done' | 'failed';
+
+/** A change to the app's own code requested through the assistant, as shown in the panel. */
+export interface AgentJob {
+  id: string;
+  title: string;
+  status: AgentJobStatus;
+  /** Progress lines, oldest first. */
+  log: string[];
+  /** What changed, written by the coding agent (when done). */
+  summary?: string;
+  error?: string;
+  /** Files changed in the working tree. */
+  files?: string[];
+  costUsd?: number;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** The browser has shown the outcome and told the assistant. */
+  acknowledged: boolean;
+}
+
+export const JOB_ACTIVE_STATUSES: ReadonlySet<AgentJobStatus> = new Set(['queued', 'starting', 'coding', 'verifying']);
+
 /** Tools the browser executes; every other tool runs on the server. */
 export const CLIENT_TOOLS = new Set([
   'get_sheet_overview',
@@ -71,12 +95,17 @@ export const CLIENT_TOOLS = new Set([
   'insert_columns',
   'delete_columns',
   'sort_range',
+  'set_cell_image',
   'set_filter',
+  'set_filter_criteria',
   'set_column_width',
+  'set_row_height',
   'freeze',
   'add_tab',
   'rename_tab',
   'delete_tab',
   'select_range',
   'open_sheet',
+  // Runs in the browser so the user can confirm it there; the server then queues the job.
+  'request_app_change',
 ]);

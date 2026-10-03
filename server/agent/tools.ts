@@ -73,12 +73,41 @@ const schemas = {
       has_header: z.boolean().optional().describe('Keep the first row of the range in place. Defaults to false.'),
     })
     .describe('Sort the rows of a range by one column.'),
+  set_cell_image: z
+    .object({
+      tab,
+      range: range.describe('Cell to put the image in, e.g. "I9". A range puts the image in every cell of it (100 cells at most).'),
+      url: z.string().describe('Image address: an http(s) URL of a PNG, JPEG, GIF or WebP image, or a data:image/...;base64 URL.'),
+    })
+    .describe(
+      'Show an image inside a cell, scaled to fit the cell. Replaces the cell\'s value; keeps its formatting. read_range reports such cells as "[image]". Remove an image with clear_range. Make the row taller / column wider (set_row_height, set_column_width) if the image should appear larger.',
+    ),
   set_filter: z
     .object({ tab, range: range.optional().describe('Range to put a filter on, header row first. Omit to remove the filter.') })
     .describe('Turn on a filter (with header dropdowns) for a range, or remove the tab\'s filter.'),
+  set_filter_criteria: z
+    .object({
+      tab,
+      column: column.describe('Filter column; must be inside the filter range.'),
+      values: z
+        .array(z.string())
+        .optional()
+        .describe('Only rows whose displayed value in this column matches one of these (case-insensitive) stay visible. Use "" for blank cells. Required unless clear is true.'),
+      clear: z.boolean().optional().describe('Remove the criteria for this column so it no longer hides rows.'),
+    })
+    .describe(
+      "Choose which values a column of the tab's filter shows, like picking values in the header dropdown. Criteria on different columns combine with AND. The tab must already have a filter (use set_filter first). Returns the number of visible data rows.",
+    ),
   set_column_width: z
     .object({ tab, columns: z.string().describe('Column or columns, e.g. "B" or "B:D".'), width: z.number().int().min(20).max(2000).describe('Width in pixels; the default is 100.') })
     .describe('Set column widths.'),
+  set_row_height: z
+    .object({
+      tab,
+      rows: z.string().describe('Row or row span (1-based), e.g. "1" or "1:3".'),
+      height: z.number().int().min(10).max(1000).describe('Height in pixels; the default is 21.'),
+    })
+    .describe('Set row heights.'),
   freeze: z
     .object({ tab, rows: z.number().int().min(0).max(100).optional(), columns: z.number().int().min(0).max(50).optional() })
     .describe('Freeze the top rows and/or left columns. 0 unfreezes.'),
@@ -89,6 +118,20 @@ const schemas = {
   open_sheet: z
     .object({ sheet_id: z.string() })
     .describe('Open another spreadsheet in the app (the user navigates to it). Returns its overview. Sheet tools then act on it.'),
+  request_app_change: z
+    .object({
+      title: z.string().min(3).max(120).describe('Short name for the change, e.g. "Add a tool to set filter criteria".'),
+      spec: z
+        .string()
+        .min(20)
+        .max(8000)
+        .describe(
+          'What to build, for a developer who knows the codebase but not this conversation: what the user asked for, what is missing today, and the tool you propose (name, inputs with types, exact behavior, what it should return). Include a concrete example from the current spreadsheet.',
+        ),
+    })
+    .describe(
+      "Ask for a change to the app's own code when the user wants something the app or your tools cannot do (after they agree). A coding agent edits the source, runs the checks and the app restarts with the change; this takes a few minutes. The user confirms first. You are told when it is live.",
+    ),
 
   // --- Account (run on the server) ---
   list_sheets: z

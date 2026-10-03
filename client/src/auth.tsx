@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, type User } from './api.ts';
+import { api, ApiError, type User } from './api.ts';
 
 interface AuthState {
   user: User | null;
@@ -16,11 +16,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api
-      .me()
-      .then((r) => setUser(r.user))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    // Only a rejected session means signed out. A network failure usually means the dev server is restarting
+    // (for example after an assistant app change), so retry instead of bouncing the user to the login page.
+    void (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const r = await api.me();
+          if (!cancelled) setUser(r.user);
+          break;
+        } catch (e) {
+          if (cancelled) return;
+          if (e instanceof ApiError || attempt >= 10) {
+            setUser(null);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

@@ -1538,6 +1538,52 @@ button.agent-tool-label:hover {
   justify-content: flex-end;
   gap: 8px;
 }
+.agent-job {
+  border: 1px solid #c2d7fb;
+  background: #f3f7fd;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.agent-job.failed {
+  border-color: #f4c7c3;
+  background: #fef7f6;
+}
+.agent-job-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-job-title {
+  font-weight: 600;
+}
+.agent-job-status {
+  color: var(--muted);
+}
+.agent-job-log {
+  margin: 0;
+  padding: 0 0 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.agent-job-error {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--danger);
+}
+.agent-job-files {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .agent-working {
   display: flex;
   gap: 4px;

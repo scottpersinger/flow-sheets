@@ -82,6 +82,17 @@ describe('sheets', () => {
     res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
     expect(res.json().workbook.tabs[0].cells.A1.v).toBe('=1+1');
 
+    // Cell images are saved with the sheet; invalid ones are rejected.
+    const png = 'data:image/png;base64,iVBORw0KGgo=';
+    workbook.tabs[0].cells.I9 = { v: '', img: png };
+    res = await app.inject({ method: 'PUT', url: `/api/sheets/${sheet.id}`, headers: { cookie }, payload: { workbook } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
+    expect(res.json().workbook.tabs[0].cells.I9).toEqual({ v: '', img: png });
+    workbook.tabs[0].cells.I9 = { v: '', img: 'javascript:alert(1)' };
+    res = await app.inject({ method: 'PUT', url: `/api/sheets/${sheet.id}`, headers: { cookie }, payload: { workbook } });
+    expect(res.statusCode).toBe(400);
+
     res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie: other } });
     expect(res.statusCode).toBe(404);
     res = await app.inject({ method: 'DELETE', url: `/api/sheets/${sheet.id}`, headers: { cookie: other } });
@@ -98,6 +109,47 @@ describe('sheets', () => {
     expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${sheet.id}.json`);
     res = await app.inject({ method: 'GET', url: '/api/sheets', headers: { cookie } });
     expect(res.json().sheets).toEqual([]);
+  });
+});
+
+describe('cell images', () => {
+  it('stores large images as files referenced from cells, readable only by their owner', async () => {
+    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'img@x.com', password: 'password123' } });
+    const cookie = cookieFrom(res);
+    res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'img2@x.com', password: 'password123' } });
+    const other = cookieFrom(res);
+
+    // A 50 MB PNG.
+    const big = Buffer.alloc(50 * 1024 * 1024, 7);
+    res = await app.inject({ method: 'POST', url: '/api/images', headers: { cookie, 'content-type': 'image/png' }, payload: big });
+    expect(res.statusCode).toBe(200);
+    const { url } = res.json();
+    expect(url).toMatch(/^\/api\/images\/[0-9a-f-]{36}$/);
+
+    res = await app.inject({ method: 'GET', url, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.rawPayload.equals(big)).toBe(true);
+    res = await app.inject({ method: 'GET', url, headers: { cookie: other } });
+    expect(res.statusCode).toBe(404);
+
+    // The cell holds only the reference, and is saved with the sheet.
+    res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Team Budget' } });
+    const { sheet } = res.json();
+    const workbook = (await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } })).json().workbook;
+    workbook.tabs[0].cells.A15 = { v: '', img: url };
+    res = await app.inject({ method: 'PUT', url: `/api/sheets/${sheet.id}`, headers: { cookie }, payload: { workbook } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
+    expect(res.json().workbook.tabs[0].cells.A15).toEqual({ v: '', img: url });
+
+    // Over 100 MB, other types and signed-out uploads are refused.
+    res = await app.inject({ method: 'POST', url: '/api/images', headers: { cookie, 'content-type': 'image/png' }, payload: Buffer.alloc(100 * 1024 * 1024 + 1) });
+    expect(res.statusCode).toBe(413);
+    res = await app.inject({ method: 'POST', url: '/api/images', headers: { cookie, 'content-type': 'image/svg+xml' }, payload: '<svg/>' });
+    expect(res.statusCode).toBe(415);
+    res = await app.inject({ method: 'POST', url: '/api/images', headers: { 'content-type': 'image/png' }, payload: Buffer.from('x') });
+    expect(res.statusCode).toBe(401);
   });
 });
 

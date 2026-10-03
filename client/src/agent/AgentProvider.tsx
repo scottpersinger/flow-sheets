@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import type { AgentContext, AgentTurnRequest, ChatItem, ClientToolCall, ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { JOB_ACTIVE_STATUSES, type AgentContext, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
@@ -35,12 +35,22 @@ interface AgentState {
   sheetFailed(id: string, message: string): void;
   /** The open spreadsheet, or null on other pages. */
   sheet: OpenSheet | null;
+  /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
+  job: AgentJob | null;
+  /** Hide a finished job's card. */
+  dismissJob(): void;
 }
 
 const AgentCtx = createContext<AgentState | null>(null);
 
 const OPEN_KEY = 'agent-panel-open';
 const OPEN_TIMEOUT_MS = 20_000;
+const JOB_POLL_MS = 2000;
+
+/** The message that resumes the conversation once an app change is live. */
+function jobLiveMessage(job: AgentJob): string {
+  return `The app change "${job.title}" is live. The coding agent says: ${job.summary ?? 'The change was made.'}\n\nContinue with what I asked for before.`;
+}
 
 function readOpen(): boolean {
   try {
@@ -62,6 +72,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [sheet, setSheet] = useState<OpenSheet | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const waiters = useRef(new Map<string, { resolve(ctl: SheetController): void; reject(e: Error): void }>());
+  const [job, setJob] = useState<AgentJob | null>(null);
+  const sendRef = useRef<(text: string) => void>(() => {});
 
   const setOpen = useCallback((o: boolean) => {
     setOpenState(o);
@@ -72,22 +84,71 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Load the conversation when someone signs in; clear it when they sign out.
+  // Load the conversation when someone signs in; clear it when they sign out. Then pick up the latest app
+  // change: if one finished while we were away (the app restarts when it lands), tell the assistant.
   useEffect(() => {
     abortRef.current?.abort();
     setItems([]);
     setError(null);
+    setJob(null);
     if (!user) return;
     let cancelled = false;
-    api
-      .agentTranscript()
-      // Don't overwrite a message sent before the saved transcript arrived.
-      .then((r) => !cancelled && setItems((prev) => (prev.length ? prev : r.items)))
-      .catch(() => {});
+    void (async () => {
+      try {
+        const r = await api.agentTranscript();
+        if (cancelled) return;
+        // Don't overwrite a message sent before the saved transcript arrived.
+        setItems((prev) => (prev.length ? prev : r.items));
+        const { job } = await api.latestJob();
+        if (cancelled || !job) return;
+        if (job.status === 'done' && !job.acknowledged) {
+          // Acknowledge before exposing the job, or the reload effect below would reload again.
+          await api.acknowledgeJob(job.id);
+          if (cancelled) return;
+          setJob({ ...job, acknowledged: true });
+          // Right after the reload the spreadsheet page may still be loading; give it a moment so the
+          // assistant's context says which spreadsheet is open.
+          if (location.pathname.startsWith('/s/')) {
+            for (let i = 0; i < 100 && !sheetRef.current && !cancelled; i++) await new Promise((r) => setTimeout(r, 100));
+          }
+          if (cancelled) return;
+          sendRef.current(jobLiveMessage(job));
+        } else {
+          setJob(job);
+        }
+      } catch {
+        // Not signed in any more, or the server is restarting; the panel just starts empty.
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, [user]);
+
+  // While a job runs, poll it. When it lands, the app's code has changed under us: reload to pick up the
+  // new client, and the effect above then resumes the conversation. Wait for any reply in progress first.
+  useEffect(() => {
+    if (!job || !JOB_ACTIVE_STATUSES.has(job.status)) return;
+    const timer = setInterval(async () => {
+      try {
+        const { job: next } = await api.latestJob();
+        if (next && next.id === job.id) setJob(next);
+      } catch {
+        // The dev server restarts as files change; try again next tick.
+      }
+    }, JOB_POLL_MS);
+    return () => clearInterval(timer);
+  }, [job]);
+
+  useEffect(() => {
+    if (job?.status === 'done' && !job.acknowledged && !running) location.reload();
+  }, [job, running]);
+
+  const dismissJob = useCallback(() => {
+    if (!job) return;
+    void api.acknowledgeJob(job.id).catch(() => {});
+    setJob({ ...job, acknowledged: true });
+  }, [job]);
 
   // ⌘K / Ctrl+K toggles the panel.
   useEffect(() => {
@@ -151,6 +212,16 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return loaded;
   };
 
+  const requestAppChange = async (title: string, spec: string): Promise<{ id: string }> => {
+    try {
+      const { job } = await api.createJob(title, spec);
+      setJob(job);
+      return { id: job.id };
+    } catch (e) {
+      throw new ToolError(e instanceof ApiError ? e.message : 'The change could not be queued.');
+    }
+  };
+
   const updateTool = (id: string, patch: Partial<ToolItem>) =>
     setItems((prev) => prev.map((it) => (it.kind === 'tool' && it.id === id ? { ...it, ...patch } : it)));
 
@@ -186,7 +257,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
       if (signal.aborted) break;
       try {
-        const content = await runClientTool(call, { ctl: sheetRef.current?.ctl ?? null, group, openSheet: openSheetById });
+        const content = await runClientTool(call, { ctl: sheetRef.current?.ctl ?? null, group, openSheet: openSheetById, requestAppChange, uploadImage: api.uploadImage });
         results.push({ id: call.id, content });
         updateTool(call.id, { status: 'ok' });
       } catch (e) {
@@ -249,6 +320,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     })();
   };
 
+  sendRef.current = send;
+
   const stop = () => {
     abortRef.current?.abort();
     confirm?.answer(false);
@@ -274,6 +347,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setOpenSheet,
     sheetFailed,
     sheet,
+    job,
+    dismissJob,
   };
   return <AgentCtx.Provider value={value}>{children}</AgentCtx.Provider>;
 }

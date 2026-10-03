@@ -1,7 +1,7 @@
 import { cellKey, parseCellKey, type Range } from '../../../shared/cellref.ts';
 import { adjustForDelete, adjustForInsert, isFormula, renameSheetRefs, shiftFormula } from '../../../shared/formula/adjust.ts';
 import type { CellData, CellStyle, FilterCondition, FilterState, Tab } from '../../../shared/types.ts';
-import { newTab } from '../../../shared/types.ts';
+import { hasContent, newTab } from '../../../shared/types.ts';
 import {
   CellError,
   formatDate,
@@ -19,6 +19,13 @@ export type Axis = 'row' | 'col';
 export function setInput(tx: Tx, tabId: string, r: number, c: number, raw: string): void {
   const existing = tx.tab(tabId).cells[cellKey(r, c)];
   tx.setCellAt(tabId, r, c, raw === '' && !existing?.st ? undefined : { v: raw, ...(existing?.st ? { st: existing.st } : {}) });
+}
+
+/** Put an image in a cell (replacing its value), or remove the image with `src` undefined. Keeps the cell's formatting. */
+export function setImage(tx: Tx, tabId: string, r: number, c: number, src: string | undefined): void {
+  const existing = tx.tab(tabId).cells[cellKey(r, c)];
+  const st = existing?.st ? { st: existing.st } : {};
+  tx.setCellAt(tabId, r, c, src ? { v: '', img: src, ...st } : existing ? { v: existing.v, ...st } : undefined);
 }
 
 /** Keys of existing cells inside a range (efficient for huge, sparse ranges). */
@@ -67,7 +74,7 @@ export function applyStyle(tx: Tx, tabId: string, ranges: Range[], patch: Partia
         const key = cellKey(r, c);
         const cell = tab.cells[key];
         const st = mergeStyle(cell?.st, patch);
-        tx.setCell(tabId, key, cell || st ? { v: cell?.v ?? '', ...(st ? { st } : {}) } : undefined);
+        tx.setCell(tabId, key, cell || st ? { v: cell?.v ?? '', ...(cell?.img ? { img: cell.img } : {}), ...(st ? { st } : {}) } : undefined);
       }
   }
 }
@@ -77,7 +84,7 @@ export function clearFormatting(tx: Tx, tabId: string, ranges: Range[]): void {
   for (const rg of ranges) {
     for (const { key } of existingKeysIn(tab, rg)) {
       const cell = tab.cells[key];
-      if (cell.st) tx.setCell(tabId, key, cell.v ? { v: cell.v } : undefined);
+      if (cell.st) tx.setCell(tabId, key, hasContent(cell) ? { v: cell.v, ...(cell.img ? { img: cell.img } : {}) } : undefined);
     }
   }
 }
@@ -509,7 +516,7 @@ export function computeHiddenRows(store: WorkbookStore<unknown>, tab: Tab): Set<
 
 /** Expand from a cell to the surrounding block of non-empty cells (like Ctrl+A's "current region"). */
 export function detectDataRegion(tab: Tab, r: number, c: number): Range {
-  const has = (rr: number, cc: number) => rr >= 0 && cc >= 0 && !!tab.cells[cellKey(rr, cc)]?.v;
+  const has = (rr: number, cc: number) => rr >= 0 && cc >= 0 && hasContent(tab.cells[cellKey(rr, cc)]);
   const rg = { r1: r, c1: c, r2: r, c2: c };
   let grew = true;
   while (grew) {

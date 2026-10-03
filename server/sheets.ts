@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { newWorkbook, type SheetMeta, type Workbook } from '../shared/types.ts';
+import { checkCellImage, newWorkbook, type SheetMeta, type Workbook } from '../shared/types.ts';
 import type { DB } from './db.ts';
 
 interface SheetRow {
@@ -65,6 +65,10 @@ export function validateWorkbook(wb: unknown): string | null {
       if (!/^[A-Z]{1,3}\d+$/.test(key)) return `Invalid cell address "${key}"`;
       const c = t.cells[key];
       if (!c || typeof c.v !== 'string') return `Invalid cell at ${key}`;
+      if (c.img !== undefined) {
+        const problem = checkCellImage(c.img);
+        if (problem) return `Invalid image at ${key}: ${problem}`;
+      }
     }
     if (!t.colWidths || typeof t.colWidths !== 'object') return 'Invalid column widths';
     if (!t.rowHeights || typeof t.rowHeights !== 'object') return 'Invalid row heights';

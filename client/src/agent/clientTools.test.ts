@@ -6,9 +6,19 @@ import { confirmationFor, runClientTool, ToolError, type ClientToolEnv } from '.
 
 function setup(wb: Workbook = newWorkbook('t1')) {
   const ctl = new SheetController(wb, async () => {});
-  const env: ClientToolEnv = { ctl, group: 'agent-1', openSheet: async () => ctl };
+  const uploads: Blob[] = [];
+  const env: ClientToolEnv = {
+    ctl,
+    group: 'agent-1',
+    openSheet: async () => ctl,
+    requestAppChange: async () => ({ id: 'job-1' }),
+    uploadImage: async (file) => {
+      uploads.push(file);
+      return `/api/images/00000000-0000-0000-0000-00000000000${uploads.length}`;
+    },
+  };
   const call = async (name: string, input: Record<string, unknown> = {}) => JSON.parse(await runClientTool({ id: 'x', name, input }, env));
-  return { ctl, env, call };
+  return { ctl, env, call, uploads };
 }
 
 describe('agent sheet tools', () => {
@@ -58,6 +68,57 @@ describe('agent sheet tools', () => {
     expect(ctl.tab.cells.A1.v).toBe('Name');
   });
 
+  it('puts an image from a URL in a cell, reads it as [image], and undoes it', async () => {
+    const { ctl, call } = setup();
+    const url = 'https://example.com/logo.png';
+    expect(await call('set_cell_image', { range: 'I9', url })).toEqual({ image_in: 'Sheet1!I9' });
+    expect(ctl.tab.cells.I9).toEqual({ v: '', img: url });
+    expect((await call('read_range', { range: 'I9' })).values).toEqual([['[image]']]);
+    await expect(call('set_cell_image', { range: 'A1', url: 'javascript:alert(1)' })).rejects.toThrow(ToolError);
+    await expect(call('set_cell_image', { range: 'A1:Z100', url })).rejects.toThrow(/at most 100/);
+    ctl.undo();
+    expect(ctl.tab.cells.I9).toBeUndefined();
+  });
+
+  it('stores data: URL images on the server and puts the reference in the cell', async () => {
+    const { ctl, call, uploads } = setup();
+    await call('set_cell_image', { range: 'A15', url: 'data:image/png;base64,iVBORw0KGgo=' });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0].type).toBe('image/png');
+    expect(uploads[0].size).toBe(8);
+    expect(ctl.tab.cells.A15).toEqual({ v: '', img: '/api/images/00000000-0000-0000-0000-000000000001' });
+  });
+
+  it('sets filter criteria on filter columns, combined with AND', async () => {
+    const { ctl, call } = setup();
+    await expect(call('set_filter_criteria', { column: 'B', values: ['France'] })).rejects.toThrow(/set_filter/);
+    await call('write_range', {
+      start: 'A1',
+      rows: [['Name', 'Country', 'Tier'], ['Alice', 'France', 'Gold'], ['Bob', 'Spain', 'Gold'], ['Chloé', 'france', 'Silver'], ['Dan', 'Italy', 'Silver']],
+    });
+    await call('set_filter', { range: 'A1:C5' });
+    await expect(call('set_filter_criteria', { column: 'D', values: ['x'] })).rejects.toThrow(/not inside/);
+
+    expect(await call('set_filter_criteria', { column: 'b', values: ['FRANCE'] })).toMatchObject({ column: 'B', visible_rows: 2 });
+    expect([...ctl.hiddenRows()].sort()).toEqual([2, 4]);
+    expect(await call('set_filter_criteria', { column: 'C', values: ['Gold'] })).toMatchObject({ visible_rows: 1 });
+    expect(await call('set_filter_criteria', { column: 'B', clear: true })).toMatchObject({ visible_rows: 2 });
+    expect(ctl.tab.filter!.cols[1]).toBeUndefined();
+    expect([...ctl.hiddenRows()].sort()).toEqual([3, 4]);
+  });
+
+  it('sets row heights for a row or span, undoably', async () => {
+    const { ctl, call } = setup();
+    expect(await call('set_row_height', { rows: '1', height: 40 })).toEqual({ tab: 'Sheet1', rows: '1', height: 40 });
+    expect(ctl.tab.rowHeights).toEqual({ 0: 40 });
+    expect(await call('set_row_height', { rows: '5:3', height: 30 })).toMatchObject({ rows: '3:5', height: 30 });
+    expect(ctl.tab.rowHeights).toEqual({ 0: 40, 2: 30, 3: 30, 4: 30 });
+    await expect(call('set_row_height', { rows: 'A', height: 30 })).rejects.toThrow(ToolError);
+    await expect(call('set_row_height', { rows: '0', height: 30 })).rejects.toThrow(/from 1/);
+    ctl.undo();
+    expect(ctl.tab.rowHeights).toEqual({});
+  });
+
   it('works with tabs by name and switches to the tab it edits', async () => {
     const { ctl, call } = setup();
     await call('add_tab', { name: 'Summary' });
@@ -80,7 +141,7 @@ describe('agent sheet tools', () => {
   });
 
   it('fails clearly when no spreadsheet is open', async () => {
-    const env: ClientToolEnv = { ctl: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')) };
+    const env: ClientToolEnv = { ctl: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), uploadImage: async () => '' };
     await expect(runClientTool({ id: 'x', name: 'read_range', input: { range: 'A1' } }, env)).rejects.toThrow(/No spreadsheet is open/);
   });
 
@@ -93,5 +154,13 @@ describe('agent sheet tools', () => {
     await call('write_range', { start: 'A1', rows: Array.from({ length: 150 }, (_, i) => [i]) });
     expect(confirmationFor(c('clear_range', { range: 'A:A' }), ctl)).toMatch(/Clear 150 cells/);
     expect(confirmationFor(c('write_range', { start: 'A1', rows: [[1]] }), ctl)).toBeNull();
+  });
+
+  it('asks before changing the app, then queues the change', async () => {
+    const { ctl, call } = setup();
+    const input = { title: 'Add set_filter_values', spec: 'Let the assistant choose which values a filter shows.' };
+    expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, ctl)).toMatch(/Change the app: Add set_filter_values\?/);
+    expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, null)).toMatch(/Change the app/);
+    expect(await call('request_app_change', input)).toMatchObject({ job_id: 'job-1', status: 'queued' });
   });
 });

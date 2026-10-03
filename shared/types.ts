@@ -28,6 +28,39 @@ export interface CellData {
   /** Raw user input: a literal ("12", "hello", "3/4/2025") or a formula ("=SUM(A1:A3)"). */
   v: string;
   st?: CellStyle;
+  /**
+   * Image shown in the cell, scaled to fit: an image stored on the server ("/api/images/<id>", used for
+   * uploads and pastes so large images stay out of the workbook JSON), a data:image/... URL or an http(s) URL.
+   */
+  img?: string;
+}
+
+/** Largest image accepted in a cell, in bytes of image data. */
+export const MAX_CELL_IMAGE_BYTES = 100 * 1024 * 1024;
+/** Length of the data URL of the largest image accepted (base64 grows data by 4/3, plus the prefix). */
+export const MAX_CELL_IMAGE_CHARS = Math.ceil(MAX_CELL_IMAGE_BYTES / 3) * 4 + 32;
+export const CELL_IMAGE_TOO_LARGE = 'Image is too large (100 MB maximum)';
+export const CELL_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+/** Address of an image stored on the server (see server/images.ts). */
+export const STORED_IMAGE_RE = /^\/api\/images\/[0-9a-f-]{36}$/;
+const DATA_IMAGE_RE = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/;
+
+/** True if `src` is an inline data:image/...;base64 URL. */
+export const isDataImage = (src: string) => src.startsWith('data:') && DATA_IMAGE_RE.test(src);
+
+/** Returns an error message if `src` cannot be used as a cell image, or null if it is fine. */
+export function checkCellImage(src: unknown): string | null {
+  if (typeof src !== 'string' || !src) return 'Image must be a non-empty string';
+  if (src.length > MAX_CELL_IMAGE_CHARS) return CELL_IMAGE_TOO_LARGE;
+  if (STORED_IMAGE_RE.test(src)) return null;
+  if (isDataImage(src)) return null;
+  if (/^https?:\/\/\S+$/i.test(src)) return null;
+  return 'Image must be a PNG, JPEG, GIF or WebP image, or an http(s) URL';
+}
+
+/** True if the cell holds a value or an image (formatting alone does not count). */
+export function hasContent(cell: CellData | undefined): boolean {
+  return !!cell && (cell.v !== '' || !!cell.img);
 }
 
 export type FilterConditionType =

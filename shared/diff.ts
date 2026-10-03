@@ -208,7 +208,7 @@ function rowsOf(tab: Tab): TabRows {
   let count = 0;
   for (const key in tab.cells) {
     const cell = tab.cells[key];
-    if (!cell.v && !cell.st) continue;
+    if (!cell.v && !cell.st && !cell.img) continue;
     const p = parseCellKey(key);
     if (!p) continue;
     let row = rows.get(p.r);

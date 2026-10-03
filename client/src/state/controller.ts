@@ -6,7 +6,7 @@ import {
   type Range,
 } from '../../../shared/cellref.ts';
 import { isFormula, shiftFormula } from '../../../shared/formula/adjust.ts';
-import type { CellStyle, ColumnFilter, Tab, Workbook } from '../../../shared/types.ts';
+import { checkCellImage, hasContent, type CellStyle, type ColumnFilter, type Tab, type Workbook } from '../../../shared/types.ts';
 import { CellError, scalarToText } from '../../../shared/values.ts';
 import { parseTSV, toHTML, toTSV } from './clipboard.ts';
 import { isRefInsertPoint, normalizeFormula } from './formulaEdit.ts';
@@ -267,7 +267,7 @@ export class SheetController {
   }
 
   private hasValue(r: number, c: number): boolean {
-    return !!this.tab.cells[cellKey(r, c)]?.v;
+    return hasContent(this.tab.cells[cellKey(r, c)]);
   }
 
   /** Ctrl+Arrow: jump to the edge of the current data block, or the next non-empty cell. */
@@ -490,6 +490,20 @@ export class SheetController {
 
   clearSelection(): void {
     this.run((tx) => ops.clearContents(tx, this.tab.id, this.sel.ranges));
+  }
+
+  /**
+   * Put an image (data URL or http(s) URL) in a cell, by default the active cell.
+   * Returns an error message, or null on success.
+   */
+  insertImage(src: string, at: { tabId: string; r: number; c: number } = { tabId: this.tab.id, ...this.sel.active }): string | null {
+    const problem = checkCellImage(src);
+    if (problem) return problem;
+    if (!this.store.getTab(at.tabId)) return 'The sheet tab no longer exists';
+    if (this.edit) this.commitEdit();
+    if (this.activeTabId !== at.tabId) this.switchTab(at.tabId);
+    this.run((tx) => ops.setImage(tx, at.tabId, at.r, at.c, src));
+    return null;
   }
 
   setStyle(patch: Partial<CellStyle>): void {

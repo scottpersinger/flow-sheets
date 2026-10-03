@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { newTab, type Workbook } from '../../../shared/types.ts';
+import { checkCellImage, hasContent, MAX_CELL_IMAGE_CHARS, newTab, type Workbook } from '../../../shared/types.ts';
+import { fitImage } from '../grid/render.ts';
 import {
   appendTabs,
   applyStyle,
   clearContents,
+  clearFormatting,
   computeHiddenRows,
   deleteLines,
   detectDataRegion,
@@ -13,6 +15,7 @@ import {
   pasteClip,
   readClip,
   renameTab,
+  setImage,
   setInput,
   sortRange,
 } from './ops.ts';
@@ -181,5 +184,60 @@ describe('appendTabs', () => {
 
     s.undo();
     expect(s.workbook.tabs.map((t) => t.name)).toEqual(['Sheet1', 'Other']);
+  });
+});
+
+describe('cell images', () => {
+  const png = 'data:image/png;base64,iVBORw0KGgo=';
+  const B2 = { r1: 1, c1: 1, r2: 1, c2: 1 };
+
+  it('stores an image in a cell, undoably, and clears it with the contents', () => {
+    const s = makeStore({ A1: 'x' });
+    s.transact((tx) => applyStyle(tx, 't1', [B2], { bg: '#ff0' }));
+    s.transact((tx) => setImage(tx, 't1', 1, 1, png));
+    expect(s.getTab('t1')!.cells.B2).toEqual({ v: '', img: png, st: { bg: '#ff0' } });
+    // Formatting changes keep the image.
+    s.transact((tx) => applyStyle(tx, 't1', [B2], { b: true }));
+    expect(s.getTab('t1')!.cells.B2.img).toBe(png);
+    s.transact((tx) => clearFormatting(tx, 't1', [B2]));
+    expect(s.getTab('t1')!.cells.B2).toEqual({ v: '', img: png });
+    s.transact((tx) => clearContents(tx, 't1', [{ r1: 0, c1: 0, r2: 5, c2: 5 }]));
+    expect(s.getTab('t1')!.cells.B2).toBeUndefined();
+    s.undo();
+    expect(s.getTab('t1')!.cells.B2).toEqual({ v: '', img: png });
+    s.undo();
+    s.undo();
+    s.undo();
+    expect(s.getTab('t1')!.cells.B2).toEqual({ v: '', st: { bg: '#ff0' } });
+  });
+
+  it('treats image cells as non-empty and moves them with sort and paste', () => {
+    const s = makeStore({ A1: '2', A2: '1' });
+    s.transact((tx) => setImage(tx, 't1', 0, 1, png));
+    expect(hasContent(s.getTab('t1')!.cells.B1)).toBe(true);
+    expect(detectDataRegion(s.getTab('t1')!, 1, 0)).toEqual({ r1: 0, c1: 0, r2: 1, c2: 1 });
+    s.transact((tx) => sortRange(tx, s, 't1', { r1: 0, c1: 0, r2: 1, c2: 1 }, 0, true));
+    expect(s.getTab('t1')!.cells.B2.img).toBe(png);
+    const clip = readClip(s.getTab('t1')!, B2, new Set());
+    s.transact((tx) => pasteClip(tx, 't1', { r1: 4, c1: 4, r2: 4, c2: 4 }, clip));
+    expect(s.getTab('t1')!.cells.E5).toEqual({ v: '', img: png });
+  });
+
+  it('validates image sources', () => {
+    expect(checkCellImage(png)).toBeNull();
+    expect(checkCellImage('https://example.com/a.jpg')).toBeNull();
+    expect(checkCellImage('data:text/html;base64,PGI+')).toMatch(/PNG/);
+    expect(checkCellImage('/api/images/0b5d3b9e-7f6a-4c1e-9d2a-3f4e5a6b7c8d')).toBeNull();
+    expect(checkCellImage('/api/images/../app.db')).toMatch(/PNG/);
+    // About 50 MB of image data inline is fine; over 100 MB is refused.
+    expect(checkCellImage('data:image/png;base64,' + 'A'.repeat(Math.ceil((50 * 1024 * 1024) / 3) * 4))).toBeNull();
+    expect(checkCellImage('data:image/png;base64,' + 'A'.repeat(MAX_CELL_IMAGE_CHARS))).toBe('Image is too large (100 MB maximum)');
+  });
+
+  it('fits images inside the cell, keeping the aspect ratio', () => {
+    // 200x100 image in a 101x51 cell (minus 1px grid line and 2px padding): limited by height.
+    expect(fitImage(200, 100, 0, 0, 101, 51)).toEqual({ x: 4, y: 2, w: 92, h: 46 });
+    // Narrow column: limited by width, centered vertically.
+    expect(fitImage(100, 100, 10, 20, 25, 105)).toEqual({ x: 12, y: 62, w: 20, h: 20 });
   });
 });
