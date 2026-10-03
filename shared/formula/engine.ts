@@ -1,4 +1,5 @@
 import { cellKey, parseCellKey } from '../cellref.ts';
+import { autoLinkUrl, safeLinkUrl } from '../links.ts';
 import type { NumberFormat, Tab, Workbook } from '../types.ts';
 import { CellError, compareScalars, parseLiteral, scalarToText, toNumber, type ParsedLiteral, type Scalar } from '../values.ts';
 import { isFormula } from './adjust.ts';
@@ -60,6 +61,7 @@ export class Engine {
   private tabByName = new Map<string, Tab>();
   private values = new Map<string, Scalar>();
   private formats = new Map<string, ImpliedFormat>();
+  private links = new Map<string, string>();
   private formulas = new Map<string, FormulaInfo>();
   private cellDeps = new Map<string, Set<string>>();
   private rangeDeps = new Map<string, Set<Dep>>(); // tabId -> multi-cell deps
@@ -81,6 +83,7 @@ export class Engine {
     this.tabByName.clear();
     this.values.clear();
     this.formats.clear();
+    this.links.clear();
     this.formulas.clear();
     this.cellDeps.clear();
     this.rangeDeps.clear();
@@ -137,10 +140,12 @@ export class Engine {
     for (const fid of dirty) {
       this.values.delete(fid);
       this.formats.delete(fid);
+      this.links.delete(fid);
     }
     for (const { fid } of changedIds) {
       this.values.delete(fid);
       this.formats.delete(fid);
+      this.links.delete(fid);
     }
     this.computeAll([...dirty]);
   }
@@ -181,6 +186,24 @@ export class Engine {
     }
     const lit = this.literal(cell.v);
     return lit.fmt ? lit : undefined;
+  }
+
+  /**
+   * URL the cell links to, or null: a =HYPERLINK(url, ...) formula, or plain text that is a full http(s) URL.
+   * Only http(s) and mailto URLs are returned.
+   */
+  getLink(tabId: string, r: number, c: number): string | null {
+    const tab = this.tabById.get(tabId);
+    const key = cellKey(r, c);
+    const cell = tab?.cells[key];
+    if (!cell || cell.v === '') return null;
+    if (isFormula(cell.v)) {
+      const fid = fidOf(tabId, key);
+      this.computeFormula(fid);
+      return this.links.get(fid) ?? null;
+    }
+    const v = this.literal(cell.v).value;
+    return typeof v === 'string' ? autoLinkUrl(v) : null;
   }
 
   /** Error message for a cell holding an error value (for tooltips). */
@@ -327,6 +350,12 @@ export class Engine {
       try {
         const ctx = this.makeCtx(info.tabId, info.r, info.c);
         result = this.toScalar(this.evalNode(info.ast!, ctx));
+        const ast = info.ast!;
+        if (ast.t === 'call' && ast.name === 'HYPERLINK' && ast.args[0] && !(result instanceof CellError)) {
+          const url = this.toScalar(this.evalNode(ast.args[0], ctx));
+          const safe = typeof url === 'string' ? safeLinkUrl(url) : null;
+          if (safe) this.links.set(fid, safe);
+        }
         const fmt = this.impliedFormat(info.ast!, info.tabId, 0);
         if (fmt) this.formats.set(fid, fmt);
       } catch (e) {

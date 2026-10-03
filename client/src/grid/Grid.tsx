@@ -37,6 +37,7 @@ import {
   drawGrid,
   fillHandleRect,
   filterButtonRect,
+  linkAt,
   measure,
   onCellImageLoad,
   rangeRect,
@@ -65,6 +66,15 @@ type Drag =
   | { kind: 'point'; anchor: CellPos };
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+
+/** Open a cell link in a new browser tab, without giving the page access to this one. */
+function openLink(url: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.click();
+}
 
 export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: string) => void }) {
   useController(ctl);
@@ -451,6 +461,16 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     const mod = isMac ? e.metaKey : e.ctrlKey;
     if (ctl.menu) ctl.openMenu(null);
 
+    // Clicking a link's text opens it; while editing, Cmd/Ctrl+click opens a link in any cell.
+    if (h.area === 'cell' && h.filterCol === undefined && !h.fillHandle && !h.selEdge && !e.shiftKey && (ctl.edit ? mod : !mod)) {
+      const url = ctl.edit ? store.link(ctl.tab.id, h.r, h.c) : linkUnder(x, h.r, h.c);
+      if (url) {
+        if (!ctl.edit) ctl.selectCell({ r: h.r, c: h.c });
+        openLink(url);
+        return;
+      }
+    }
+
     if (ctl.edit && h.area === 'cell' && h.filterCol === undefined && ctl.canPoint()) {
       const anchor = e.shiftKey && ctl.edit.point ? ctl.edit.point.anchor : { r: h.r, c: h.c };
       ctl.pointAt(anchor, { r: h.r, c: h.c });
@@ -505,6 +525,11 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     }
     if (ctl.filterMenu) ctl.openFilterMenu(null);
     focusSink();
+  };
+
+  const linkUnder = (x: number, r: number, c: number) => {
+    const { layout: l, vp: v } = live.current;
+    return linkAt(canvasRef.current!.getContext('2d')!, store, ctl.tab, l, v, r, c, x);
   };
 
   const autofitCols = (cols: number[]) => {
@@ -590,6 +615,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     else if (h.area === 'cell' && h.fillHandle) cursor = 'crosshair';
     else if (h.area === 'cell' && h.selEdge) cursor = 'grab';
     else if (h.area === 'cell' && h.filterCol !== undefined) cursor = 'pointer';
+    else if (h.area === 'cell' && !ctl.edit && linkUnder(x, h.r, h.c)) cursor = 'pointer';
     else if (h.area === 'cell') cursor = 'cell';
     canvasRef.current!.style.cursor = cursor;
     if (h.area === 'cell' && !h.fillHandle) {

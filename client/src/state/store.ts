@@ -118,6 +118,11 @@ export class WorkbookStore<M = unknown> {
     return this.engine.getValue(tabId, r, c);
   }
 
+  /** URL the cell links to (HYPERLINK formula or a plain-text http(s) URL), or null. */
+  link(tabId: string, r: number, c: number): string | null {
+    return this.engine.getLink(tabId, r, c);
+  }
+
   display(tabId: string, r: number, c: number): string {
     const cell = this.cell(tabId, r, c);
     if (!cell) return '';

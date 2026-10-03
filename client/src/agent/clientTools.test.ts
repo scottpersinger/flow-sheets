@@ -80,6 +80,26 @@ describe('agent sheet tools', () => {
     expect(ctl.tab.cells.I9).toBeUndefined();
   });
 
+  it('makes cells links with set_cell_link and reports links in read_range', async () => {
+    const { ctl, call } = setup();
+    await call('write_range', { start: 'D2', rows: [['https://en.wikipedia.org/wiki/Eat_a_Peach'], ['n/a (original)']] });
+    const res = await call('set_cell_link', { range: 'A1', url: 'https://example.com/?q="x"', label: 'Say "hi"' });
+    expect(res).toEqual({ linked: 'Sheet1!A1', url: 'https://example.com/?q="x"', label: 'Say "hi"' });
+    await call('set_cell_link', { range: 'B1:B2', url: 'mailto:me@example.com' });
+    expect(ctl.store.display(ctl.tab.id, 1, 1)).toBe('mailto:me@example.com');
+    const read = await call('read_range', { range: 'A1:D3' });
+    expect(read.values[0][0]).toBe('Say "hi"');
+    expect(read.links).toEqual({
+      A1: 'https://example.com/?q="x"',
+      B1: 'mailto:me@example.com',
+      B2: 'mailto:me@example.com',
+      D2: 'https://en.wikipedia.org/wiki/Eat_a_Peach',
+    });
+    await expect(call('set_cell_link', { range: 'A1', url: 'javascript:alert(1)' })).rejects.toThrow(ToolError);
+    ctl.undo();
+    expect(ctl.tab.cells.A1).toBeUndefined();
+  });
+
   it('stores data: URL images on the server and puts the reference in the cell', async () => {
     const { ctl, call, uploads } = setup();
     await call('set_cell_image', { range: 'A15', url: 'data:image/png;base64,iVBORw0KGgo=' });

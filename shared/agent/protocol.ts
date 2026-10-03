@@ -123,6 +123,7 @@ export const CLIENT_TOOLS = new Set([
   'delete_columns',
   'sort_range',
   'set_cell_image',
+  'set_cell_link',
   'set_filter',
   'set_filter_criteria',
   'set_column_width',

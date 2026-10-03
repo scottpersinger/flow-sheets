@@ -223,6 +223,22 @@ describe('cell images', () => {
     expect(s.getTab('t1')!.cells.E5).toEqual({ v: '', img: png });
   });
 
+  it('keeps links through sort, copy/paste and saving', () => {
+    const url = 'https://en.wikipedia.org/wiki/Eat_a_Peach';
+    const s = makeStore({ A1: '2', B1: url, A2: '1', B2: '=HYPERLINK("https://example.com/x", "Ex")' });
+    s.transact((tx) => sortRange(tx, s, 't1', { r1: 0, c1: 0, r2: 1, c2: 1 }, 0, true));
+    expect(s.link('t1', 0, 1)).toBe('https://example.com/x');
+    expect(s.display('t1', 0, 1)).toBe('Ex');
+    expect(s.link('t1', 1, 1)).toBe(url);
+    const clip = readClip(s.getTab('t1')!, { r1: 0, c1: 1, r2: 1, c2: 1 }, new Set());
+    s.transact((tx) => pasteClip(tx, 't1', { r1: 4, c1: 4, r2: 4, c2: 4 }, clip));
+    expect(s.link('t1', 4, 4)).toBe('https://example.com/x');
+    expect(s.link('t1', 5, 4)).toBe(url);
+    const saved = new WorkbookStore(JSON.parse(JSON.stringify(s.workbook)));
+    expect(saved.link('t1', 4, 4)).toBe('https://example.com/x');
+    expect(saved.display('t1', 4, 4)).toBe('Ex');
+  });
+
   it('validates image sources', () => {
     expect(checkCellImage(png)).toBeNull();
     expect(checkCellImage('https://example.com/a.jpg')).toBeNull();

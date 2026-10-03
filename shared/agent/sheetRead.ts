@@ -105,6 +105,7 @@ export function readRange(src: SheetSource, tab: Tab, rg: Range, opts: { formula
   const values: string[][] = [];
   const formulas: Record<string, string> = {};
   const formats: Record<string, CellStyle> = {};
+  const links: Record<string, string> = {};
   for (let r = clipped.r1; r <= clipped.r2; r++) {
     const row: string[] = [];
     for (let c = clipped.c1; c <= clipped.c2; c++) {
@@ -113,6 +114,8 @@ export function readRange(src: SheetSource, tab: Tab, rg: Range, opts: { formula
       row.push(displayValue(src, tab, r, c));
       if (opts.formulas && cell && isFormula(cell.v)) formulas[key] = cell.v;
       if (opts.formats && cell?.st) formats[key] = cell.st;
+      const link = cell ? src.engine.getLink(tab.id, r, c) : null;
+      if (link) links[key] = link;
     }
     values.push(row);
   }
@@ -122,6 +125,7 @@ export function readRange(src: SheetSource, tab: Tab, rg: Range, opts: { formula
     values,
     ...(opts.formulas ? { formulas } : {}),
     ...(opts.formats ? { formats } : {}),
+    ...(Object.keys(links).length ? { links } : {}),
     ...(notes.length ? { note: notes.join(' ') } : {}),
   };
 }

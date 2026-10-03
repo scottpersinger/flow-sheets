@@ -38,6 +38,7 @@ const C = {
   filterBorder: '#34a853',
   filterActive: '#188038',
   error: '#d93025',
+  link: '#1155cc',
   searchHit: 'rgba(251, 188, 4, 0.30)',
   searchCurrent: 'rgba(251, 140, 0, 0.55)',
   searchCurrentBorder: '#e37400',
@@ -96,6 +97,22 @@ function defaultAlign(v: Scalar): 'left' | 'center' | 'right' {
   if (typeof v === 'number') return 'right';
   if (typeof v === 'boolean' || v instanceof CellError) return 'center';
   return 'left';
+}
+
+/** The link URL if point x (canvas coordinates) is over the text of a link cell, otherwise null. */
+export function linkAt(ctx: CanvasRenderingContext2D, store: WorkbookStore, tab: Tab, l: Layout, vp: Viewport, r: number, c: number, x: number): string | null {
+  const url = store.link(tab.id, r, c);
+  if (!url) return null;
+  const text = store.display(tab.id, r, c);
+  if (!text) return null;
+  const st = tab.cells[cellKey(r, c)]?.st;
+  const tw = Math.max(...text.split('\n').map((ln) => measure(ctx, cellFont(st), ln)));
+  const align = st?.align ?? defaultAlign(store.value(tab.id, r, c));
+  const left = colX(l, vp, c);
+  const w = l.cols.size(c);
+  const pad = 3;
+  const tx = align === 'right' ? left + w - pad - tw : align === 'center' ? left + (w - tw) / 2 : left + pad;
+  return x >= tx - 2 && x <= tx + tw + 2 ? url : null;
 }
 
 interface Region {
@@ -236,7 +253,7 @@ function drawCells(ctx: CanvasRenderingContext2D, s: RenderState, reg: Region): 
         ctx.fill();
       }
       if (!text) continue;
-      drawCellText(ctx, s, r, c, x, y, w, h, text, v, reg, filter);
+      drawCellText(ctx, s, r, c, x, y, w, h, text, v, reg, filter, !!store.link(tab.id, r, c));
     }
   }
 }
@@ -320,9 +337,12 @@ function drawCellText(
   v: Scalar,
   reg: Region,
   filter: FilterState | undefined,
+  isLink: boolean,
 ): void {
   const { tab, layout: l, vp } = s;
-  const st = tab.cells[cellKey(r, c)]?.st;
+  const cellSt = tab.cells[cellKey(r, c)]?.st;
+  // Links are blue and underlined, like in Google Sheets.
+  const st = isLink ? { ...cellSt, color: cellSt?.color ?? C.link, u: true } : cellSt;
   const font = cellFont(st);
   const align = st?.align ?? defaultAlign(v);
   const pad = 3;
