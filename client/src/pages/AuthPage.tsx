@@ -81,6 +81,12 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
           )}
         </div>
       </form>
+      {isLogin && (
+        <figure className="auth-diagram">
+          <img src="/architecture.png" alt="How Sheets works: the browser talks to a live agent on the server; the live agent files app change jobs with a coding agent that edits the app's source, restarts it and publishes a merged pull request." width="820" height="470" />
+          <figcaption>Sheets improves itself: ask the assistant for something it can't do, and a coding agent adds it to the app.</figcaption>
+        </figure>
+      )}
     </div>
   );
 }

@@ -2,6 +2,10 @@
 
 A web spreadsheet app, similar to Google Sheets. Users register and sign in with email and password, and can create, open, rename and delete spreadsheets. Each spreadsheet has multiple tabs and supports formulas, formatting, sorting and filtering.
 
+A built-in assistant (the live agent) answers chat and edits spreadsheets. When it lacks a capability, a coding agent changes the app's own code, restarts it and publishes the change as a merged pull request. See [Self-improvement](#self-improvement).
+
+![Architecture: browser, server with the live agent, coding agent, app source code, Claude API and GitHub](docs/architecture.png)
+
 ## Running
 
 ```sh

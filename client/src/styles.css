@@ -101,8 +101,30 @@ textarea {
   min-height: 100%;
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 24px;
   background: var(--chrome);
   padding: 24px;
+}
+.auth-diagram {
+  margin: 0;
+  width: 100%;
+  max-width: 760px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px 20px 12px;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.15), 0 4px 12px rgba(60, 64, 67, 0.1);
+}
+.auth-diagram img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.auth-diagram figcaption {
+  margin-top: 8px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 .auth-card {
   background: #fff;
