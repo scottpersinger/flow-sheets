@@ -72,6 +72,10 @@ export function toolLabel(name: string, i: Input): string {
       return typeof i.range === 'string' ? `Read ${where(i)} in another spreadsheet` : 'Looked at another spreadsheet';
     case 'create_sheet':
       return `Created spreadsheet “${i.title}”`;
+    case 'web_search':
+      return `Searched the web for “${i.query}”`;
+    case 'image_search':
+      return `Searched for images of “${i.query}”`;
     default:
       return name;
   }
