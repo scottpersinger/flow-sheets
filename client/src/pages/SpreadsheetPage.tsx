@@ -186,6 +186,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
         window.open(`/s/${sheet.id}`, '_blank');
       },
       goHome: () => navigate('/'),
+      openConnectors: () => navigate('/connectors'),
       importXlsx: async () => {
         const file = await pickExcelFile();
         if (!file) return;

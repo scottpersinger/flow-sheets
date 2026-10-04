@@ -108,6 +108,9 @@ export function HomePage() {
         </div>
         <input className="home-search" placeholder="Search spreadsheets" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
+          <Link to="/connectors" className="home-changes" title="Connect data sources such as Brex">
+            Connectors
+          </Link>
           <Link to="/changes" className="home-changes" title="Changes the assistant made to the app">
             Changes
           </Link>

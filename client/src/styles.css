@@ -1713,6 +1713,43 @@ button.agent-tool-label:hover {
 .change-status.failed {
   color: var(--danger);
 }
+
+/* Connectors page */
+.connectors h2 {
+  margin-top: 28px;
+}
+.connector-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 8px;
+  border-radius: 5px;
+  background: #1f1f1f;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.connection-status {
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--danger);
+}
+.connection-status.connected {
+  color: #188038;
+}
+.connector-notice {
+  color: #188038;
+  font-size: 13px;
+  margin: 8px 0;
+}
+.connectors .change-actions a.btn {
+  text-decoration: none;
+}
+.connector-form {
+  max-width: 460px;
+}
 .change-meta,
 .change-note {
   font-size: 12.5px;

@@ -96,6 +96,25 @@ export function openDb(file: string): DB {
     );
     CREATE INDEX IF NOT EXISTS agent_jobs_user ON agent_jobs(user_id, created_at);
 
+    -- Connections to external data sources (server/connectors). credentials is AES-256-GCM ciphertext.
+    CREATE TABLE IF NOT EXISTS connections (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      connector TEXT NOT NULL,
+      name TEXT NOT NULL,
+      auth_type TEXT NOT NULL,
+      credentials TEXT NOT NULL,
+      -- JSON object of non-secret field values
+      settings TEXT NOT NULL DEFAULT '{}',
+      masked TEXT,
+      -- connected | error | needs_reauth
+      status TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS connections_user ON connections(user_id, created_at);
+
     CREATE TABLE IF NOT EXISTS agent_usage (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       day TEXT NOT NULL,

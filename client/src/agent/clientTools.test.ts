@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
+import type { FetchResult } from '../../../shared/connectors.ts';
 import { newWorkbook, type Workbook } from '../../../shared/types.ts';
 import { SheetController } from '../state/controller.ts';
 import { confirmationFor, runClientTool, ToolError, type ClientToolEnv } from './clientTools.ts';
@@ -15,6 +16,9 @@ function setup(wb: Workbook = newWorkbook('t1')) {
     uploadImage: async (file) => {
       uploads.push(file);
       return `/api/images/00000000-0000-0000-0000-00000000000${uploads.length}`;
+    },
+    fetchConnectorData: async () => {
+      throw new Error('No connector data in this test.');
     },
   };
   const call = async (name: string, input: Record<string, unknown> = {}) => JSON.parse(await runClientTool({ id: 'x', name, input }, env));
@@ -174,7 +178,7 @@ describe('agent sheet tools', () => {
   });
 
   it('fails clearly when no spreadsheet is open', async () => {
-    const env: ClientToolEnv = { ctl: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }), uploadImage: async () => '' };
+    const env: ClientToolEnv = { ctl: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }), uploadImage: async () => '', fetchConnectorData: async () => Promise.reject(new Error('x')) };
     await expect(runClientTool({ id: 'x', name: 'read_range', input: { range: 'A1' } }, env)).rejects.toThrow(/No spreadsheet is open/);
   });
 
@@ -202,5 +206,76 @@ describe('agent sheet tools', () => {
     const input = { title: 'Find each company\u2019s revenue', task: 'For every company in column A, find its 2025 revenue and the source.' };
     expect(await call('request_research', input)).toMatchObject({ job_id: 'job-2', status: 'queued', sheet_included: true });
     expect(await call('request_research', { ...input, include_open_sheet: false })).toMatchObject({ sheet_included: false });
+  });
+});
+
+describe('ingest_connector_data', () => {
+  const result = (rows: FetchResult['rows'], truncated = false): FetchResult => ({
+    handle: 'h1',
+    columns: [
+      { name: 'id', type: 'string' },
+      { name: 'posted_at', type: 'date' },
+      { name: 'amount', type: 'number' },
+      { name: 'merchant', type: 'string' },
+    ],
+    rows,
+    truncated,
+    totalRows: rows.length,
+  });
+
+  function withData(data: FetchResult) {
+    const s = setup();
+    const requests: unknown[] = [];
+    s.env.fetchConnectorData = async (id, body) => {
+      requests.push({ id, ...body });
+      return data;
+    };
+    return { ...s, requests };
+  }
+
+  it('creates the tab and writes a header and rows as real numbers, dates and text', async () => {
+    const { ctl, call, requests } = withData(result([['0012', '2025-01-03', 12.5, 'TRUE Coffee'], ['tx2', '2025-01-04', -3, '=evil()']]));
+    const res = await call('ingest_connector_data', { connection_id: 'c1', dataset: 'card_transactions', params: { posted_at_start: '2025-01-01' }, tab: 'Brex Transactions' });
+    expect(requests).toEqual([{ id: 'c1', dataset: 'card_transactions', params: { posted_at_start: '2025-01-01' }, handle: undefined }]);
+    expect(res).toMatchObject({ tab: 'Brex Transactions', created_tab: true, range_written: 'Brex Transactions!A1:D3', rows_written: 2, truncated: false });
+    const tab = ctl.store.workbook.tabs.find((t) => t.name === 'Brex Transactions')!;
+    expect(ctl.tab.id).toBe(tab.id);
+    expect(ctl.store.value(tab.id, 1, 2)).toBe(12.5);
+    expect(typeof ctl.store.value(tab.id, 1, 1)).toBe('number'); // a date serial
+    expect(ctl.store.display(tab.id, 1, 1)).toBe('1/3/2025');
+    expect(ctl.store.value(tab.id, 1, 0)).toBe('0012');
+    expect(ctl.store.value(tab.id, 2, 3)).toBe('=evil()');
+    expect(ctl.store.display(tab.id, 0, 3)).toBe('merchant');
+  });
+
+  it('replaces earlier data but keeps formatting, and appends below existing rows', async () => {
+    const { ctl, call, env } = withData(result([['a', '2025-01-01', 1, 'x'], ['b', '2025-01-02', 2, 'y'], ['c', '2025-01-03', 3, 'z']]));
+    await call('ingest_connector_data', { connection_id: 'c1', dataset: 'd' });
+    await call('format_range', { range: 'C:C', number_format: 'currency' });
+    env.fetchConnectorData = async () => result([['n', '2025-02-01', 9, 'w']]);
+    const res = await call('ingest_connector_data', { connection_id: 'c1', dataset: 'd' });
+    expect(res.range_written).toBe('Sheet1!A1:D2');
+    expect(ctl.store.cell(ctl.tab.id, 2, 0)).toBeUndefined();
+    expect(ctl.store.display(ctl.tab.id, 1, 2)).toBe('$9.00');
+
+    const app = await call('ingest_connector_data', { connection_id: 'c1', dataset: 'd', mode: 'append' });
+    expect(app).toMatchObject({ range_written: 'Sheet1!A3:D3', header_written: false, rows_written: 1 });
+  });
+
+  it('writes thousands of rows in one undoable step and reports truncation', async () => {
+    const rows = Array.from({ length: 5000 }, (_, k) => [`t${k}`, '2025-01-01', k / 100, 'm']);
+    const { ctl, call } = withData(result(rows, true));
+    const res = await call('ingest_connector_data', { connection_id: 'c1', dataset: 'd', start_cell: 'B2' });
+    expect(res).toMatchObject({ range_written: 'Sheet1!B2:E5002', rows_written: 5000, truncated: true });
+    ctl.undo();
+    expect(Object.keys(ctl.tab.cells)).toHaveLength(0);
+  });
+
+  it('passes connector errors to Claude', async () => {
+    const { call, env } = setup();
+    env.fetchConnectorData = async () => {
+      throw new Error('Brex rejected the user token (401).');
+    };
+    await expect(call('ingest_connector_data', { connection_id: 'c1', dataset: 'd' })).rejects.toThrow(/401/);
   });
 });
