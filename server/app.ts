@@ -369,14 +369,21 @@ export async function buildApp(opts: AppOptions) {
     });
 
     // --- App-change jobs (self-improvement) ---
+    // A change to the app (kind "change") or a research task (kind "research"), both run by the worker.
     r.post('/api/agent/jobs', async (req, reply) => {
-      const body = (req.body ?? {}) as { title?: unknown; spec?: unknown };
+      const body = (req.body ?? {}) as { title?: unknown; spec?: unknown; kind?: unknown; sheetId?: unknown };
       const title = typeof body.title === 'string' ? body.title.trim() : '';
       const spec = typeof body.spec === 'string' ? body.spec.trim() : '';
       if (!title || !spec) return reply.code(400).send({ error: 'A title and a spec are required.' });
+      const kind = body.kind === 'research' ? 'research' : 'change';
+      let sheetId: string | undefined;
+      if (kind === 'research' && typeof body.sheetId === 'string' && body.sheetId) {
+        if (!sheets.get(req.user!.id, body.sheetId)) return reply.code(404).send({ error: 'Sheet not found' });
+        sheetId = body.sheetId;
+      }
       const active = jobs.active();
-      if (active) return reply.code(409).send({ error: `A change is already in progress: "${active.title}". Wait for it to finish.` });
-      return { job: publicJob(jobs.create(req.user!.id, title.slice(0, 120), spec.slice(0, 8000), { requestedBy: req.user!.email })) };
+      if (active) return reply.code(409).send({ error: `A job is already in progress: "${active.title}". Wait for it to finish.` });
+      return { job: publicJob(jobs.create(req.user!.id, title.slice(0, 120), spec.slice(0, 8000), { kind, sheetId, requestedBy: req.user!.email })) };
     });
 
     // The app's change history, for the Changes page.

@@ -77,10 +77,10 @@ export function ChangesPage() {
       </header>
 
       <section className="home-inner changes">
-        <h2>Changes the assistant made to the app</h2>
+        <h2>Changes and research by the assistant</h2>
         <p className="changes-intro">
-          Each entry is the app’s own record of a change requested through the assistant: what was asked, what the coding agent did, and where it was
-          published. Reverting queues a new change that undoes it.
+          Each entry is the app’s own record of a job requested through the assistant: a change to the app (what was asked, what the coding agent did,
+          where it was published) or a research task and its report. Reverting a change queues a new change that undoes it.
         </p>
         {error && <div className="agent-error">{error}</div>}
         {jobs === null ? (
@@ -100,9 +100,12 @@ export function ChangesPage() {
                   <div className="change-head">
                     <div className="change-title">
                       {job.kind === 'revert' ? <span className="change-kind">Revert</span> : null}
+                      {job.kind === 'research' ? <span className="change-kind research">Research</span> : null}
                       {job.title}
                     </div>
-                    <span className={`change-status ${job.status}`}>{STATUS[job.status]}</span>
+                    <span className={`change-status ${job.status}`}>
+                      {job.kind === 'research' ? (job.status === 'done' ? 'Finished' : job.status === 'coding' ? 'Researching' : STATUS[job.status]) : STATUS[job.status]}
+                    </span>
                   </div>
                   <div className="change-meta">
                     {formatDate(job.createdAt)}
@@ -115,7 +118,7 @@ export function ChangesPage() {
                         </a>
                         {job.mergedSha ? ` merged as ${job.mergedSha.slice(0, 7)}` : ' (not merged)'}
                       </>
-                    ) : job.status === 'done' ? (
+                    ) : job.status === 'done' && job.kind !== 'research' ? (
                       ' · not published (left in the working tree)'
                     ) : null}
                     {typeof job.costUsd === 'number' ? ` · $${job.costUsd.toFixed(2)}` : ''}

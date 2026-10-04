@@ -20,6 +20,8 @@ export interface ClientToolEnv {
   openSheet(id: string): Promise<SheetController>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
+  /** Queue a background research task; resolves with the job id. */
+  requestResearch(title: string, task: string, includeSheet: boolean): Promise<{ id: string; sheetIncluded: boolean }>;
   /** Store an image file on the server; resolves to its URL for a cell. */
   uploadImage(file: Blob): Promise<string>;
 }
@@ -121,6 +123,17 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       job_id: id,
       status: 'queued',
       note: 'The change starts after this reply ends. Tell the user it is in progress and stop; you will get a message when it is live.',
+    });
+  }
+  if (call.name === 'request_research') {
+    const includeSheet = i.include_open_sheet !== false;
+    if (includeSheet && env.ctl) await env.ctl.saver.flush(); // the export reads the saved file
+    const { id, sheetIncluded } = await env.requestResearch(String(i.title), String(i.task), includeSheet);
+    return JSON.stringify({
+      job_id: id,
+      status: 'queued',
+      sheet_included: sheetIncluded,
+      note: 'The research starts after this reply ends. Tell the user it is running and stop; you will get a message with the report.',
     });
   }
   if (call.name === 'open_sheet') {

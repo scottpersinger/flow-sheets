@@ -1699,6 +1699,9 @@ button.agent-tool-label:hover {
   padding: 0 5px;
   margin-right: 8px;
 }
+.change-kind.research {
+  color: #1b7f4a;
+}
 .change-status {
   font-size: 12px;
   color: var(--muted);

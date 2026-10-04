@@ -196,6 +196,28 @@ describe('agent', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('queues a research task with the open spreadsheet, as a job the worker runs', async () => {
+    const created = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Companies' } });
+    const sheetId = (created.json() as { sheet: { id: string } }).sheet.id;
+    let res = await app.inject({ method: 'POST', url: '/api/agent/jobs', headers: { cookie }, payload: { kind: 'research', title: 'Revenue lookup', spec: 'Find the 2025 revenue of each company in column A.', sheetId: 'nope' } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'POST', url: '/api/agent/jobs', headers: { cookie }, payload: { kind: 'research', title: 'Revenue lookup', spec: 'Find the 2025 revenue of each company in column A.', sheetId } });
+    expect(res.statusCode).toBe(200);
+    const { job } = res.json() as { job: { id: string; kind: string; sheetId: string; status: string } };
+    expect(job).toMatchObject({ kind: 'research', sheetId, status: 'queued' });
+    // Research is never revertable, and it blocks the queue like any job.
+    expect((await app.inject({ method: 'POST', url: `/api/agent/jobs/${job.id}/revert`, headers: { cookie } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/agent/jobs', headers: { cookie }, payload: { title: 'Another', spec: 'Something else entirely.' } })).statusCode).toBe(409);
+    // Clear it so the next test starts with an empty queue: a turn starts it, and the stub launcher runs nothing.
+    replies.push(() => ({ content: [text('ok')] }));
+    await turn({ message: 'hi', context: home });
+    expect(launchedJobs).toEqual([job.id]);
+    launchedJobs.length = 0;
+    const { db } = await import('./db.ts').then((m) => ({ db: m.openDb(path.join(dir, 'app.db')) }));
+    db.prepare("UPDATE agent_jobs SET status = 'done' WHERE id = ?").run(job.id);
+    db.close();
+  });
+
   it('queues an app change and starts it after the turn ends', async () => {
     replies.push(() => ({ content: [toolUse('t1', 'request_app_change', { title: 'Add set_filter_values', spec: 'Let the assistant set which values a filter column shows.' })] }));
     const events = await turn({ message: 'add a tool to set filter criteria', context: home });
@@ -223,7 +245,7 @@ describe('agent', () => {
 
     // The change history lists it with who asked; a running change cannot be reverted.
     const list = (await app.inject({ method: 'GET', url: '/api/agent/jobs', headers: { cookie } })).json() as { jobs: { id: string; requestedBy: string }[] };
-    expect(list.jobs.map((j) => j.id)).toEqual([job.id]);
+    expect(list.jobs[0].id).toBe(job.id); // newest first
     expect(list.jobs[0].requestedBy).toBe('agent@x.com');
     expect((await app.inject({ method: 'POST', url: `/api/agent/jobs/${job.id}/revert`, headers: { cookie } })).statusCode).toBe(400);
   });

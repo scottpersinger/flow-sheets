@@ -143,6 +143,22 @@ const schemas = {
       "Ask for a change to the app's own code when the user wants something the app or your tools cannot do (after they agree). A coding agent edits the source, runs the checks and the app restarts with the change; this takes a few minutes. The user confirms first. You are told when it is live.",
     ),
 
+  request_research: z
+    .object({
+      title: z.string().min(3).max(120).describe('Short name for the task, e.g. "Find 2025 revenue for each company in column A".'),
+      task: z
+        .string()
+        .min(20)
+        .max(8000)
+        .describe(
+          'The research task, for someone who has not seen this conversation: the question, what a complete answer looks like (which items, which fields, units), any sources to prefer, and how the result will be used. Mention the relevant tab and columns when the spreadsheet is included.',
+        ),
+      include_open_sheet: z.boolean().optional().describe('Export the open spreadsheet (all tabs, as CSV) for the researcher to read. Defaults to true when a spreadsheet is open.'),
+    })
+    .describe(
+      'Hand a task to the background research agent: searching the web across many items, comparing sources, or analysing a large spreadsheet, work that takes minutes rather than a quick lookup. It runs after your reply ends, and its report comes back to you as a message; then finish what the user asked (for example by writing the results into the sheet). Not for things you can do now with your own tools.',
+    ),
+
   // --- Account (run on the server) ---
   list_sheets: z
     .object({ query: z.string().optional().describe('Only spreadsheets whose title contains this text (case-insensitive).') })

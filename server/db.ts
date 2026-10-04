@@ -132,6 +132,7 @@ function migrate(db: DB): void {
     ['patch', 'TEXT'],
     ['reverts_job_id', 'TEXT'],
     ['reverted_by_job_id', 'TEXT'],
+    ['sheet_id', 'TEXT'],
   ];
   for (const [name, type] of jobAdds) if (!jobCols.has(name)) db.exec(`ALTER TABLE agent_jobs ADD COLUMN ${name} ${type}`);
 }

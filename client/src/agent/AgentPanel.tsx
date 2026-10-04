@@ -191,7 +191,15 @@ const JOB_STATUS: Record<AgentJob['status'], string> = {
   failed: 'Failed',
 };
 
-/** Progress of a change to the app's own code. */
+function jobStatusLabel(job: AgentJob): string {
+  if (job.kind === 'research') {
+    if (job.status === 'coding') return 'Researching';
+    if (job.status === 'done') return 'Finished';
+  }
+  return JOB_STATUS[job.status];
+}
+
+/** Progress of a change to the app's own code, or of a research task. */
 function JobCard({ job, onDismiss }: { job: AgentJob; onDismiss(): void }) {
   const active = JOB_ACTIVE_STATUSES.has(job.status);
   const recent = job.log.slice(-3);
@@ -201,11 +209,13 @@ function JobCard({ job, onDismiss }: { job: AgentJob; onDismiss(): void }) {
         <span className="agent-tool-icon" aria-hidden="true">
           {active || job.status === 'done' ? <span className="agent-spinner" /> : '!'}
         </span>
-        <span className="agent-job-title">Changing the app: {job.title}</span>
+        <span className="agent-job-title">
+          {job.kind === 'research' ? 'Researching' : 'Changing the app'}: {job.title}
+        </span>
       </div>
       <div className="agent-job-status">
-        {JOB_STATUS[job.status]}
-        {job.status === 'done' && !job.acknowledged ? ' Reloading…' : ''}
+        {jobStatusLabel(job)}
+        {job.status === 'done' && !job.acknowledged ? (job.kind === 'research' ? ' Handing the report to the assistant…' : ' Reloading…') : ''}
         {job.prUrl ? (
           <>
             {' · '}

@@ -66,6 +66,8 @@ export function toolLabel(name: string, i: Input): string {
       return `Selected ${where(i)}`;
     case 'open_sheet':
       return 'Opened a spreadsheet';
+    case 'request_research':
+      return `Started research: ${String(i.title ?? '')}`;
     case 'request_app_change':
       return `Requested an app change: ${String(i.title ?? '')}`;
     case 'list_sheets':

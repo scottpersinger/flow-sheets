@@ -11,7 +11,7 @@ function setup(wb: Workbook = newWorkbook('t1')) {
     ctl,
     group: 'agent-1',
     openSheet: async () => ctl,
-    requestAppChange: async () => ({ id: 'job-1' }),
+    requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }),
     uploadImage: async (file) => {
       uploads.push(file);
       return `/api/images/00000000-0000-0000-0000-00000000000${uploads.length}`;
@@ -161,7 +161,7 @@ describe('agent sheet tools', () => {
   });
 
   it('fails clearly when no spreadsheet is open', async () => {
-    const env: ClientToolEnv = { ctl: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), uploadImage: async () => '' };
+    const env: ClientToolEnv = { ctl: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }), uploadImage: async () => '' };
     await expect(runClientTool({ id: 'x', name: 'read_range', input: { range: 'A1' } }, env)).rejects.toThrow(/No spreadsheet is open/);
   });
 
@@ -182,5 +182,12 @@ describe('agent sheet tools', () => {
     expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, ctl)).toMatch(/Change the app: Add set_filter_values\?/);
     expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, null)).toMatch(/Change the app/);
     expect(await call('request_app_change', input)).toMatchObject({ job_id: 'job-1', status: 'queued' });
+  });
+
+  it('queues a research task, including the open spreadsheet by default', async () => {
+    const { call } = setup();
+    const input = { title: 'Find each company\u2019s revenue', task: 'For every company in column A, find its 2025 revenue and the source.' };
+    expect(await call('request_research', input)).toMatchObject({ job_id: 'job-2', status: 'queued', sheet_included: true });
+    expect(await call('request_research', { ...input, include_open_sheet: false })).toMatchObject({ sheet_included: false });
   });
 });

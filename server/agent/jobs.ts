@@ -20,8 +20,9 @@ const MAX_LOG_LINES = 300;
 interface Row {
   id: string;
   user_id: string;
-  kind: 'change' | 'revert';
+  kind: 'change' | 'revert' | 'research';
   title: string;
+  sheet_id: string | null;
   spec: string;
   status: AgentJobStatus;
   pid: number | null;
@@ -75,6 +76,7 @@ function toJob(r: Row): JobRecord {
     kind: r.kind,
     title: r.title,
     spec: r.spec,
+    sheetId: opt(r.sheet_id),
     status: r.status,
     pid: r.pid,
     log: JSON.parse(r.log) as string[],
@@ -111,11 +113,11 @@ export class JobStore {
     this.db = db;
   }
 
-  create(userId: string, title: string, spec: string, opts: { kind?: 'change' | 'revert'; requestedBy?: string; revertsJobId?: string } = {}): JobRecord {
+  create(userId: string, title: string, spec: string, opts: { kind?: 'change' | 'revert' | 'research'; requestedBy?: string; revertsJobId?: string; sheetId?: string } = {}): JobRecord {
     const id = randomUUID();
     this.db
-      .prepare('INSERT INTO agent_jobs (id, user_id, kind, title, spec, status, requested_by, reverts_job_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, userId, opts.kind ?? 'change', title, spec, 'queued', opts.requestedBy ?? null, opts.revertsJobId ?? null, now());
+      .prepare('INSERT INTO agent_jobs (id, user_id, kind, title, spec, status, requested_by, reverts_job_id, sheet_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, userId, opts.kind ?? 'change', title, spec, 'queued', opts.requestedBy ?? null, opts.revertsJobId ?? null, opts.sheetId ?? null, now());
     return this.get(id)!;
   }
 

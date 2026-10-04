@@ -83,7 +83,8 @@ export const api = {
   agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
   agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),
   agentTurn: streamAgentTurn,
-  createJob: (title: string, spec: string) => request<{ job: AgentJob }>('POST', '/api/agent/jobs', { title, spec }),
+  createJob: (title: string, spec: string, opts: { kind?: 'change' | 'research'; sheetId?: string | null } = {}) =>
+    request<{ job: AgentJob }>('POST', '/api/agent/jobs', { title, spec, ...opts }),
   latestJob: () => request<{ job: AgentJob | null }>('GET', '/api/agent/jobs/latest'),
   acknowledgeJob: (id: string) => request<{ ok: true }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/ack`, {}),
   listJobs: () => request<{ jobs: AgentJob[] }>('GET', '/api/agent/jobs'),

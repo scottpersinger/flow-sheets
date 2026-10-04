@@ -8,10 +8,13 @@
 import '../env.ts';
 import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { execFile } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { displayValue } from '../../shared/agent/sheetRead.ts';
+import { Engine } from '../../shared/formula/engine.ts';
 import { openDb } from '../db.ts';
+import { SheetStore } from '../sheets.ts';
 import { Git, GitHub, githubConfig } from './git.ts';
 import { JobStore, REPO_ROOT, type JobRecord } from './jobs.ts';
 
@@ -21,6 +24,8 @@ const TIMEOUT_MS = 25 * 60 * 1000;
 /** How many times the coding agent is sent back to fix failing checks. */
 const MAX_FIX_ROUNDS = 2;
 const MAX_CODING_TURNS = 150;
+const MAX_RESEARCH_TURNS = 80;
+const MAX_RESEARCH_USD = 5;
 const CHANGELOG = 'CHANGELOG.md';
 
 const jobId = process.argv[2];
@@ -30,7 +35,8 @@ if (!jobId) {
 }
 
 const dataDir = path.resolve(process.env.DATA_DIR ?? path.join(REPO_ROOT, 'data'));
-const store = new JobStore(openDb(path.join(dataDir, 'app.db')));
+const db = openDb(path.join(dataDir, 'app.db'));
+const store = new JobStore(db);
 const job = store.get(jobId);
 if (!job) {
   console.error(`no job ${jobId}`);
@@ -62,6 +68,15 @@ const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
 
 try {
   store.setStatus(jobId, 'coding', { pid: process.pid });
+
+  // Research tasks never touch the app: run them in a scratch folder and record the report.
+  if (job.kind === 'research') {
+    const { report, cost } = await research(job);
+    store.setStatus(jobId, 'done', { summary: report, costUsd: cost });
+    log('Done.');
+    process.exit();
+  }
+
   const original = job.kind === 'revert' && job.revertsJobId ? store.get(job.revertsJobId) : null;
   if (job.kind === 'revert' && !original) throw new Error('The change to revert no longer exists.');
 
@@ -296,6 +311,10 @@ function describeTool(name: string, input: Record<string, unknown>): string {
     case 'Glob':
     case 'Grep':
       return `Searched for ${String(input.pattern ?? '')}`;
+    case 'WebSearch':
+      return `Searched the web for ${String(input.query ?? '')}`;
+    case 'WebFetch':
+      return `Read ${String(input.url ?? '')}`;
     case 'Bash': {
       const cmd = String(input.command ?? '').replace(/\s+/g, ' ');
       return `Ran ${cmd.length > 80 ? `${cmd.slice(0, 77)}…` : cmd}`;
@@ -303,6 +322,98 @@ function describeTool(name: string, input: Record<string, unknown>): string {
     default:
       return name;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Research
+
+/** Run Claude Code as a researcher: web search and read-only tools, in a scratch folder with the exported sheet. */
+async function research(job: JobRecord): Promise<{ report: string; cost: number }> {
+  const dir = path.join(dataDir, 'jobs', job.id);
+  mkdirSync(dir, { recursive: true });
+  let sheetNote = '';
+  if (job.sheetId) {
+    const exported = await exportSheet(job.userId, job.sheetId, path.join(dir, 'sheet'));
+    if (exported) {
+      log(`Exported "${exported.title}" (${exported.tabs} tab${exported.tabs === 1 ? '' : 's'}) for the researcher.`);
+      sheetNote = `\n\n## The user's spreadsheet: "${exported.title}"\n\nIt is exported in the folder \`sheet/\`: \`sheet/overview.json\` lists the tabs with their sizes and header rows, and \`sheet/<tab>.csv\` has every value of a tab as the user sees it. Read what the task needs.`;
+    } else {
+      log('The spreadsheet could not be exported; researching without it.');
+    }
+  }
+
+  const prompt = `You are the research agent of a spreadsheet app. The app's chat assistant handed you a task that needs more time or web access than a chat reply allows. Do the research and write the report; the assistant will act on it (often by writing the results into the spreadsheet).
+
+## Task: ${job.title}
+
+${job.spec}${sheetNote}
+
+## How to answer
+
+- Use web search and fetch pages when the task needs facts from the web. Next to each fact taken from the web, give the source URL.
+- Do not invent facts. When something cannot be found, say so for that item.
+- Reply with the report only, in plain text or simple markdown: the answer first, then the details. When the result is one line per item, include it as a markdown table or a CSV block so the assistant can write it into the spreadsheet.
+- Keep the report under about 3000 words.`;
+
+  const { GITHUB_TOKEN: _token, ...env } = process.env;
+  const options: Options = {
+    cwd: dir,
+    abortController: abort,
+    env: env as Record<string, string>,
+    settingSources: [],
+    tools: ['WebSearch', 'WebFetch', 'Read', 'Glob', 'Grep'],
+    allowedTools: ['WebSearch', 'WebFetch', 'Read', 'Glob', 'Grep'],
+    permissionMode: 'default',
+    maxTurns: MAX_RESEARCH_TURNS,
+    maxBudgetUsd: MAX_RESEARCH_USD,
+  };
+
+  let report = '';
+  let cost = 0;
+  let failure: string | null = null;
+  for await (const m of query({ prompt, options })) {
+    const line = describe(m);
+    if (line) log(line);
+    if (m.type === 'result') {
+      cost = m.total_cost_usd;
+      if (m.subtype === 'success') report = m.result.trim();
+      else failure = m.errors.join('\n') || `The research agent stopped (${m.subtype.replace(/_/g, ' ')}).`;
+    }
+  }
+  if (abort.signal.aborted) throw new Error('The research took too long and was stopped.');
+  if (failure) throw new Error(failure);
+  if (!report) throw new Error('The research agent produced no report.');
+  return { report, cost };
+}
+
+/** Write a spreadsheet as CSV files (displayed values) plus an overview, for the researcher to read. */
+async function exportSheet(userId: string, sheetId: string, dir: string): Promise<{ title: string; tabs: number } | null> {
+  const sheets = new SheetStore(db, path.join(dataDir, 'sheets'));
+  const res = await sheets.load(userId, sheetId);
+  if (!res) return null;
+  mkdirSync(dir, { recursive: true });
+  const src = { workbook: res.workbook, engine: new Engine(res.workbook) };
+  const overview: { name: string; file: string; rows: number; columns: number; header: string[] }[] = [];
+  for (const tab of res.workbook.tabs) {
+    const ext = src.engine.extent(tab.id);
+    const lines: string[] = [];
+    for (let r = 0; r < ext.rows; r++) {
+      const cells: string[] = [];
+      for (let c = 0; c < ext.cols; c++) cells.push(csvCell(displayValue(src, tab, r, c)));
+      lines.push(cells.join(','));
+    }
+    const file = `${tab.name.replace(/[^A-Za-z0-9 _.-]+/g, '_')}.csv`;
+    writeFileSync(path.join(dir, file), `${lines.join('\n')}\n`);
+    const header: string[] = [];
+    for (let c = 0; c < ext.cols; c++) header.push(ext.rows ? displayValue(src, tab, 0, c) : '');
+    overview.push({ name: tab.name, file: `sheet/${file}`, rows: ext.rows, columns: ext.cols, header });
+  }
+  writeFileSync(path.join(dir, 'overview.json'), JSON.stringify({ title: res.meta.title, tabs: overview }, null, 2));
+  return { title: res.meta.title, tabs: res.workbook.tabs.length };
+}
+
+function csvCell(v: string): string {
+  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
 // ---------------------------------------------------------------------------

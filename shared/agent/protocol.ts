@@ -69,11 +69,13 @@ export type AgentJobStatus = 'queued' | 'starting' | 'coding' | 'verifying' | 'b
 /** A change to the app's own code requested through the assistant: the record of the change. */
 export interface AgentJob {
   id: string;
-  /** A change, or the revert of an earlier change. */
-  kind: 'change' | 'revert';
+  /** A change to the app, the revert of an earlier change, or a research task whose result comes back to the chat. */
+  kind: 'change' | 'revert' | 'research';
   title: string;
   /** The request given to the coding agent. */
   spec: string;
+  /** For research: the spreadsheet exported for the task, if any. */
+  sheetId?: string;
   status: AgentJobStatus;
   /** Progress lines, oldest first. */
   log: string[];
@@ -136,4 +138,5 @@ export const CLIENT_TOOLS = new Set([
   'open_sheet',
   // Runs in the browser so the user can confirm it there; the server then queues the job.
   'request_app_change',
+  'request_research',
 ]);
