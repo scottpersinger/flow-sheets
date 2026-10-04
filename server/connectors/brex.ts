@@ -21,9 +21,29 @@ function headers(ctx: FetchContext): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
 }
 
-function describeError(status: number): ConnectorError | undefined {
+/** The read-only scope (as named in the Brex dashboard's user token page) that each endpoint needs. */
+const SCOPES: [prefix: string, scope: string][] = [
+  ['/v2/users', 'Users'],
+  ['/v2/cards', 'Cards'],
+  ['/v2/transactions/card', 'Transactions card'],
+  ['/v2/transactions/cash', 'Transactions cash'],
+  ['/v2/accounts/cash', 'Accounts cash'],
+  ['/v2/expenses', 'Expenses card'],
+  ['/v2/budgets', 'Budgets'],
+];
+
+export function scopeFor(path: string): string {
+  return SCOPES.find(([prefix]) => path.startsWith(prefix))?.[1] ?? 'the matching';
+}
+
+function describeError(status: number, path: string): ConnectorError | undefined {
   if (status === 401) return new ConnectorError('auth', 'Brex rejected the user token (401). It may be invalid, expired or revoked; create a new one in the Brex dashboard (Developer > User Tokens) and update the connection.');
-  if (status === 403) return new ConnectorError('forbidden', 'Brex denied access (403). The user token is missing a required scope; create a token with the read-only scopes for transactions, cards, users, accounts, expenses and budgets.');
+  if (status === 403) {
+    return new ConnectorError(
+      'forbidden',
+      `Brex denied access to ${path} (403): the user token does not have the "${scopeFor(path)}" read-only scope. In the Brex dashboard (Developer > User Tokens) add that scope to the token, or create a new token with read-only access to transactions, cards, users, accounts, expenses and budgets, and update the connection.`,
+    );
+  }
   if (status === 429) return new ConnectorError('rate_limited', 'Brex is rate limiting requests (429), even after retrying. Wait a minute and try again.');
   return status >= 500 ? defaultHttpError('Brex', status) : undefined;
 }
@@ -34,8 +54,18 @@ function get(ctx: FetchContext, path: string, query: Record<string, string | str
     if (Array.isArray(v)) for (const x of v) url.searchParams.append(k, x);
     else if (v !== undefined) url.searchParams.set(k, v);
   }
-  return getJson(ctx, url.href, { service: 'Brex', headers: headers(ctx), describe: describeError });
+  return getJson(ctx, url.href, { service: 'Brex', headers: headers(ctx), describe: (status) => describeError(status, path) });
 }
+
+/** Endpoints the connection test tries, each needing a different scope; one success is enough. */
+const PROBES: [path: string, query: Record<string, string>][] = [
+  ['/v2/cards', { limit: '1' }],
+  ['/v2/transactions/card/primary', { limit: '1' }],
+  ['/v2/accounts/cash', { limit: '1' }],
+  ['/v2/expenses/card', { limit: '1' }],
+  ['/v2/budgets', { limit: '1' }],
+  ['/v2/users/me', {}],
+];
 
 /** Fetch every page of a list endpoint (following next_cursor) until the row cap. */
 export async function paginate(
@@ -326,8 +356,26 @@ export const brex: Connector = {
   ],
   setupHelp:
     'Create a user token in the Brex dashboard under Developer > User Tokens. Give it read-only access to transactions, cards, users, accounts, expenses and budgets. The token is stored encrypted on the server and is never shown again.',
+  // A token is fine if it can read anything this connector uses; datasets whose scope is missing report
+  // that scope by name when they are fetched. Only a token with none of the scopes fails the test.
   test: async (ctx) => {
-    await get(ctx, '/v2/users/me');
+    const missing: string[] = [];
+    for (const [path, query] of PROBES) {
+      try {
+        await get(ctx, path, query);
+        return;
+      } catch (e) {
+        if (e instanceof ConnectorError && e.code === 'forbidden') {
+          missing.push(scopeFor(path));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new ConnectorError(
+      'forbidden',
+      `Brex accepted the user token but denied every request (403). The token has none of the read-only scopes this connector uses (${missing.join(', ')}). In the Brex dashboard (Developer > User Tokens) create a token with read-only access to transactions, cards, users, accounts, expenses and budgets.`,
+    );
   },
   datasets: [cardTransactions, cashTransactions, cashAccounts, cards, users, expenses, budgets] as Dataset[],
 };

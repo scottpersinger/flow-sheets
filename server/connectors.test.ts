@@ -52,6 +52,10 @@ const fakeBrex: typeof fetch = async (input, init) => {
   switch (url.pathname) {
     case '/v2/users/me':
       return json({ id: 'u1' });
+    case '/v2/cards':
+      return page([{ id: 'c1', last_four: '1234', card_name: 'Ops', status: 'ACTIVE', owner: { user_id: 'u1' }, card_type: 'VIRTUAL', limit_type: 'CARD' }]);
+    case '/v2/budgets':
+      return page([]);
     case '/v2/transactions/card/primary':
       return page(cardTx);
     case '/v2/accounts/cash':
@@ -168,8 +172,14 @@ describe('Brex datasets', () => {
 
   it('maps Brex errors to clear messages without the token', async () => {
     await expect(brex.test(ctx(10, 'bad-token'))).rejects.toThrow(/rejected the user token \(401\)/);
+    // One forbidden endpoint does not fail the test; a token with no usable scope does, naming them.
     failNext = [403];
-    await expect(brex.test(ctx())).rejects.toThrow(/missing a required scope/);
+    await expect(brex.test(ctx())).resolves.toBeUndefined();
+    failNext = [403, 403, 403, 403, 403, 403];
+    await expect(brex.test(ctx())).rejects.toThrow(/none of the read-only scopes .*Cards, Transactions card, Accounts cash, Expenses card, Budgets, Users/);
+    // A dataset whose scope is missing says which one.
+    failNext = [403];
+    await expect(ds('users').fetch(ctx(), {})).rejects.toThrow(/\/v2\/users \(403\): the user token does not have the "Users" read-only scope/);
     failNext = [429, 429, 429, 429, 429];
     await expect(brex.test(ctx())).rejects.toThrow(/rate limiting/);
     failNext = [500, 500, 500, 500, 500];
