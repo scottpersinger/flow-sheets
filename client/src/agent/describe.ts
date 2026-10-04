@@ -76,6 +76,12 @@ export function toolLabel(name: string, i: Input): string {
       return typeof i.range === 'string' ? `Read ${where(i)} in another spreadsheet` : 'Looked at another spreadsheet';
     case 'create_sheet':
       return `Created spreadsheet “${i.title}”`;
+    case 'list_connections':
+      return 'Checked your data connections';
+    case 'fetch_connector_data':
+      return `Previewed ${String(i.dataset ?? 'data')} from a connection`;
+    case 'ingest_connector_data':
+      return `${i.mode === 'append' ? 'Appended' : 'Imported'} ${String(i.dataset ?? 'data')} into ${typeof i.tab === 'string' ? `“${i.tab}”` : 'the sheet'}${typeof i.start_cell === 'string' ? ` at ${i.start_cell}` : ''}`;
     case 'web_search':
       return `Searched the web for “${i.query}”`;
     case 'image_search':

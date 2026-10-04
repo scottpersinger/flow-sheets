@@ -3,6 +3,7 @@
 // own edits, and everything from one agent request undoes as a single step.
 import { MAX_COLS, colToName, nameToCol, rangeToString, type Range } from '../../../shared/cellref.ts';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
+import { toCellInput, type FetchResult } from '../../../shared/connectors.ts';
 import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '../../../shared/agent/sheetRead.ts';
 import { hyperlinkFormula, safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage, hasContent, isDataImage, type CellStyle, type Tab } from '../../../shared/types.ts';
@@ -24,6 +25,8 @@ export interface ClientToolEnv {
   requestResearch(title: string, task: string, includeSheet: boolean): Promise<{ id: string; sheetIncluded: boolean }>;
   /** Store an image file on the server; resolves to its URL for a cell. */
   uploadImage(file: Blob): Promise<string>;
+  /** Run a connector query on the server (which holds the credentials), or return an earlier result by handle. */
+  fetchConnectorData(connectionId: string, body: { dataset: string; params: Record<string, unknown>; handle?: string }): Promise<FetchResult>;
 }
 
 export class ToolError extends Error {}
@@ -411,6 +414,76 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       if (ctl.store.workbook.tabs.length <= 1) throw new ToolError('Cannot delete the only tab.');
       run((tx) => ops.deleteTab(tx, tab.id));
       return JSON.stringify({ deleted_tab: tab.name });
+    }
+
+    case 'ingest_connector_data': {
+      const m = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(str(i.start_cell) ?? 'A1');
+      if (!m) throw new ToolError(`"${i.start_cell}" is not a cell address. Use one cell, such as A1.`);
+      const r0 = Number(m[2]) - 1;
+      const c0 = columnOf(m[1]);
+      const tabName = str(i.tab)?.trim();
+      const existing = tabName ? ctl.store.workbook.tabs.find((t) => t.name.toLowerCase() === tabName.toLowerCase()) : ctl.tab;
+      if (!existing && tabName) {
+        const problem = ops.validateTabName(ctl.store.workbook.tabs, '', tabName);
+        if (problem) throw new ToolError(problem);
+      }
+      let data: FetchResult;
+      try {
+        data = await env.fetchConnectorData(String(i.connection_id), {
+          dataset: String(i.dataset),
+          params: (i.params as Record<string, unknown> | undefined) ?? {},
+          handle: str(i.result_handle),
+        });
+      } catch (e) {
+        throw new ToolError(e instanceof Error ? e.message : String(e));
+      }
+      const nCols = data.columns.length;
+      if (!nCols) throw new ToolError('The dataset returned no columns.');
+      if (c0 + nCols > MAX_COLS) throw new ToolError('That would go past the last column; use a start_cell further left.');
+      const append = i.mode === 'append';
+      let tabId = existing?.id ?? '';
+      let firstRow = r0;
+      let header = true;
+      run((tx) => {
+        if (!existing) {
+          tabId = ops.addTab(tx, ctl.store.workbook.tabs.indexOf(ctl.tab));
+          ops.renameTab(tx, tabId, tabName!);
+        }
+        const tab = tx.tab(tabId);
+        if (append) {
+          // Below the last non-empty cell in these columns, at or under the start row.
+          let last = -1;
+          for (const { r, key } of ops.existingKeysIn(tab, { r1: r0, c1: c0, r2: tab.rows - 1, c2: c0 + nCols - 1 })) {
+            if (hasContent(tab.cells[key]) && r > last) last = r;
+          }
+          if (last >= 0) [firstRow, header] = [last + 1, false];
+        } else {
+          ops.clearContents(tx, tabId, [{ r1: r0, c1: c0, r2: tab.rows - 1, c2: c0 + nCols - 1 }]);
+        }
+        const lines = header ? [data.columns.map((c) => c.name), ...data.rows] : data.rows;
+        if (firstRow + lines.length > tab.rows) tx.setTabProp(tabId, 'rows', firstRow + lines.length);
+        if (c0 + nCols > tab.cols) tx.setTabProp(tabId, 'cols', c0 + nCols);
+        lines.forEach((row, dr) =>
+          data.columns.forEach((col, dc) => {
+            const v = toCellInput(row[dc] ?? null, header && dr === 0 ? 'string' : col.type);
+            if (v !== null) ops.setInput(tx, tabId, firstRow + dr, c0 + dc, v);
+          }),
+        );
+      });
+      show(ctl, tabId);
+      const tab = tabOf(ctl, ctl.store.getTab(tabId)!.name);
+      const height = data.rows.length + (header ? 1 : 0);
+      const rg = { r1: firstRow, c1: c0, r2: firstRow + Math.max(height, 1) - 1, c2: c0 + nCols - 1 };
+      return JSON.stringify({
+        tab: tab.name,
+        ...(existing ? {} : { created_tab: true }),
+        range_written: `${tab.name}!${rangeToString(rg)}`,
+        rows_written: data.rows.length,
+        header_written: header,
+        columns: data.columns.map((c) => c.name),
+        truncated: data.truncated,
+        ...(data.truncated ? { note: 'The row cap was reached; pass a larger params.limit (up to 50000) or a narrower date range for everything.' } : {}),
+      });
     }
 
     case 'select_range': {

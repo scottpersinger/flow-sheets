@@ -100,6 +100,18 @@ The conversion runs on the server (`server/xlsxImport.ts`). `.xlsx` files are re
 
 Features the app doesn't support are reported in a banner after import: unsupported functions (shown as `#NAME?`), table references or links to other files (shown as `#ERROR!`), merged cells (unmerged, with the value kept in the top-left cell) and hidden sheets. Charts, images, comments, conditional formatting, data validation and filter criteria are dropped. Uploads are limited to 20 MB, 300 MB uncompressed and 1 million cells.
 
+## Connectors
+
+The **Connectors** page (from the home page, or File > Data connectors… in a sheet) connects external data
+sources, starting with **Brex** (card and cash transactions, cash accounts, cards, users, expenses, budgets).
+For Brex, paste a read-only user token from the Brex dashboard (Developer > User Tokens). The token is tested,
+stored encrypted (key from `CONNECTOR_ENCRYPTION_KEY`, or one generated in `data/connector.key`) and never
+shown again. The assistant can then pull data in: "ingest my Brex card transactions from the last 30 days into
+a tab called Brex" calls `list_connections` and then `ingest_connector_data`.
+
+See [docs/connectors.md](docs/connectors.md) for how it works and how to add a connector or dataset (API key or
+OAuth 2.0).
+
 ## Storage
 
 - `data/app.db`: SQLite database holding users, sessions, sheet metadata (owner, title, timestamps), assistant conversations and per-user assistant usage.

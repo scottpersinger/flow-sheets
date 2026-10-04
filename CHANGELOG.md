@@ -2,6 +2,61 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-04 — Add Connectors framework with Brex connector
+
+I've added the Connectors framework with Brex as the first connector, and three new assistant tools. Typecheck and all tests pass, but I couldn't run the client build here (it needed approval), so the new page has been type-checked but not built or opened in a browser.
+
+Users connect Brex on a new Connectors page, reachable from the home page and from File > Data connectors… in a sheet. They paste a read-only Brex user token, which is tested before saving and stored encrypted; afterwards the app shows only "Connected" and the last four characters. The OAuth sign-in plumbing for future connectors is also in place.
+
+The new tools:
+- **`list_connections()`** returns the user's connections (id, connector, name, status) and each connector's datasets with their parameters. Brex has `card_transactions`, `cash_transactions`, `cash_accounts`, `cards`, `users`, `expenses` and `budgets`. Date-based datasets accept a start date, `last_days` (e.g. 30) or `end_date`, and every dataset accepts `limit` (default 5000 rows, up to 50,000).
+- **`fetch_connector_data(connection_id, dataset, params?, preview_rows?)`** returns a preview (20 rows by default), the total row count, whether the data was cut off at the row limit, and a `result_handle`. It doesn't write to the sheet.
+- **`ingest_connector_data(connection_id, dataset, params?, result_handle?, tab?, start_cell = "A1", mode = "replace" | "append")`** writes a header and all rows into the open sheet in one undoable step, creating the tab if needed. Numbers and dates go in as real values and existing formatting is kept. It returns the rows and range written and whether the data was cut off. Pass `result_handle` from an earlier preview to write that result without fetching again.
+
+The assistant never sees credentials and is told to send users to the Connectors page rather than accept keys in chat. Saving the ingest settings for a later "Refresh" was optional and is not built. How to add a connector is documented in `docs/connectors.md`, linked from the README.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-04.
+
+### Request
+
+User request: add a "Connector" feature to the Sheets app so a user can connect dynamic external data sources and pull their data into a spreadsheet. The interactive agent (the assistant with sheet tools) must be able to use connectors when the user says e.g. "ingest Brex card transactions from the last 30 days into this sheet". The first connector is Brex.
+
+1. Connector framework (generic, extensible)
+- Define a connector interface/registry in the codebase: id, display name, icon, auth type(s), config fields, and a list of "datasets" (named, parameterised queries) each with: id, description, parameter schema (e.g. start_date, end_date, limit), and a fetch function that returns a tabular result (header row + rows of primitive values).
+- Auth types supported by the framework: (a) API key / token (user enters one or more secret fields in the UI), and (b) OAuth 2.0 authorization-code flow (UI "Connect" button -> provider consent -> callback route in the app -> tokens stored, refresh handled automatically). Brex ships with API key first; the OAuth plumbing (callback route, state/CSRF param, token refresh) should be built generically so future connectors (e.g. Google, Stripe, QuickBooks) can use it. 
+- Credentials are stored server-side per user, encrypted at rest, never returned to the browser after saving (UI shows only "Connected" + masked suffix) and never exposed to the agent or written into cells. Agent tools must reference connections by id only.
+
+2. UI
+- A "Connectors" page reachable from the home page (and a menu entry inside an open sheet). It lists available connectors (Brex to start) and the user's configured connections with status (connected / error / needs reauth), last used time, and Disconnect / Edit / Test connection actions.
+- Setup dialog per connector driven by the connector's config schema: for Brex, a password-style field for the Brex User Token (API key) with a short help text on how to create one in Brex dashboard (Developer > User Tokens) and the scopes needed (read-only: transactions, cards, users, accounts, expenses, budgets). A "Test connection" button calls a cheap Brex endpoint (e.g. GET /v2/users/me or /v2/accounts/cash) and shows success/failure before saving. Allow a user-chosen connection name (e.g. "Brex - Production").
+
+3. Brex connector
+- Base URL https://platform.brex.com, auth header "Authorization: Bearer <token>". Handle cursor-based pagination (next_cursor) and 429 rate limits with retry/backoff; cap rows per ingest (default 5000) and report truncation.
+- Datasets: 
+  - card_transactions: GET /v2/transactions/card/primary (params: posted_at_start, limit/cursor) -> columns: id, initiated_at, posted_at, description, merchant, amount (decimal, USD, convert from minor units/cents), currency, card_id, user/expense id where available, status.
+  - cash_transactions: GET /v2/transactions/cash/{cash_account_id} (param account id; if omitted, iterate over accounts from /v2/accounts/cash).
+  - cash_accounts: GET /v2/accounts/cash -> id, name, status, current balance, available balance.
+  - cards: GET /v2/cards -> id, last four, card name, status, owner user id, card type.
+  - users: GET /v2/users -> id, name, email, status, department/location where present.
+  - expenses: GET /v2/expenses/card (with expand for merchant/budget/user) -> id, date, merchant, amount, category, memo, status, budget, user.
+  - budgets: GET /v2/budgets -> id, name, status, amount, period.
+  Each dataset should be easy to add to later.
+
+4. Agent tools (exposed to the interactive assistant, alongside the existing sheet tools)
+- list_connections(): returns the user's configured connections (id, connector type, name, status) and for each connector type the available datasets with descriptions and parameter schemas. No secrets.
+- fetch_connector_data(connection_id: string, dataset: string, params?: object, preview_rows?: integer): runs the query server-side and returns a preview (header + first N rows, default 20) plus total row count and a result handle, without writing to the sheet.
+- ingest_connector_data(connection_id: string, dataset: string, params?: object, tab?: string, start_cell?: string default "A1", mode: "replace" | "append" default "replace"): fetches the data and writes header + rows into the open spreadsheet (creating the tab if it does not exist), writing real numbers and ISO dates (not strings) and keeping existing formatting; returns rows written, range written, and whether truncated. Writing should be done in bulk, not cell by cell, so thousands of rows are fast.
+- If no connection exists for the requested source, the agent should tell the user to set one up on the Connectors page (optionally with a link) rather than asking for a key in chat. The agent must never ask for or accept API keys in the chat.
+- Optionally store the ingest definition (connection, dataset, params, target tab/range) in sheet metadata so a "Refresh" action can re-run it later; this is a nice-to-have and can be a follow-up.
+
+5. Example: with the Brex connection "Brex - Production" configured, the user opens a blank sheet and says "Pull my Brex card transactions since 2025-01-01 into a tab called Brex Transactions". The agent calls list_connections, then ingest_connector_data(connection_id, "card_transactions", {posted_at_start:"2025-01-01"}, tab:"Brex Transactions"), and replies with a one-line summary such as "Wrote 842 rows to 'Brex Transactions'!A1:I843."
+
+6. Quality: errors from Brex (401 invalid token, 403 missing scope, 429, 5xx) must map to clear messages in the UI and in tool results. Add tests for pagination, amount conversion, and credential redaction. Add a short README/docs section on how to add a new connector.
+
+Files: README.md, client/src/agent/AgentProvider.tsx, client/src/agent/clientTools.test.ts, client/src/agent/clientTools.ts, client/src/agent/describe.ts, client/src/api.ts, client/src/commands.ts, client/src/main.tsx, client/src/pages/ConnectorsPage.tsx, client/src/pages/HomePage.tsx, client/src/pages/SpreadsheetPage.tsx, client/src/styles.css, docs/connectors.md, server/agent/prompt.ts, server/agent/tools.ts, server/app.ts, server/connectors.test.ts, server/connectors/brex.ts, server/connectors/secrets.ts, server/connectors/service.ts, server/connectors/types.ts, server/db.ts, shared/agent/protocol.ts, shared/connectors.ts
+
+Job: 5591e071-c7ed-4851-a4d7-a268757a2924
+
 ## 2026-10-04 — Add word wrap cell style
 
 I added a word-wrap cell style, and `format_range` now takes a `wrap` boolean: `true` wraps text onto several lines within the cell width, `false` puts it back on one line, where it can spill into empty cells to the right. `read_range` with `include_formats` reports wrapped cells as `wrap: true`. There's also a "Wrap text" toolbar button and a Format-menu item that toggle wrap for the selected range. Rows don't grow to fit wrapped text: text taller than the row starts at the top and is cut off at the bottom, so you'd need to resize the row to see it all. Typecheck and tests pass, including new tests for the tool and the line-breaking.

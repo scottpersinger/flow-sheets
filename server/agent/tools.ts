@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { Engine } from '../../shared/formula/engine.ts';
+import type { ConnectorService } from '../connectors/service.ts';
+import { ConnectorError } from '../connectors/types.ts';
 import type { SheetStore } from '../sheets.ts';
 
 const tab = z.string().optional().describe('Tab name. Defaults to the active tab.');
@@ -173,6 +175,39 @@ const schemas = {
     .describe('Read another spreadsheet in the account without opening it: an overview, or the values of a range. Not for the open spreadsheet; use read_range for that.'),
   create_sheet: z.object({ title: z.string().min(1).max(200) }).describe('Create a new, empty spreadsheet. Open it with open_sheet to fill it in.'),
 
+  // --- Connectors: external data sources such as Brex ---
+  list_connections: z
+    .object({})
+    .describe(
+      "List the user's connections to external data sources (id, connector, name, status) and, for each connector, its datasets with descriptions and parameter schemas. Call this before fetching or ingesting connector data. Never shows credentials.",
+    ),
+  fetch_connector_data: z
+    .object({
+      connection_id: z.string().describe('Connection id from list_connections.'),
+      dataset: z.string().describe('Dataset id from list_connections, e.g. "card_transactions".'),
+      params: z.record(z.string(), z.unknown()).optional().describe("Dataset parameters, as described by the dataset's parameter schema."),
+      preview_rows: z.number().int().min(0).max(200).optional().describe('Rows to return in the preview. Defaults to 20.'),
+    })
+    .describe(
+      'Run a connector query on the server and return a preview (columns and the first rows), the total row count, whether the row cap truncated it, and a result_handle. Does not write to the spreadsheet; use ingest_connector_data for that (passing result_handle reuses this result).',
+    ),
+  ingest_connector_data: z
+    .object({
+      connection_id: z.string().describe('Connection id from list_connections.'),
+      dataset: z.string().describe('Dataset id from list_connections, e.g. "card_transactions".'),
+      params: z.record(z.string(), z.unknown()).optional().describe("Dataset parameters, as described by the dataset's parameter schema."),
+      result_handle: z.string().optional().describe('result_handle from an earlier fetch_connector_data with the same connection and dataset, to write that result instead of fetching again.'),
+      tab: z.string().optional().describe('Tab to write to; created if it does not exist. Defaults to the active tab.'),
+      start_cell: z.string().regex(/^\$?[A-Za-z]{1,3}\$?\d+$/).optional().describe('Top-left cell for the header row. Defaults to "A1".'),
+      mode: z
+        .enum(['replace', 'append'])
+        .optional()
+        .describe('replace (default): clear what is in the columns from start_cell down, then write the header and rows. append: add the rows below the existing data (header only if the area is empty).'),
+    })
+    .describe(
+      'Fetch a connector dataset and write it into the open spreadsheet in one step: a header row and the rows, with numbers and dates as real values, keeping existing formatting. Returns rows written, the range written and whether the row cap truncated the data.',
+    ),
+
   // --- Web (run on the server) ---
   web_search: z
     .object({
@@ -259,6 +294,40 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       const sheet = await env.sheets.create(env.userId, String(input.title).trim());
       return JSON.stringify({ id: sheet.id, title: sheet.title });
     }
+    case 'list_connections': {
+      const svc = connectorService(env);
+      const connections = svc.list(env.userId).map((c) => ({
+        id: c.id,
+        connector: c.connector,
+        name: c.name,
+        status: c.status,
+        ...(c.error ? { error: c.error } : {}),
+        ...(c.lastUsedAt ? { last_used_at: c.lastUsedAt } : {}),
+      }));
+      return JSON.stringify({
+        connections,
+        connectors: svc.connectorInfo().map((c) => ({ id: c.id, name: c.name, datasets: c.datasets })),
+        ...(connections.length ? {} : { note: 'No connections yet. Ask the user to add one on the Connectors page (/connectors). Never ask for API keys in the chat.' }),
+      });
+    }
+    case 'fetch_connector_data': {
+      const svc = connectorService(env);
+      try {
+        const res = await svc.fetch(env.userId, String(input.connection_id), String(input.dataset), input.params ?? {});
+        const n = typeof input.preview_rows === 'number' ? input.preview_rows : 20;
+        return JSON.stringify({
+          result_handle: res.handle,
+          columns: res.columns.map((c) => c.name),
+          preview: res.rows.slice(0, n),
+          total_rows: res.totalRows,
+          truncated: res.truncated,
+          ...(res.truncated ? { note: 'The row cap was reached; pass a larger params.limit (up to 50000) or a narrower date range for everything.' } : {}),
+        });
+      } catch (e) {
+        if (e instanceof ConnectorError) throw new ToolFailure(e.message);
+        throw e;
+      }
+    }
     case 'web_search':
     case 'image_search': {
       checkSearchRate(env.userId);
@@ -280,6 +349,19 @@ export async function runServerTool(name: string, input: Record<string, unknown>
 }
 
 export class ToolFailure extends Error {}
+
+// The app's ConnectorService, keyed by its SheetStore (which every server tool env carries).
+const connectorServices = new WeakMap<SheetStore, ConnectorService>();
+
+export function registerConnectorService(sheets: SheetStore, svc: ConnectorService): void {
+  connectorServices.set(sheets, svc);
+}
+
+function connectorService(env: ServerToolEnv): ConnectorService {
+  const svc = connectorServices.get(env.sheets);
+  if (!svc) throw new ToolFailure('Connectors are not available on this server.');
+  return svc;
+}
 
 // ---------------------------------------------------------------------------
 // Web and image search, via the Brave Search API. The key is server-side only: set BRAVE_SEARCH_API_KEY.

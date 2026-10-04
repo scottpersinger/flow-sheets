@@ -9,6 +9,9 @@ import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { AgentStore } from './agent/store.ts';
+import { registerConnectorService } from './agent/tools.ts';
+import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
+import { ConnectorError } from './connectors/types.ts';
 import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
 import { openDb } from './db.ts';
 import { ImageStore } from './images.ts';
@@ -24,6 +27,9 @@ declare module 'fastify' {
   interface FastifyRequest {
     user: User | null;
   }
+  interface FastifyInstance {
+    connectors: ConnectorService;
+  }
 }
 
 export interface AppOptions {
@@ -38,6 +44,8 @@ export interface AppOptions {
   sendMail?: Mailer;
   /** Public origin for links in email, e.g. https://sheets.example.com. Defaults to the request's own origin. */
   appUrl?: string;
+  /** Connector overrides (tests pass a fake fetch). */
+  connectors?: Partial<Omit<ConnectorServiceOptions, 'keyFile'>>;
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -66,6 +74,9 @@ export async function buildApp(opts: AppOptions) {
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
   await images.init();
   auth.purgeExpiredSessions();
+  const connectors = new ConnectorService(db, { keyFile: path.join(opts.dataDir, 'connector.key'), ...opts.connectors });
+  // Lets the agent's server tools (list_connections, fetch_connector_data) reach the user's connections.
+  registerConnectorService(sheets, connectors);
   const agent = new AgentService(new AgentStore(db), sheets, opts.agent);
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
@@ -82,6 +93,7 @@ export async function buildApp(opts: AppOptions) {
   // (JSON, under the default body limit) stay small however large the images are.
   app.addContentTypeParser(CELL_IMAGE_TYPES, { parseAs: 'buffer', bodyLimit: MAX_CELL_IMAGE_BYTES }, (_req, body, done) => done(null, body));
 
+  app.decorate('connectors', connectors);
   app.decorateRequest('user', null);
   app.addHook('onRequest', async (req) => {
     req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
@@ -98,6 +110,10 @@ export async function buildApp(opts: AppOptions) {
       maxAge: SESSION_TTL_MS / 1000,
     });
   };
+
+  /** Public origin of the app, for links and OAuth redirect URIs. */
+  const originOf = (req: FastifyRequest) =>
+    (opts.appUrl ?? process.env.APP_URL ?? `${req.headers['x-forwarded-proto'] ?? req.protocol}://${req.headers.host}`).replace(/\/$/, '');
 
   const requireUser = async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.user) return reply.code(401).send({ error: 'Not signed in' });
@@ -137,8 +153,7 @@ export async function buildApp(opts: AppOptions) {
 
     const reset = auth.createPasswordReset(email);
     if (reset) {
-      const origin = opts.appUrl ?? process.env.APP_URL ?? `${req.headers['x-forwarded-proto'] ?? req.protocol}://${req.headers.host}`;
-      const link = `${origin.replace(/\/$/, '')}/reset?token=${reset.token}`;
+      const link = `${originOf(req)}/reset?token=${reset.token}`;
       const minutes = Math.round(RESET_TTL_MS / 60000);
       try {
         await sendMail({
@@ -314,6 +329,108 @@ export async function buildApp(opts: AppOptions) {
       // Images never change once uploaded.
       reply.header('Content-Type', img.type).header('Cache-Control', 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff');
       return reply.send(createReadStream(img.file));
+    });
+  });
+
+  // --- Connectors (external data sources) ---------------------------------------
+  const connectorStatus = (e: ConnectorError) => (e.code === 'not_found' ? 404 : e.code === 'rate_limited' ? 429 : e.code === 'unavailable' ? 502 : 400);
+  /** Run a connector call, answering ConnectorErrors with their (credential-free) message. */
+  const connectorCall = async <T>(reply: FastifyReply, fn: () => Promise<T>): Promise<T | FastifyReply> => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof ConnectorError) return reply.code(connectorStatus(e)).send({ error: e.message, code: e.code });
+      throw e;
+    }
+  };
+  const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+  const oauthRedirectUri = (req: FastifyRequest) => `${originOf(req)}/api/connectors/oauth/callback`;
+
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    r.get('/api/connectors', async () => ({ connectors: connectors.connectorInfo() }));
+    r.get('/api/connections', async (req) => ({ connections: connectors.list(req.user!.id) }));
+
+    r.post('/api/connections', async (req, reply) => {
+      const body = asRecord(req.body);
+      return connectorCall(reply, async () => ({
+        connection: await connectors.create(req.user!.id, {
+          connector: String(body.connector ?? ''),
+          name: typeof body.name === 'string' ? body.name : undefined,
+          fields: asRecord(body.fields),
+        }),
+      }));
+    });
+
+    // Test credentials before saving them; with an id, blank secret fields use the saved ones.
+    r.post('/api/connections/test', async (req, reply) => {
+      const body = asRecord(req.body);
+      return connectorCall(reply, async () => {
+        const id = typeof body.id === 'string' && body.id ? { userId: req.user!.id, id: body.id } : undefined;
+        const connector = id ? (connectors.get(id.userId, id.id)?.connector ?? '') : String(body.connector ?? '');
+        await connectors.testCredentials(connector, asRecord(body.fields), id);
+        return { ok: true };
+      });
+    });
+
+    r.patch('/api/connections/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = asRecord(req.body);
+      return connectorCall(reply, async () => {
+        const connection = await connectors.update(req.user!.id, id, {
+          name: typeof body.name === 'string' ? body.name : undefined,
+          fields: body.fields ? asRecord(body.fields) : undefined,
+        });
+        return connection ? { connection } : reply.code(404).send({ error: 'Connection not found' });
+      });
+    });
+
+    r.delete('/api/connections/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (!connectors.delete(req.user!.id, id)) return reply.code(404).send({ error: 'Connection not found' });
+      return { ok: true };
+    });
+
+    r.post('/api/connections/:id/test', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      return connectorCall(reply, async () => ({ connection: await connectors.test(req.user!.id, id) }));
+    });
+
+    // Run a dataset query (or return an earlier result by handle); used by the ingest_connector_data tool.
+    r.post('/api/connections/:id/fetch', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = asRecord(req.body);
+      return connectorCall(reply, async () => {
+        const cached = typeof body.handle === 'string' ? connectors.cachedResult(req.user!.id, body.handle) : null;
+        return cached ?? (await connectors.fetch(req.user!.id, id, String(body.dataset ?? ''), body.params ?? {}));
+      });
+    });
+
+    // OAuth 2.0: send the browser to the provider's consent page; it comes back to the callback below.
+    r.get('/api/connectors/:connector/oauth/start', async (req, reply) => {
+      const { connector } = req.params as { connector: string };
+      const { name } = req.query as { name?: string };
+      try {
+        return reply.redirect(connectors.oauthStart(req.user!.id, connector, name, oauthRedirectUri(req)));
+      } catch (e) {
+        if (e instanceof ConnectorError) return reply.redirect(`/connectors?error=${encodeURIComponent(e.message)}`);
+        throw e;
+      }
+    });
+
+    r.get('/api/connectors/oauth/callback', async (req, reply) => {
+      const q = req.query as { state?: string; code?: string; error?: string; error_description?: string };
+      if (q.error || !q.state || !q.code) {
+        return reply.redirect(`/connectors?error=${encodeURIComponent(q.error_description || q.error || 'The sign-in was cancelled.')}`);
+      }
+      try {
+        const connection = await connectors.oauthCallback(req.user!.id, q.state, q.code);
+        return reply.redirect(`/connectors?connected=${encodeURIComponent(connection.id)}`);
+      } catch (e) {
+        if (e instanceof ConnectorError) return reply.redirect(`/connectors?error=${encodeURIComponent(e.message)}`);
+        throw e;
+      }
     });
   });
 

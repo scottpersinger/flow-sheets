@@ -20,6 +20,7 @@ export interface CommandHost {
   compareWithOriginal(): void;
   isBranch: boolean;
   goHome(): void;
+  openConnectors(): void;
   download(kind: 'csv' | 'json'): void;
   deleteTab(tabId: string): void;
 }
@@ -206,6 +207,7 @@ export function fileItems(host: CommandHost): MenuItem[] {
     { label: 'New spreadsheet', action: () => host.newSheet() },
     { label: 'Open…', action: () => host.goHome() },
     { label: 'Import Excel file (.xlsx, .xls)…', action: () => host.importXlsx() },
+    { label: 'Data connectors…', action: () => host.openConnectors() },
     'sep',
     { label: 'Rename', action: () => host.renameSheet() },
     { label: 'Create branch…', action: () => host.createBranch() },

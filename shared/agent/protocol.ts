@@ -136,6 +136,8 @@ export const CLIENT_TOOLS = new Set([
   'delete_tab',
   'select_range',
   'open_sheet',
+  // Fetches through the server (which holds the credentials) and writes into the live spreadsheet.
+  'ingest_connector_data',
   // Runs in the browser so the user can confirm it there; the server then queues the job.
   'request_app_change',
   'request_research',

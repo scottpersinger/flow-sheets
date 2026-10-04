@@ -286,7 +286,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
       if (signal.aborted) break;
       try {
-        const content = await runClientTool(call, { ctl: sheetRef.current?.ctl ?? null, group, openSheet: openSheetById, requestAppChange, requestResearch, uploadImage: api.uploadImage });
+        const content = await runClientTool(call, { ctl: sheetRef.current?.ctl ?? null, group, openSheet: openSheetById, requestAppChange, requestResearch, uploadImage: api.uploadImage, fetchConnectorData: api.fetchConnectorData });
         results.push({ id: call.id, content });
         updateTool(call.id, { status: 'ok' });
       } catch (e) {

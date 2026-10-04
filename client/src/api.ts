@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../shared/agent/protocol.ts';
+import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import { CELL_IMAGE_TOO_LARGE, type SheetMeta, type Workbook } from '../../shared/types.ts';
 
 export interface User {
@@ -88,6 +89,18 @@ export const api = {
   latestJob: () => request<{ job: AgentJob | null }>('GET', '/api/agent/jobs/latest'),
   acknowledgeJob: (id: string) => request<{ ok: true }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/ack`, {}),
   listJobs: () => request<{ jobs: AgentJob[] }>('GET', '/api/agent/jobs'),
+  listConnectors: () => request<{ connectors: ConnectorInfo[] }>('GET', '/api/connectors'),
+  listConnections: () => request<{ connections: ConnectionInfo[] }>('GET', '/api/connections'),
+  createConnection: (connector: string, name: string, fields: Record<string, string>) =>
+    request<{ connection: ConnectionInfo }>('POST', '/api/connections', { connector, name, fields }),
+  updateConnection: (id: string, name: string, fields: Record<string, string>) =>
+    request<{ connection: ConnectionInfo }>('PATCH', `/api/connections/${encodeURIComponent(id)}`, { name, fields }),
+  deleteConnection: (id: string) => request<{ ok: true }>('DELETE', `/api/connections/${encodeURIComponent(id)}`),
+  /** Test credentials before saving (with an id, blank secret fields use the saved ones). */
+  testCredentials: (connector: string, fields: Record<string, string>, id?: string) => request<{ ok: true }>('POST', '/api/connections/test', { connector, fields, id }),
+  testConnection: (id: string) => request<{ connection: ConnectionInfo }>('POST', `/api/connections/${encodeURIComponent(id)}/test`, {}),
+  fetchConnectorData: (id: string, body: { dataset: string; params: Record<string, unknown>; handle?: string }) =>
+    request<FetchResult>('POST', `/api/connections/${encodeURIComponent(id)}/fetch`, body),
   revertJob: (id: string) => request<{ job: AgentJob }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/revert`, {}),
 };
 
