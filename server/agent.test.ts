@@ -191,6 +191,27 @@ describe('agent', () => {
     expect(res.json().items).toEqual([]);
   });
 
+  it('sends attached images to the model and shows them in the transcript', async () => {
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64');
+    replies.push(() => ({ content: [text('A tiny PNG.')] }));
+    const events = await turn({ message: 'what is this?', context: home, images: [{ mediaType: 'image/png', data: png }] });
+    expect(events.some((e) => e.type === 'done')).toBe(true);
+    const content = requests[0].messages.at(-1)!.content as { type: string; source?: { media_type: string; data: string } }[];
+    expect(content.map((b) => b.type)).toEqual(['text', 'image', 'text']);
+    expect(content[1].source).toMatchObject({ type: 'base64', media_type: 'image/png', data: png });
+    const items = (await app.inject({ method: 'GET', url: '/api/agent', headers: { cookie } })).json().items as { kind: string; text?: string; images?: string[] }[];
+    expect(items[0]).toMatchObject({ kind: 'user', text: 'what is this?', images: [`data:image/png;base64,${png}`] });
+
+    // An image alone is a message too; bad media types and too many images are refused.
+    replies.push(() => ({ content: [text('ok')] }));
+    await turn({ context: home, images: [{ mediaType: 'image/png', data: png }] });
+    expect((requests[1].messages.at(-1)!.content as { type: string; text?: string }[]).at(-1)!.text).toBe('See the attached image.');
+    let res = await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home, images: [{ mediaType: 'image/svg+xml', data: png }] } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home, images: Array(5).fill({ mediaType: 'image/png', data: png }) } });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('validates the request before streaming', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home } });
     expect(res.statusCode).toBe(400);

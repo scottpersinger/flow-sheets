@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { isJobLive, JOB_ACTIVE_STATUSES, type AgentContext, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { isJobLive, JOB_ACTIVE_STATUSES, type AgentContext, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
@@ -26,7 +26,8 @@ interface AgentState {
   error: string | null;
   /** A destructive action waiting for the user's answer. */
   confirm: { question: string; answer(ok: boolean): void } | null;
-  send(text: string): void;
+  /** Send a message, optionally with images (pasted screenshots). */
+  send(text: string, images?: AgentImage[]): void;
   stop(): void;
   reset(): Promise<void>;
   /** The spreadsheet page reports the open spreadsheet (null when it closes). */
@@ -299,19 +300,19 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return results;
   };
 
-  const send = (text: string) => {
+  const send = (text: string, images: AgentImage[] = []) => {
     const message = text.trim();
-    if (!message || running) return;
+    if ((!message && !images.length) || running) return;
     const abort = new AbortController();
     abortRef.current = abort;
     // Everything the agent changes for this message undoes as one step.
     const group = `agent-${Date.now()}`;
-    setItems((prev) => [...prev, { kind: 'user', text: message }]);
+    setItems((prev) => [...prev, { kind: 'user', text: message, ...(images.length ? { images: images.map((i) => `data:${i.mediaType};base64,${i.data}`) } : {}) }]);
     setError(null);
     setRunning(true);
 
     void (async () => {
-      let req: AgentTurnRequest = { message, context: context() };
+      let req: AgentTurnRequest = { message, context: context(), ...(images.length ? { images } : {}) };
       try {
         for (;;) {
           let calls: ClientToolCall[] | null = null;

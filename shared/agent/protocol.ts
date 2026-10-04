@@ -29,10 +29,23 @@ export interface ClientToolResult {
 }
 
 /** Body of POST /api/agent/turn: a new user message, results of client tool calls, or both. */
+/** An image attached to a user message (pasted or dropped screenshot), already downscaled by the browser. */
+export interface AgentImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  /** Base64, no data: prefix. */
+  data: string;
+}
+
+export const IMAGE_MEDIA_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+export const MAX_IMAGES_PER_MESSAGE = 4;
+/** Per image, decoded bytes (the API allows 5 MB). */
+export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
 export interface AgentTurnRequest {
   message?: string;
   context: AgentContext;
   toolResults?: ClientToolResult[];
+  images?: AgentImage[];
 }
 
 /** Server-sent events streamed by POST /api/agent/turn. */
@@ -48,7 +61,7 @@ export type AgentEvent =
 
 /** One entry in the chat transcript, as shown in the panel. */
 export type ChatItem =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; /** data: URLs of attached images */ images?: string[] }
   | { kind: 'assistant'; text: string }
   | {
       kind: 'tool';

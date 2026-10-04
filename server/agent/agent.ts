@@ -2,7 +2,7 @@
 // the browser. Account tools run here; sheet tools run in the browser against the live spreadsheet,
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
-import { CLIENT_TOOLS, type AgentEvent, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
+import { CLIENT_TOOLS, IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
 import type { SheetStore } from '../sheets.ts';
 import { renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
 import { AgentStore, type MessageParam, type Pending } from './store.ts';
@@ -79,8 +79,14 @@ export class AgentService {
   checkTurn(userId: string, req: AgentTurnRequest): void {
     if (this.busy.has(userId)) throw new AgentError(409, 'The assistant is already working on a request.');
     const message = req.message?.trim();
-    if (!message && !req.toolResults?.length) throw new AgentError(400, 'Send a message or tool results.');
+    const images = req.images ?? [];
+    if (!message && !images.length && !req.toolResults?.length) throw new AgentError(400, 'Send a message or tool results.');
     if (message && message.length > 20_000) throw new AgentError(400, 'That message is too long.');
+    if (!Array.isArray(images) || images.length > MAX_IMAGES_PER_MESSAGE) throw new AgentError(400, `Attach at most ${MAX_IMAGES_PER_MESSAGE} images.`);
+    for (const img of images) {
+      if (!img || typeof img.data !== 'string' || !IMAGE_MEDIA_TYPES.has(img.mediaType)) throw new AgentError(400, 'Images must be PNG, JPEG, GIF or WebP.');
+      if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
+    }
     if (!req.context || (req.context.page !== 'home' && req.context.page !== 'sheet')) throw new AgentError(400, 'Missing context.');
     if (this.store.requestsToday(userId) >= this.dailyLimit) {
       throw new AgentError(429, "You've reached today's limit for the assistant. Try again tomorrow.");
@@ -101,11 +107,16 @@ export class AgentService {
   private async loop(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal): Promise<void> {
     const conv = this.store.active(userId);
 
-    // 1. The new user message: results for any tool calls still pending, then the context and text.
-    const content: (ToolResult | Anthropic.Beta.BetaTextBlockParam)[] = [];
+    // 1. The new user message: results for any tool calls still pending, then the context, images and text.
+    const content: (ToolResult | Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam)[] = [];
     if (conv.pending) content.push(...completePending(conv.pending, req.toolResults ?? []));
     const text = req.message?.trim();
-    if (text) content.push({ type: 'text', text: renderContext(req.context) }, { type: 'text', text });
+    const images: AgentImage[] = req.images ?? [];
+    if (text || images.length) {
+      content.push({ type: 'text', text: renderContext(req.context) });
+      for (const img of images) content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+      content.push({ type: 'text', text: text || 'See the attached image.' });
+    }
     if (!content.length) throw new AgentError(400, 'Nothing to send.');
     this.store.append(conv.id, { role: 'user', content });
     this.store.setPending(conv.id, null);
@@ -229,13 +240,20 @@ export function toChatItems(messages: MessageParam[]): ChatItem[] {
       items.push({ kind: role, text: m.content });
       continue;
     }
+    // Images in a user message come before its text; collect them and attach to the text item.
+    let pendingImages: string[] = [];
     for (const block of m.content) {
-      if (block.type === 'text') {
+      if (block.type === 'image' && role === 'user' && block.source.type === 'base64') {
+        pendingImages.push(`data:${block.source.media_type};base64,${block.source.data}`);
+      } else if (block.type === 'text') {
         const text = role === 'user' ? stripContext(block.text) : block.text;
         if (!text) continue;
         const last = items[items.length - 1];
         if (role === 'assistant' && last?.kind === 'assistant') last.text += text;
-        else items.push({ kind: role, text });
+        else if (role === 'user' && pendingImages.length) {
+          items.push({ kind: 'user', text, images: pendingImages });
+          pendingImages = [];
+        } else items.push({ kind: role, text });
       } else if (block.type === 'tool_use') {
         const item: ChatItem = { kind: 'tool', id: block.id, name: block.name, input: block.input as Record<string, unknown>, status: 'running' };
         tools.set(block.id, item);

@@ -5,6 +5,8 @@ import { MOD } from '../commands.ts';
 import { useAgent } from './AgentProvider.tsx';
 import { targetOf } from './clientTools.ts';
 import { toolLabel } from './describe.ts';
+import { imageFiles, prepareImage, type PreparedImage } from './images.ts';
+import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/agent/protocol.ts';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
@@ -44,10 +46,30 @@ export function AgentPanel() {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [draft]);
 
+  const [attachments, setAttachments] = useState<PreparedImage[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+
   const submit = (text: string) => {
-    if (!text.trim() || agent.running) return;
-    agent.send(text);
+    if ((!text.trim() && !attachments.length) || agent.running) return;
+    agent.send(text, attachments.map(({ mediaType, data }) => ({ mediaType, data })));
     setDraft('');
+    setAttachments([]);
+  };
+
+  /** Add pasted or dropped images to the next message. */
+  const attach = async (files: File[]) => {
+    if (!files.length) return;
+    setAttachError(null);
+    const room = MAX_IMAGES_PER_MESSAGE - attachments.length;
+    if (room <= 0) return setAttachError(`At most ${MAX_IMAGES_PER_MESSAGE} images per message.`);
+    try {
+      const prepared = await Promise.all(files.slice(0, room).map(prepareImage));
+      setAttachments((prev) => [...prev, ...prepared].slice(0, MAX_IMAGES_PER_MESSAGE));
+      if (files.length > room) setAttachError(`Only ${MAX_IMAGES_PER_MESSAGE} images fit in one message; the rest were left out.`);
+    } catch {
+      setAttachError('That image could not be read.');
+    }
+    inputRef.current?.focus();
   };
 
   const last = agent.items[agent.items.length - 1];
@@ -83,6 +105,15 @@ export function AgentPanel() {
         {agent.items.map((it, i) =>
           it.kind === 'user' ? (
             <div key={i} className="agent-msg user">
+              {it.images && it.images.length > 0 && (
+                <div className="agent-msg-images">
+                  {it.images.map((src, j) => (
+                    <a key={j} href={src} target="_blank" rel="noreferrer" title="Open the image">
+                      <img src={src} alt={`Attached image ${j + 1}`} />
+                    </a>
+                  ))}
+                </div>
+              )}
               {it.text}
             </div>
           ) : it.kind === 'assistant' ? (
@@ -123,30 +154,81 @@ export function AgentPanel() {
           e.preventDefault();
           submit(draft);
         }}
+        onDragOver={(e) => {
+          if (imageFiles(e.dataTransfer).length || Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = imageFiles(e.dataTransfer);
+          if (!files.length) return;
+          e.preventDefault();
+          void attach(files);
+        }}
       >
-        <textarea
-          ref={inputRef}
-          rows={1}
-          value={draft}
-          placeholder={onSheet ? 'Ask about this spreadsheet…' : 'Ask about your spreadsheets…'}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              submit(draft);
-            }
-            if (e.key === 'Escape') agent.setOpen(false);
-          }}
-        />
-        {agent.running ? (
-          <button type="button" className="btn agent-send" onClick={agent.stop}>
-            Stop
-          </button>
-        ) : (
-          <button type="submit" className="btn primary agent-send" disabled={!draft.trim()}>
-            Send
-          </button>
+        {attachments.length > 0 && (
+          <div className="agent-attachments">
+            {attachments.map((img, i) => (
+              <div key={i} className="agent-attachment">
+                <img src={img.dataUrl} alt={`Attached image ${i + 1}`} />
+                <button type="button" aria-label="Remove image" title="Remove" onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
         )}
+        {attachError && <div className="agent-error">{attachError}</div>}
+        <div className="agent-compose-row">
+          <input
+            id="agent-attach-input"
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            hidden
+            onChange={(e) => {
+              void attach(Array.from(e.target.files ?? []));
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            className="btn agent-attach"
+            title="Attach an image (or paste a screenshot)"
+            aria-label="Attach an image"
+            onClick={() => document.getElementById('agent-attach-input')?.click()}
+            disabled={agent.running}
+          >
+            <PaperclipIcon />
+          </button>
+          <textarea
+            ref={inputRef}
+            rows={1}
+            value={draft}
+            placeholder={onSheet ? 'Ask about this spreadsheet, or paste a screenshot…' : 'Ask about your spreadsheets, or paste a screenshot…'}
+            onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const files = imageFiles(e.clipboardData);
+              if (!files.length) return;
+              e.preventDefault();
+              void attach(files);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit(draft);
+              }
+              if (e.key === 'Escape') agent.setOpen(false);
+            }}
+          />
+          {agent.running ? (
+            <button type="button" className="btn agent-send" onClick={agent.stop}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" className="btn primary agent-send" disabled={!draft.trim() && !attachments.length}>
+              Send
+            </button>
+          )}
+        </div>
       </form>
     </aside>
   );
@@ -252,6 +334,14 @@ function failureLabel(error: string | undefined): string {
   if (error?.startsWith('The user declined')) return 'Declined';
   if (error === 'Stopped' || error?.includes('interrupted')) return 'Stopped';
   return 'Failed';
+}
+
+function PaperclipIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10.5 4.5 5.8 9.2a1.5 1.5 0 0 0 2.1 2.1l5-5a3 3 0 0 0-4.2-4.2l-5.3 5.3a4.5 4.5 0 0 0 6.4 6.4L13.5 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function SparkIcon() {
