@@ -93,6 +93,37 @@ export function cellFont(st: { b?: boolean; i?: boolean } | undefined): string {
   return `${st?.i ? 'italic ' : ''}${st?.b ? 'bold ' : ''}${FONT_SIZE}px ${FONT_FAMILY}`;
 }
 
+/**
+ * Break text into lines no wider than maxW: at spaces where possible, inside a word when the word alone is
+ * too wide. Existing line breaks are kept.
+ */
+export function wrapText(text: string, maxW: number, width: (s: string) => number): string[] {
+  const out: string[] = [];
+  for (const para of text.split('\n')) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (width(candidate) <= maxW || !candidate) {
+        line = candidate;
+        continue;
+      }
+      if (line) out.push(line);
+      line = '';
+      // Split a word that is wider than the cell on its own.
+      let rest = word;
+      while (rest && width(rest) > maxW) {
+        let n = 1;
+        while (n < rest.length && width(rest.slice(0, n + 1)) <= maxW) n++;
+        out.push(rest.slice(0, n));
+        rest = rest.slice(n);
+      }
+      line = rest;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
 function defaultAlign(v: Scalar): 'left' | 'center' | 'right' {
   if (typeof v === 'number') return 'right';
   if (typeof v === 'boolean' || v instanceof CellError) return 'center';
@@ -347,12 +378,13 @@ function drawCellText(
   const align = st?.align ?? defaultAlign(v);
   const pad = 3;
   const reserve = filter && r === filter.r1 && c >= filter.c1 && c <= filter.c2 ? 18 : 0;
-  const lines = text.split('\n');
+  const wrap = !!st?.wrap && typeof v === 'string';
+  const lines = wrap ? wrapText(text, Math.max(1, w - reserve - pad * 2 - 1), (ln) => measure(ctx, font, ln)) : text.split('\n');
   const tw = Math.max(...lines.map((ln) => measure(ctx, font, ln)));
 
-  // Text overflows into empty neighbors to the right (left-aligned strings only).
+  // Text overflows into empty neighbors to the right (left-aligned, unwrapped strings only).
   let clipRight = x + w - reserve;
-  if (align === 'left' && typeof v === 'string' && tw + pad * 2 > w && !reserve) {
+  if (align === 'left' && typeof v === 'string' && !wrap && tw + pad * 2 > w && !reserve) {
     let cc = c + 1;
     let edge = x + w;
     while (cc <= reg.cols[1] && edge < x + tw + pad * 2 && !hasContent(tab.cells[cellKey(r, cc)])) {
@@ -382,8 +414,11 @@ function drawCellText(
   ctx.font = font;
   ctx.fillStyle = st?.color ?? C.text;
   const lineH = FONT_SIZE + 3;
+  // Wrapped text that is taller than the row starts at the top so its beginning stays visible.
+  const topAligned = wrap && lines.length * lineH + 5 > h;
   lines.forEach((ln, i) => {
-    const baseline = y + h - 5 - (lines.length - 1 - i) * lineH;
+    const baseline = topAligned ? y + 3 + FONT_SIZE + i * lineH - 2 : y + h - 5 - (lines.length - 1 - i) * lineH;
+    if (topAligned && baseline - FONT_SIZE > y + h) return;
     const lw = lines.length > 1 ? measure(ctx, font, ln) : tw;
     const lx = align === 'right' ? x + w - pad - reserve - lw : align === 'center' ? x + (w - reserve - lw) / 2 : tx;
     ctx.fillText(ln, lx, baseline);

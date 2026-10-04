@@ -52,6 +52,19 @@ describe('agent sheet tools', () => {
     expect(ctl.store.cell(ctl.tab.id, 0, 3)).toEqual({ v: 'mine' });
   });
 
+  it('turns word wrap on and off and reports it in read_range formats', async () => {
+    const { ctl, call } = setup();
+    await call('write_range', { start: 'A1', rows: [['a long description', 'x']] });
+    await call('format_range', { range: 'A1:B1', wrap: true });
+    expect(ctl.tab.cells.A1.st).toEqual({ wrap: true });
+    const read = await call('read_range', { range: 'A1:B1', include_formats: true });
+    expect(read.formats).toEqual({ A1: { wrap: true }, B1: { wrap: true } });
+
+    await call('format_range', { range: 'B1', wrap: false });
+    expect(ctl.tab.cells.B1.st).toBeUndefined();
+    expect(ctl.tab.cells.A1.st).toEqual({ wrap: true });
+  });
+
   it('grows the tab to fit what it writes', async () => {
     const { ctl, call } = setup();
     await call('write_range', { start: 'AB1001', rows: [['far']] });
