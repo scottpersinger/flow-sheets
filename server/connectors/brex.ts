@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Primitive } from '../../shared/connectors.ts';
 import { ConnectorError, defaultHttpError, fromMinorUnits, getJson, type Connector, type Dataset, type DatasetResult, type FetchContext } from './types.ts';
 
-export const BREX_BASE_URL = 'https://platform.brex.com';
+export const BREX_BASE_URL = 'https://platform.brexapis.com';
 const PAGE_SIZE = 100;
 
 type Item = Record<string, unknown>;
