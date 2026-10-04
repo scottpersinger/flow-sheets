@@ -203,6 +203,7 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       if ('italic' in i) patch.i = i.italic;
       if ('underline' in i) patch.u = i.underline;
       if ('strikethrough' in i) patch.s = i.strikethrough;
+      if ('wrap' in i) patch.wrap = i.wrap;
       if ('text_color' in i) patch.color = i.text_color || undefined;
       if ('fill_color' in i) patch.bg = i.fill_color || undefined;
       if ('align' in i) patch.align = i.align === 'default' ? undefined : i.align;

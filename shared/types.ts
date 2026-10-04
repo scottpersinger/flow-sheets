@@ -17,6 +17,7 @@ export interface CellStyle {
   i?: boolean; // italic
   u?: boolean; // underline
   s?: boolean; // strikethrough
+  wrap?: boolean; // wrap text within the cell width
   color?: string; // text color
   bg?: string; // fill color
   align?: HAlign;

@@ -156,6 +156,7 @@ export function formatItems(host: CommandHost): MenuItem[] {
         { label: 'Automatic', checked: !st.align, action: () => ctl.setStyle({ align: undefined }) },
       ],
     },
+    { label: 'Wrap text', checked: !!st.wrap, action: () => ctl.toggleStyle('wrap') },
     'sep',
     { label: 'Clear formatting', shortcut: `${MOD}\\`, action: () => ctl.clearFormatting() },
   ];

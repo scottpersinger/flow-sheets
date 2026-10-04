@@ -51,6 +51,7 @@ const schemas = {
       italic: z.boolean().optional(),
       underline: z.boolean().optional(),
       strikethrough: z.boolean().optional(),
+      wrap: z.boolean().optional().describe('true wraps long text onto several lines within the cell width; false shows it on one line (overflowing into empty neighbors).'),
       text_color: z.string().optional().describe('CSS color such as "#1a73e8"; "" removes it.'),
       fill_color: z.string().optional().describe('Background CSS color; "" removes it.'),
       align: z.enum(['left', 'center', 'right', 'default']).optional(),

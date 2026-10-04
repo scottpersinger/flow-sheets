@@ -150,6 +150,9 @@ export function Toolbar({ host }: { host: CommandHost }) {
       <Btn title="Align right" active={st.align === 'right'} onClick={() => ctl.setStyle({ align: st.align === 'right' ? undefined : 'right' })}>
         <AlignIcon kind="right" />
       </Btn>
+      <Btn title="Wrap text" active={!!st.wrap} onClick={() => ctl.toggleStyle('wrap')}>
+        <WrapIcon />
+      </Btn>
       <span className="tb-sep" />
       <Btn title={ctl.tab.filter ? 'Remove filter' : 'Create a filter'} active={!!ctl.tab.filter} onClick={() => (ctl.tab.filter ? ctl.removeFilter() : ctl.createFilter())}>
         <FilterIcon />
@@ -169,6 +172,17 @@ function AlignIcon({ kind }: { kind: 'left' | 'center' | 'right' }) {
         const x = kind === 'left' ? 1 : kind === 'right' ? 15 - w : (16 - w) / 2;
         return <rect key={i} x={x} y={1 + i * 3.5} width={w} height="1.6" fill="currentColor" />;
       })}
+    </svg>
+  );
+}
+
+function WrapIcon() {
+  return (
+    <svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">
+      <rect x="1" y="1" width="14" height="1.6" fill="currentColor" />
+      <path d="M1 6.5h10.5a2.5 2.5 0 0 1 0 5H8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M9.5 9.5 7.5 11.5l2 2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="1" y="10.7" width="4" height="1.6" fill="currentColor" />
     </svg>
   );
 }

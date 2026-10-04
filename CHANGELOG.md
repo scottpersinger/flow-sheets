@@ -2,6 +2,20 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-04 — Add word wrap cell style
+
+I added a word-wrap cell style, and `format_range` now takes a `wrap` boolean: `true` wraps text onto several lines within the cell width, `false` puts it back on one line, where it can spill into empty cells to the right. `read_range` with `include_formats` reports wrapped cells as `wrap: true`. There's also a "Wrap text" toolbar button and a Format-menu item that toggle wrap for the selected range. Rows don't grow to fit wrapped text: text taller than the row starts at the top and is cut off at the bottom, so you'd need to resize the row to see it all. Typecheck and tests pass, including new tests for the tool and the line-breaking.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-04.
+
+### Request
+
+The user wants word wrapping as a cell style in the spreadsheet app. Today format_range supports align, bold, italic, underline, strikethrough, colors and number formats, but no wrap option. Please: (1) add a word-wrap cell style to the app's cell format model and render it (wrapped text, row grows or text wraps within the cell width), with a toolbar/menu control to toggle it for the selected range; (2) add a boolean `wrap` property to the format_range tool (true = wrap text, false = no wrap), and make read_range include_formats report it. Example: in the 'AI startups list' sheet, Sheet1 columns E:F (investors and descriptions, ~350px wide) and I (notes) hold long text; format_range(range="E2:F32", wrap=true) should wrap the text within those cells. The user currently has F1:F1000 selected.
+
+Files: client/src/agent/clientTools.test.ts, client/src/agent/clientTools.ts, client/src/commands.ts, client/src/components/Toolbar.tsx, client/src/grid/render.test.ts, client/src/grid/render.ts, client/src/state/controller.ts, server/agent/tools.ts, shared/types.ts
+
+Job: f89bf1f5-2526-4ea8-a93a-20348cb2ed3b
+
 ## 2026-10-03 — Add clickable hyperlink support in cells (open in new tab)
 
 I added clickable links to cells, and typecheck and all tests pass. Cells whose whole text is an http(s) URL (like the album links in D2:D33) and `=HYPERLINK(url, [link_label])` formulas now show as blue, underlined links. Clicking the link text (or Cmd/Ctrl+click while editing) opens it in a new tab; only http(s) and mailto links open, and "n/a (original)" stays plain text. New assistant tool: `set_cell_link(range, url, label?, tab?)` turns the cells into links showing `label` (or the URL) by writing a HYPERLINK formula, so links survive sorting, copy/paste and saving, and `read_range` now lists link cells under `links` with their URLs. I haven't tried it in the running app. One thing to know: a plain click on a link's text opens it, so to edit a link cell, double-click beside the text or press Enter.

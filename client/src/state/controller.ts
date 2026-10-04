@@ -510,7 +510,7 @@ export class SheetController {
     this.run((tx) => ops.applyStyle(tx, this.tab.id, this.sel.ranges, patch));
   }
 
-  toggleStyle(key: 'b' | 'i' | 'u' | 's'): void {
+  toggleStyle(key: 'b' | 'i' | 'u' | 's' | 'wrap'): void {
     this.setStyle({ [key]: !this.activeCellStyle()[key] });
   }
 
