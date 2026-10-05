@@ -60,6 +60,7 @@ type Drag =
   | { kind: 'select' }
   | { kind: 'cols' }
   | { kind: 'rows' }
+  | { kind: 'colMove'; c: number; moved: boolean; before: number | null }
   | { kind: 'resize'; axis: 'col' | 'row'; idx: number[]; start: number; startSize: number; size: number }
   | { kind: 'fill'; src: Range; target: Range | null }
   | { kind: 'move'; src: Range; grab: CellPos; dest: CellPos | null }
@@ -93,6 +94,8 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
   const [scroll, setScroll] = useState({ x: 0, y: 0 });
   const [resizePreview, setResizePreview] = useState<{ axis: 'col' | 'row'; idx: number[]; size: number } | null>(null);
   const [previews, setPreviews] = useState<{ fill: Range | null; move: Range | null }>({ fill: null, move: null });
+  /** Column boundary where dragged columns would be dropped (drop indicator), or null. */
+  const [colDrop, setColDrop] = useState<number | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; title: string; lines: string[]; kind: 'error' | ChangeSide } | null>(null);
   const [acIndex, setAcIndex] = useState(0);
   const [acDismissed, setAcDismissed] = useState<string | null>(null);
@@ -237,6 +240,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
       copyMark: ctl.copyMark && ctl.copyMark.tabId === tab.id ? ctl.copyMark.range : null,
       fillPreview: previews.fill,
       movePreview: previews.move,
+      colDrop,
       refs,
       compare: compareOverlay,
       searchHits,
@@ -352,6 +356,14 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
       case 'rows':
         ctl.selectRows(r, r, { extend: true });
         break;
+      case 'colMove': {
+        const boundary = cx < colX(l, v, c) + l.cols.size(c) / 2 ? c : c + 1;
+        const rg = ctl.primary;
+        d.moved ||= c !== d.c;
+        d.before = d.moved && (boundary < rg.c1 || boundary > rg.c2 + 1) ? boundary : null;
+        setColDrop(d.before);
+        break;
+      }
       case 'resize': {
         const pos = d.axis === 'col' ? x : y;
         const min = d.axis === 'col' ? 20 : 12;
@@ -399,7 +411,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
       if (x > v.width) dx = Math.min(40, (x - v.width) / 2 + 4);
       else if (x < ROW_HEADER_W + l.frozenW && el.scrollLeft > 0) dx = -Math.min(40, (ROW_HEADER_W + l.frozenW - x) / 2 + 4);
     }
-    if (d.kind !== 'cols') {
+    if (d.kind !== 'cols' && d.kind !== 'colMove') {
       if (y > v.height) dy = Math.min(60, (y - v.height) / 2 + 4);
       else if (y < COL_HEADER_H + l.frozenH && el.scrollTop > 0) dy = -Math.min(60, (COL_HEADER_H + l.frozenH - y) / 2 + 4);
     }
@@ -418,11 +430,26 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     if (autoScrollRaf.current === null) autoScrollRaf.current = requestAnimationFrame(autoScrollTick);
   };
 
-  const onWindowUp = () => {
+  const stopDragListeners = () => {
     window.removeEventListener('mousemove', onWindowMove);
     window.removeEventListener('mouseup', onWindowUp);
+    window.removeEventListener('keydown', onDragKey, true);
     if (autoScrollRaf.current !== null) cancelAnimationFrame(autoScrollRaf.current);
     autoScrollRaf.current = null;
+  };
+
+  /** Escape cancels a column drag. */
+  const onDragKey = (e: globalThis.KeyboardEvent) => {
+    if (e.key !== 'Escape' || dragRef.current?.kind !== 'colMove') return;
+    e.preventDefault();
+    e.stopPropagation();
+    stopDragListeners();
+    dragRef.current = null;
+    setColDrop(null);
+  };
+
+  const onWindowUp = () => {
+    stopDragListeners();
     const d = dragRef.current;
     dragRef.current = null;
     if (!d) return;
@@ -432,6 +459,10 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
         if (d.axis === 'col') ctl.setColWidth(d.idx, d.size);
         else ctl.setRowHeight(d.idx, d.size);
       }
+    } else if (d.kind === 'colMove') {
+      setColDrop(null);
+      if (d.before !== null) ctl.moveCols(d.before);
+      else if (!d.moved) ctl.selectCols(d.c, d.c);
     } else if (d.kind === 'fill') {
       setPreviews({ fill: null, move: null });
       if (d.target) ctl.fill(d.src, d.target);
@@ -446,6 +477,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     dragRef.current = d;
     window.addEventListener('mousemove', onWindowMove);
     window.addEventListener('mouseup', onWindowUp);
+    if (d.kind === 'colMove') window.addEventListener('keydown', onDragKey, true);
   };
 
   // ---------------------------------------------------------------------------
@@ -491,6 +523,9 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
           const size0 = layout.cols.size(h.edge);
           startDrag({ kind: 'resize', axis: 'col', idx: ctl.columnsForResize(h.edge), start: x, startSize: size0, size: size0 });
           setResizePreview({ axis: 'col', idx: ctl.columnsForResize(h.edge), size: layout.cols.size(h.edge) });
+        } else if (!e.shiftKey && !mod && ctl.canDragCols(h.c)) {
+          // Pressing on an already selected column header drags the selected columns to a new position.
+          startDrag({ kind: 'colMove', c: h.c, moved: false, before: null });
         } else {
           ctl.selectCols(h.c, h.c, { extend: e.shiftKey, add: mod });
           startDrag({ kind: 'cols' });
@@ -611,6 +646,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     const h = hitTest(x, y);
     let cursor = 'default';
     if (h.area === 'colHeader' && h.edge !== undefined) cursor = 'col-resize';
+    else if (h.area === 'colHeader' && ctl.canDragCols(h.c)) cursor = 'grab';
     else if (h.area === 'rowHeader' && h.edge !== undefined) cursor = 'row-resize';
     else if (h.area === 'cell' && h.fillHandle) cursor = 'crosshair';
     else if (h.area === 'cell' && h.selEdge) cursor = 'grab';

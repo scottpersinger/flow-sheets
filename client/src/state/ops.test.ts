@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkCellImage, hasContent, MAX_CELL_IMAGE_CHARS, newTab, type Workbook } from '../../../shared/types.ts';
+import { adjustForMove } from '../../../shared/formula/adjust.ts';
 import { fitImage } from '../grid/render.ts';
 import {
   appendTabs,
@@ -11,6 +12,7 @@ import {
   detectDataRegion,
   fillRange,
   insertLines,
+  moveColumns,
   moveRange,
   pasteClip,
   readClip,
@@ -79,6 +81,42 @@ describe('structural ops', () => {
     s.transact((tx) => insertLines(tx, 't1', 'col', 1, 1));
     expect(raw(s, 'D1')).toBe('=A1+C1');
     expect(s.value('t1', 0, 3)).toBe(3);
+  });
+
+  it('moves columns with their cells, widths and filter, rewriting references', () => {
+    const s = makeStore({ A1: 'a', B1: 'b', C1: 'c', D1: 'd', E1: '=SUM(B2:C2)', B2: '1', C2: '2', D2: '=$B$2*10' }, { A1: '=Sheet1!B2', B1: '=SUM(Sheet1!A:B)' });
+    s.getTab('t1')!.cells.B1.st = { b: true };
+    s.getTab('t1')!.colWidths = { 1: 150 };
+    s.getTab('t1')!.filter = { r1: 0, c1: 0, r2: 5, c2: 3, cols: { 1: { hidden: ['x'] } } };
+    // Move B:C in front of E: order becomes A D B C E.
+    let start: number | null = null;
+    s.transact((tx) => {
+      start = moveColumns(tx, 't1', 1, 2, 4);
+    });
+    expect(start).toBe(2);
+    const t = s.getTab('t1')!;
+    expect(['A1', 'B1', 'C1', 'D1'].map((k) => raw(s, k))).toEqual(['a', 'd', 'b', 'c']);
+    expect(t.cells.C1.st).toEqual({ b: true });
+    expect(t.colWidths).toEqual({ 2: 150 });
+    expect(t.filter).toMatchObject({ c1: 0, c2: 3, cols: { 2: { hidden: ['x'] } } });
+    expect(raw(s, 'E1')).toBe('=SUM(C2:D2)');
+    expect(raw(s, 'B2')).toBe('=$C$2*10');
+    expect(s.value('t1', 1, 1)).toBe(10);
+    expect(raw(s, 'A1', 't2')).toBe('=Sheet1!C2');
+    expect(raw(s, 'B1', 't2')).toBe('=SUM(Sheet1!A:A)'); // B left the range A:B
+
+    // Moving left within a range keeps the range; moving a column into a range widens it.
+    s.transact((tx) => moveColumns(tx, 't1', 3, 3, 2)); // order: a d c b
+    expect(['A1', 'B1', 'C1', 'D1'].map((k) => raw(s, k))).toEqual(['a', 'd', 'c', 'b']);
+    expect(raw(s, 'E1')).toBe('=SUM(C2:D2)');
+    expect(raw(s, 'A1', 't2')).toBe('=Sheet1!D2');
+    expect(adjustForMove('=SUM(A1:C1)', 'S', 'S', 'col', { from: 5, to: 5, before: 1 })).toBe('=SUM(A1:D1)');
+
+    s.undo();
+    s.undo();
+    expect(['A1', 'B1', 'C1', 'D1'].map((k) => raw(s, k))).toEqual(['a', 'b', 'c', 'd']);
+    expect(raw(s, 'A1', 't2')).toBe('=Sheet1!B2');
+    expect(s.transact((tx) => moveColumns(tx, 't1', 1, 2, 3))).toBe(false);
   });
 
   it('renames tabs and rewrites references', () => {

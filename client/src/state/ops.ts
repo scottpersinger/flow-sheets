@@ -1,5 +1,5 @@
 import { cellKey, parseCellKey, type Range } from '../../../shared/cellref.ts';
-import { adjustForDelete, adjustForInsert, isFormula, renameSheetRefs, shiftFormula } from '../../../shared/formula/adjust.ts';
+import { adjustForDelete, adjustForInsert, adjustForMove, isFormula, moveIndexMap, moveSpan, renameSheetRefs, shiftFormula } from '../../../shared/formula/adjust.ts';
 import type { CellData, CellStyle, FilterCondition, FilterState, Tab } from '../../../shared/types.ts';
 import { hasContent, newTab } from '../../../shared/types.ts';
 import {
@@ -218,6 +218,41 @@ export function deleteLines(tx: Tx, tabId: string, axis: Axis, from: number, to:
             frozenCols: frozen(t.frozenCols),
           },
   );
+}
+
+/**
+ * Move columns [from, to] so they sit immediately left of column `before` (an index in the current layout;
+ * `before` may equal the column count to move to the end). Columns in between shift over. Cells, formatting,
+ * widths and filter criteria travel with their column; references across the workbook are rewritten to keep
+ * pointing at the same data. Returns the moved block's new first column, or null if nothing moves.
+ */
+export function moveColumns(tx: Tx, tabId: string, from: number, to: number, before: number): number | null {
+  const tab = tx.tab(tabId);
+  if (from < 0 || to < from || to >= tab.cols || before < 0 || before > tab.cols) return null;
+  if (before >= from && before <= to + 1) return null;
+  const mv = { from, to, before };
+  const map = moveIndexMap(mv);
+  rebuildTabs(
+    tx,
+    tabId,
+    'col',
+    map,
+    (raw, own, target) => adjustForMove(raw, own, target, 'col', mv),
+    (t) => {
+      let filter = t.filter;
+      if (filter) {
+        const [c1, c2] = moveSpan(filter.c1, filter.c2, mv);
+        const cols: FilterState['cols'] = {};
+        for (const [k, v] of Object.entries(filter.cols)) {
+          const c = map(+k);
+          if (c >= c1 && c <= c2) cols[c] = v;
+        }
+        filter = { ...filter, c1, c2, cols };
+      }
+      return { colWidths: shiftSizes(t.colWidths, map), filter };
+    },
+  );
+  return map(from);
 }
 
 export function appendRows(tx: Tx, tabId: string, count: number): void {

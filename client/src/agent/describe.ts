@@ -38,6 +38,11 @@ export function toolLabel(name: string, i: Input): string {
       return `Inserted ${plural(Number(i.count), 'column')} at column ${String(i.at_column).toUpperCase()}`;
     case 'delete_columns':
       return `Deleted ${i.from_column === i.to_column ? 'column' : 'columns'} ${span(String(i.from_column).toUpperCase(), String(i.to_column).toUpperCase())}`;
+    case 'move_columns': {
+      const from = String(i.from_column).toUpperCase();
+      const to = String(i.to_column ?? i.from_column).toUpperCase();
+      return `Moved ${from === to ? 'column' : 'columns'} ${span(from, to)} before column ${String(i.before_column).toUpperCase()}`;
+    }
     case 'sort_range':
       return `Sorted ${where(i)} by column ${String(i.by_column).toUpperCase()}`;
     case 'set_cell_image':

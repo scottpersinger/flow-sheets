@@ -68,6 +68,8 @@ export interface RenderState {
   copyMark: Range | null;
   fillPreview: Range | null;
   movePreview: Range | null;
+  /** Column boundary (index of the column to its right) where dragged columns would land, or null. */
+  colDrop?: number | null;
   refs: (FormulaRef & { range: Range })[];
   /** Branch comparison marks for this tab. */
   compare: CompareOverlay | null;
@@ -198,6 +200,14 @@ export function drawGrid(ctx: CanvasRenderingContext2D, s: RenderState): void {
   ctx.fillStyle = C.frozen;
   if (l.frozenCols) ctx.fillRect(fx - 2, 0, 3, vp.height);
   if (l.frozenRows) ctx.fillRect(0, fy - 2, vp.width, 3);
+
+  // Drop indicator while dragging columns
+  if (s.colDrop !== null && s.colDrop !== undefined) {
+    const b = s.colDrop;
+    const x = b < l.cols.count ? colX(l, vp, b) : colX(l, vp, b - 1) + l.cols.size(b - 1);
+    ctx.fillStyle = C.selBorder;
+    ctx.fillRect(x - 1.5, 0, 3, vp.height);
+  }
 }
 
 function drawCells(ctx: CanvasRenderingContext2D, s: RenderState, reg: Region): void {

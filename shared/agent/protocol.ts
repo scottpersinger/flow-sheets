@@ -136,6 +136,7 @@ export const CLIENT_TOOLS = new Set([
   'delete_rows',
   'insert_columns',
   'delete_columns',
+  'move_columns',
   'sort_range',
   'set_cell_image',
   'set_cell_link',

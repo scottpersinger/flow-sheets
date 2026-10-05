@@ -257,6 +257,21 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       return JSON.stringify({ deleted_columns: a === to ? colToName(a) : `${colToName(a)}:${colToName(to)}`, tab: tab.name });
     }
 
+    case 'move_columns': {
+      const tab = tabOf(ctl, str(i.tab));
+      const [a, b] = [columnOf(String(i.from_column)), columnOf(String(i.to_column ?? i.from_column))].sort((x, y) => x - y);
+      const before = columnOf(String(i.before_column));
+      if (b >= tab.cols) throw new ToolError(`The tab only has ${tab.cols} columns (A–${colToName(tab.cols - 1)}).`);
+      if (before > tab.cols) throw new ToolError(`before_column must be at most ${colToName(tab.cols)} (to move to the end).`);
+      if (before >= a && before <= b + 1) throw new ToolError(`before_column ${colToName(before)} is inside or right after the moved columns, so nothing would move.`);
+      let start = 0;
+      run((tx) => {
+        start = ops.moveColumns(tx, tab.id, a, b, before) ?? a;
+      });
+      show(ctl, tab.id);
+      return JSON.stringify({ moved_columns: `${colToName(a)}:${colToName(b)}`, new_range: `${colToName(start)}:${colToName(start + b - a)}`, tab: tab.name });
+    }
+
     case 'sort_range': {
       const { tab, range } = rangeOf(ctl, str(i.tab), String(i.range));
       const col = columnOf(String(i.by_column));
