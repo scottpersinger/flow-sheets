@@ -83,6 +83,9 @@ export interface ShapeElement extends ElementBase {
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
+  /** Arc shapes: start and end angle in degrees, clockwise from 3 o'clock. Default 270 and 0 (the top-right quarter). */
+  startAngle?: number;
+  endAngle?: number;
   /** Optional label centered in the shape. */
   text?: string;
   textColor?: string;
@@ -443,6 +446,8 @@ export function validateElement(e: unknown, where: string): string | null {
       if (el.fill !== undefined && !isColor(el.fill)) return `${where}: invalid fill`;
       if (el.stroke !== undefined && !isColor(el.stroke)) return `${where}: invalid stroke`;
       if (el.strokeWidth !== undefined && !num(el.strokeWidth, 0, 100)) return `${where}: invalid stroke width`;
+      if (el.startAngle !== undefined && !num(el.startAngle, -360, 720)) return `${where}: invalid start angle`;
+      if (el.endAngle !== undefined && !num(el.endAngle, -360, 720)) return `${where}: invalid end angle`;
       if (el.text !== undefined && (typeof el.text !== 'string' || el.text.length > MAX_TEXT)) return `${where}: invalid shape text`;
       if (el.textColor !== undefined && !isColor(el.textColor)) return `${where}: invalid text color`;
       if (el.textSize !== undefined && !num(el.textSize, 4, 400)) return `${where}: invalid label font size`;
@@ -509,7 +514,7 @@ export function deckOutline(deck: Deck, current?: number) {
               ...(e.textColor ? { color: e.textColor } : {}),
             }
           : {};
-        return { ...box, type: 'shape', shape: e.shape, ...(e.fill ? { fill: e.fill } : {}), ...label };
+        return { ...box, type: 'shape', shape: e.shape, ...(e.fill ? { fill: e.fill } : {}), ...(e.shape === 'arc' ? { start_angle: e.startAngle ?? 270, end_angle: e.endAngle ?? 0 } : {}), ...label };
       }),
       ...(s.notes ? { notes: s.notes } : {}),
     })),

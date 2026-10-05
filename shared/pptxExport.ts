@@ -136,7 +136,13 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     const sw = el.strokeWidth ?? (strokeColor ? 2 : 0);
     const line: PptxGenJS.ShapeLineProps = strokeColor && sw ? { color: strokeColor, width: pt(sw), transparency: transparencyOf(el.stroke) } : { type: 'none' };
     const shapeType = (pres.ShapeType as unknown as Record<string, PptxGenJS.SHAPE_NAME>)[SHAPES[el.shape].pptx] ?? pres.ShapeType.rect;
-    const common = { ...box, fill, line, ...(el.shape === 'rounded' ? { rectRadius: inch(16) } : {}) };
+    const common = {
+      ...box,
+      fill,
+      line,
+      ...(el.shape === 'rounded' ? { rectRadius: inch(16) } : {}),
+      ...(el.shape === 'arc' ? { angleRange: [el.startAngle ?? 270, el.endAngle ?? 0] as [number, number] } : {}),
+    };
     if (el.text) {
       const color = hexColor(el.textColor) ?? (el.fill === 'none' ? hexColor(theme.text) : 'FFFFFF');
       s.addText(el.text, { ...common, shape: shapeType, align: 'center', valign: 'middle', fontSize: pt(el.textSize ?? 18), fontFace: el.textFont ?? fontFace(theme.bodyFont), ...(el.textBold ? { bold: true } : {}), ...(el.textItalic ? { italic: true } : {}), ...(color ? { color } : {}) });

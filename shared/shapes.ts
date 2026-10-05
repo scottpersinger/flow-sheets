@@ -22,6 +22,7 @@ export const SHAPE_KINDS = [
   'plus',
   'heart',
   'line',
+  'arc',
 ] as const;
 
 export type ShapeKind = (typeof SHAPE_KINDS)[number];
@@ -69,6 +70,7 @@ export const SHAPES: Record<ShapeKind, ShapeDef> = {
   plus: { name: 'Plus', pptx: 'mathPlus', points: [35, 0, 65, 0, 65, 35, 100, 35, 100, 65, 65, 65, 65, 100, 35, 100, 35, 65, 0, 65, 0, 35, 35, 35], square: true },
   heart: { name: 'Heart', pptx: 'heart', points: heartPoints(), square: true },
   line: { name: 'Line', pptx: 'line' },
+  arc: { name: 'Arc', pptx: 'arc', square: true },
 };
 
 const BY_PPTX = new Map<string, ShapeKind>(SHAPE_KINDS.map((k) => [SHAPES[k].pptx, k]));
@@ -93,12 +95,23 @@ const PPTX_ALIASES: Record<string, ShapeKind> = {
   wedgeRoundRectCallout: 'callout',
   wedgeEllipseCallout: 'callout',
   isoTriangle: 'triangle',
+  blockArc: 'arc',
 };
 
 /** Our shape for a PowerPoint preset geometry, or undefined if nothing is close. */
 export function shapeFromPptx(prst: string | undefined): ShapeKind | undefined {
   if (!prst) return 'rect';
   return BY_PPTX.get(prst) ?? PPTX_ALIASES[prst];
+}
+
+/** SVG path of an open arc along the ellipse inscribed in a w×h box, from start to end degrees clockwise from 3 o'clock. */
+export function arcPath(w: number, h: number, start = 270, end = 0): string {
+  const rx = w / 2;
+  const ry = h / 2;
+  const pt = (deg: number) => `${rx + rx * Math.cos((deg * Math.PI) / 180)} ${ry + ry * Math.sin((deg * Math.PI) / 180)}`;
+  const sweep = (((end - start) % 360) + 360) % 360;
+  if (sweep === 0) return `M ${pt(start)}`;
+  return `M ${pt(start)} A ${rx} ${ry} 0 ${sweep > 180 ? 1 : 0} 1 ${pt(end)}`;
 }
 
 /** SVG polygon points for a polygon shape, scaled to a box; undefined for the CSS-drawn shapes. */

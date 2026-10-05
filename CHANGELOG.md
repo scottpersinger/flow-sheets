@@ -2,6 +2,27 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-05 — Support "arc" shapes in PPT import and editor
+
+Typecheck and all 175 tests now pass. The one failure, `google sign-in > is off unless configured` in `server/app.test.ts`, wasn't caused by the arc change. The test builds the app with no `google` option, so the app read Google credentials from the environment here. I made the test clear `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` before building the app, so it no longer depends on the machine's environment. I couldn't read the environment variables directly to confirm they were set, so that cause is inferred from the code and the passing run. No new assistant tool; the arc support from before is unchanged: `edit_elements` takes `shape: "arc"`, `start_angle` and `end_angle`.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-05.
+
+### Request
+
+Problem: When importing a PPTX, shapes of type "arc" (DrawingML preset geometry "arc", with adj1/adj2 start/end angles) are converted to plain rectangles, and the import banner says: 'Imported with some changes: Shapes of type "arc" were drawn as rectangles. (4x)'. Example: deck "biztrip_data_story_slides (1)" (id cd1049a6-e261-4f30-a8ea-9844582a4c00), slide 3 had four arcs forming a circular loop around the 'TRAVEL GRAPH' circle (each at x=180,y=187,w=223,h=223); they rendered as four stacked square outlines.
+
+Requested change:
+1. Add a shape kind "arc" to the slide shape model (alongside rect, rounded, ellipse...), rendered in the editor, present mode and render_slide as an open stroke-only path along the ellipse inscribed in the shape's box, from a start angle to an end angle (degrees, clockwise from 3 o'clock, as in OOXML). No fill. Honor stroke color and stroke_width.
+2. Add optional numeric shape properties start_angle (default 270) and end_angle (default 0), mapped from OOXML adj1/adj2 (60000ths of a degree) on import.
+3. PPTX import: map prstGeom "arc" (ideally also "blockArc") to this shape, preserving angles, line color/width, rotation and flips; remove 'arc' from the unsupported list that triggers the warning banner. Export, if present, should write prstGeom arc.
+4. edit_elements tool: add "arc" to the shape enum, plus start_angle and end_angle number inputs; read_deck should report them.
+Acceptance: re-importing the PPTX shows four proper circular arcs on slide 3 with no 'arc' warning.
+
+Files: client/src/agent/deckTools.test.ts, client/src/agent/deckTools.ts, client/src/deck/ShapeIcon.tsx, client/src/deck/SlideView.tsx, server/agent/tools.ts, server/app.test.ts, server/pptxImport.test.ts, server/pptxImport.ts, shared/deck.ts, shared/pptxExport.ts, shared/shapes.ts
+
+Job: beff67d3-aa14-4d33-b074-11d3acfaa66b
+
 ## 2026-10-05 — Make the slide thumbnail tray and the Assistant panel resizable
 
 I added drag handles to the slide thumbnail tray and to the Assistant panel, and the Assistant handle works in both the Slides and spreadsheet views. You can drag a handle, double-click it to reset, or focus it and use the Left/Right arrow keys to resize in 16px steps. The tray stays between 120 and 400px (default 200), its thumbnails scale with it at 16:9, and the slide canvas or sheet grid shrinks to fit. The Assistant panel stays between 280px and the smaller of 800px or half the window (default 380), and widths are saved in localStorage under `ui.slideTrayWidth` and `ui.assistantPanelWidth`. Typecheck and tests pass, including new tests for the size limits and saving in `client/src/panelSize.test.ts`, but I haven't tried the dragging in a browser, and there is no new assistant tool. One limit: the middle stays at least 400px wide in most cases, but in a narrow window with both panels wide it can still drop below that.
