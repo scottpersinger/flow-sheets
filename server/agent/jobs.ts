@@ -128,26 +128,26 @@ export class JobStore {
 
   /** The user's most recent job. */
   latest(userId: string): JobRecord | null {
-    const row = this.db.prepare('SELECT * FROM agent_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').get(userId) as Row | undefined;
+    const row = this.db.prepare('SELECT * FROM agent_jobs WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(userId) as Row | undefined;
     return row ? toJob(row) : null;
   }
 
   /** Every job, newest first: the app's change history. */
   list(limit = 200): JobRecord[] {
-    return (this.db.prepare('SELECT * FROM agent_jobs ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as Row[]).map(toJob);
+    return (this.db.prepare('SELECT * FROM agent_jobs ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit) as unknown as Row[]).map(toJob);
   }
 
   /** The job that is queued or running, if any. Only one job at a time: they all edit the same working tree. */
   active(): JobRecord | null {
     const row = this.db
-      .prepare(`SELECT * FROM agent_jobs WHERE status IN (${ACTIVE.map(() => '?').join(',')}) ORDER BY created_at LIMIT 1`)
+      .prepare(`SELECT * FROM agent_jobs WHERE status IN (${ACTIVE.map(() => '?').join(',')}) ORDER BY created_at, rowid LIMIT 1`)
       .get(...ACTIVE) as Row | undefined;
     return row ? toJob(row) : null;
   }
 
   /** Atomically take the oldest queued job, marking it as starting. */
   claimQueued(): JobRecord | null {
-    const row = this.db.prepare("SELECT id FROM agent_jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
+    const row = this.db.prepare("SELECT id FROM agent_jobs WHERE status = 'queued' ORDER BY created_at, rowid LIMIT 1").get() as { id: string } | undefined;
     if (!row) return null;
     const res = this.db.prepare("UPDATE agent_jobs SET status = 'starting', started_at = ? WHERE id = ? AND status = 'queued'").run(now(), row.id);
     return res.changes ? this.get(row.id) : null;
