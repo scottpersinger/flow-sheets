@@ -13,6 +13,16 @@ async function pptxBuffer(deck: Deck): Promise<{ buf: Buffer; warnings: string[]
 }
 
 describe('pptx export and import', () => {
+  it('round-trips arcs with their angles and no warning', async () => {
+    const s = buildSlide('blank', {}, newId);
+    s.elements.push({ id: newId(), type: 'shape', shape: 'arc', x: 180, y: 187, w: 223, h: 223, fill: 'none', stroke: '#ff0000', strokeWidth: 3, startAngle: 90, endAngle: 200 });
+    const { buf } = await pptxBuffer({ version: 1, theme: 'light', slides: [s] });
+    const { deck, warnings } = await importPptx(buf, async () => '/api/images/x');
+    const arc = deck.slides[0].elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'arc')!;
+    expect(arc).toMatchObject({ fill: 'none', stroke: '#ff0000', startAngle: 90, endAngle: 200 });
+    expect(warnings.join(' ')).not.toMatch(/arc/);
+  });
+
   it('converts colors and fonts for PowerPoint', () => {
     expect(hexColor('#1a73e8')).toBe('1A73E8');
     expect(hexColor('#abc')).toBe('AABBCC');

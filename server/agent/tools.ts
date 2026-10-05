@@ -57,6 +57,8 @@ const elementSpec = z
     fill: z.string().max(64).optional().describe('Shape fill CSS color, or "none".'),
     stroke: z.string().max(64).optional().describe('Shape outline color.'),
     stroke_width: z.number().min(0).max(100).optional(),
+    start_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: start angle in degrees, clockwise from 3 o'clock (default 270 = top). The arc is an open stroke (no fill) along the ellipse in the shape's box, drawn clockwise to end_angle."),
+    end_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: end angle in degrees, clockwise from 3 o'clock (default 0 = right)."),
   })
   .describe('An element to add or change. Only the properties given change.');
 

@@ -15,7 +15,7 @@ import {
   type Theme,
   type ThemeId,
 } from '../../../shared/deck.ts';
-import { polygonPoints, SHAPES } from '../../../shared/shapes.ts';
+import { arcPath, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
 /** A box override while an element is being dragged or resized. */
 export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>>;
@@ -96,7 +96,7 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
     ...(el.textItalic ? { fontStyle: 'italic' } : {}),
   };
   // Polygon shapes are drawn by an SVG inside the box (see ShapePolygon); the box itself stays transparent.
-  if (SHAPES[el.shape].points) return text;
+  if (SHAPES[el.shape].points || el.shape === 'arc') return text;
   return {
     background: fill,
     borderRadius: el.shape === 'ellipse' ? '50%' : el.shape === 'rounded' ? 16 : 0,
@@ -109,6 +109,13 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
 function ShapePolygon({ el, theme, box }: { el: ShapeElement; theme: Theme; box: BoxPreview }) {
   const w = box.w ?? el.w;
   const h = box.h ?? el.h;
+  if (el.shape === 'arc') {
+    return (
+      <svg className="sl-shape-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">
+        <path d={arcPath(w, h, el.startAngle, el.endAngle)} fill="none" stroke={el.stroke ?? theme.accent} strokeWidth={el.strokeWidth ?? 2} />
+      </svg>
+    );
+  }
   const points = polygonPoints(el.shape, w, h);
   if (!points) return null;
   const fill = el.fill === 'none' ? 'none' : (el.fill ?? theme.accent);

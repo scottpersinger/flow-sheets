@@ -407,6 +407,27 @@ class Importer {
       else if (stroked && !filled) el.stroke = '#5f6368';
       const w = num(attrs(ln).w);
       if (w !== undefined && (strokeColor || el.shape === 'line')) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
+      if (el.shape === 'arc') {
+        // An arc is stroke only. Rotation and flips are folded into the angles (the box is rotated about its center).
+        el.fill = 'none';
+        if (!el.stroke) el.stroke = '#5f6368';
+        const xfrm = attrs(child(spPr, 'a:xfrm'));
+        const adj = (name: string, dflt: number) => {
+          const gd = children(child(child(spPr, 'a:prstGeom'), 'a:avLst'), 'a:gd').find((g) => attrs(g).name === name);
+          const m = /^val\s+(-?\d+)/.exec(attrs(gd).fmla ?? '');
+          return (m ? Number(m[1]) : dflt) / 60000;
+        };
+        let [a1, a2] = prst === 'blockArc' ? [adj('adj1', 180), adj('adj2', 0)] : [adj('adj1', 270), adj('adj2', 0)];
+        if (xfrm.flipH === '1' || xfrm.flipH === 'true') [a1, a2] = [180 - a1, 180 - a2];
+        if (xfrm.flipV === '1' || xfrm.flipV === 'true') [a1, a2] = [-a1, -a2];
+        // Flips mirror the sweep direction, so swap the ends when exactly one flip applies.
+        const flips = Number(xfrm.flipH === '1' || xfrm.flipH === 'true') + Number(xfrm.flipV === '1' || xfrm.flipV === 'true');
+        if (flips === 1) [a1, a2] = [a2, a1];
+        const rot = (num(xfrm.rot) ?? 0) / 60000;
+        const norm = (a: number) => Math.round((((a + rot) % 360) + 360) % 360 * 100) / 100;
+        el.startAngle = norm(a1);
+        el.endAngle = norm(a2);
+      }
       if (!hasText) return [el];
       onShape = el; // the text goes in its own element on top, so sizes, fonts and colors survive
     }

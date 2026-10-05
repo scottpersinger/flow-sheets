@@ -96,6 +96,15 @@ describe('agent deck tools', () => {
     await expect(call('edit_elements', { slide: 1, set: [{ type: 'text', text: 'hi', x: Number.NaN }] })).rejects.toThrow(/invalid x/);
   });
 
+  it('adds arcs with start and end angles and reports them', async () => {
+    const { deck, call } = setup();
+    const res = await call('edit_elements', { slide: 1, set: [{ type: 'shape', shape: 'arc', x: 10, y: 10, w: 100, h: 100, stroke: '#f00', stroke_width: 4, start_angle: 90, end_angle: 200 }] });
+    const id = res.set[0].id;
+    expect(deck.deck.slides[0].elements.find((e) => e.id === id)).toMatchObject({ shape: 'arc', stroke: '#f00', strokeWidth: 4, startAngle: 90, endAngle: 200 });
+    const outline = await call('read_deck');
+    expect(outline.slides[0].elements.find((e: { id: string }) => e.id === id)).toMatchObject({ shape: 'arc', start_angle: 90, end_angle: 200 });
+  });
+
   it('styles shape labels with size, font, bold and color', async () => {
     const { deck, call } = setup();
     const res = await call('edit_elements', { slide: 1, set: [{ type: 'shape', text: 'Q1', size: 9, font: 'Poppins', bold: true, color: '#333' }] });

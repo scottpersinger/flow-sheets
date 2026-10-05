@@ -115,6 +115,10 @@ function applyElementSpec(existing: SlideElement | undefined, s: Input): SlideEl
   if (fill) el.fill = fill as string;
   if (stroke) el.stroke = stroke as string;
   if (typeof strokeWidth === 'number') el.strokeWidth = strokeWidth;
+  const startAngle = s.start_angle !== undefined ? s.start_angle : prev?.startAngle;
+  const endAngle = s.end_angle !== undefined ? s.end_angle : prev?.endAngle;
+  if (shape === 'arc' && typeof startAngle === 'number') el.startAngle = startAngle;
+  if (shape === 'arc' && typeof endAngle === 'number') el.endAngle = endAngle;
   if (text) el.text = text as string;
   if (textColor) el.textColor = textColor as string;
   // Label style; "" or false clears a property, as for text elements.
