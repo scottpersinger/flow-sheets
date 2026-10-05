@@ -2,6 +2,37 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-05 — Make the slide thumbnail tray and the Assistant panel resizable
+
+I added drag handles to the slide thumbnail tray and to the Assistant panel, and the Assistant handle works in both the Slides and spreadsheet views. You can drag a handle, double-click it to reset, or focus it and use the Left/Right arrow keys to resize in 16px steps. The tray stays between 120 and 400px (default 200), its thumbnails scale with it at 16:9, and the slide canvas or sheet grid shrinks to fit. The Assistant panel stays between 280px and the smaller of 800px or half the window (default 380), and widths are saved in localStorage under `ui.slideTrayWidth` and `ui.assistantPanelWidth`. Typecheck and tests pass, including new tests for the size limits and saving in `client/src/panelSize.test.ts`, but I haven't tried the dragging in a browser, and there is no new assistant tool. One limit: the middle stays at least 400px wide in most cases, but in a narrow window with both panels wide it can still drop below that.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-05.
+
+### Request
+
+What the user asked for: in the presentation (Slides) editor, both side panels should be adjustable in width:
+1. The left tray of slide thumbnails.
+2. The Assistant chat panel on the right. This panel is shared with the spreadsheet view, so make it resizable there too.
+
+Today both panels have fixed widths.
+
+Desired behavior:
+- Each panel gets a vertical drag handle on its inner edge: the right edge of the thumbnail tray, the left edge of the Assistant panel. The handle is a thin hit area of about 6px that shows a col-resize cursor on hover and a subtle highlight line on hover and while dragging.
+- Dragging resizes the panel live, and the slide canvas / sheet grid in the middle reflows to fill the remaining space. The slide canvas should rescale to fit, keeping its 16:9 aspect ratio.
+- Sensible limits. Thumbnail tray: min about 120px, max about 400px, default the current width. Thumbnails scale with the tray width and keep 16:9. Assistant panel: min about 280px, max about 50% of the viewport or 800px, default the current width. Also make sure the center area never drops below about 400px.
+- Double-clicking a handle resets that panel to its default width.
+- Persist each width per user in localStorage (e.g. keys "ui.slideTrayWidth" and "ui.assistantPanelWidth") so it survives reloads and switching between documents.
+- Avoid text selection and iframe/canvas pointer capture issues while dragging: use pointer events with setPointerCapture, and set user-select: none on the body during the drag.
+- Keyboard accessibility: the handle is focusable (role="separator", aria-orientation="vertical", aria-valuenow/min/max), and the Left/Right arrow keys resize in 16px steps.
+
+Example: in deck bc8596c9-dccc-41a7-806a-68d9b2516ddb ("BizTrip AI Q3 2026 Investor Share Deck Sept 11"), the user should be able to drag the thumbnail tray narrower and the Assistant panel wider to read long replies, and the slide canvas in the middle shrinks to fit.
+
+Please add tests for the clamping and persistence logic if the codebase has a pattern for UI unit tests.
+
+Files: client/src/agent/AgentPanel.tsx, client/src/components/ResizeHandle.tsx, client/src/deck/ThumbnailStrip.tsx, client/src/pages/DeckPage.tsx, client/src/panelSize.test.ts, client/src/panelSize.ts, client/src/styles.css
+
+Job: 3328b6da-054a-4d6d-8281-d680756a47b8
+
 ## 2026-10-05 — Add a tool to render a slide as an image so the assistant can check its work
 
 Typecheck and all 153 tests now pass. The one failing test was picking up this machine's `AGENT_MODEL` setting, so I set it to empty in the test config (`vite.config.ts`) and the test now checks the default model again.
