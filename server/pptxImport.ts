@@ -185,9 +185,21 @@ class Importer {
 
     assignRoles(elements);
     const slide: Slide = { id: newId(), layout: guessLayout(elements), elements };
-    const bg = this.colorOf(path(cSld, 'p:bg', 'p:bgPr'));
+    const bgPr = path(cSld, 'p:bg', 'p:bgPr');
+    const bg = this.colorOf(bgPr);
     if (bg && bg !== 'none') slide.bg = bg;
-    else if (path(cSld, 'p:bg') && !bg) this.note('Picture and gradient slide backgrounds were dropped.');
+    else if (bgPr) {
+      // A picture background becomes a full-slide image behind everything; a gradient keeps its first color.
+      const embed = attrs(path(bgPr, 'a:blipFill', 'a:blip'))['r:embed'];
+      const target = embed ? rels.find((r) => r.id === embed)?.target : undefined;
+      const src = target ? await this.image(target) : null;
+      const gradient = this.solidColorIn(path(bgPr, 'a:gradFill', 'a:gsLst'));
+      if (src) elements.unshift({ id: newId(), type: 'image', x: 0, y: 0, w: SLIDE_W, h: SLIDE_H, src, fit: 'cover' });
+      else if (gradient) {
+        slide.bg = gradient;
+        this.note('Gradient slide backgrounds were flattened to their first color.');
+      } else if (!bg) this.note('Some slide backgrounds could not be converted and were dropped.');
+    }
 
     const notesFile = rels.find((r) => r.type.endsWith('/notesSlide'))?.target;
     if (notesFile) {
@@ -319,8 +331,12 @@ class Importer {
    */
   private colorOf(parent: XNode | undefined): string | undefined {
     const fill = child(parent, 'a:solidFill');
-    if (!fill) return undefined;
-    const node = child(fill, 'a:srgbClr') ?? child(fill, 'a:schemeClr');
+    return fill ? this.colorNode(fill) : undefined;
+  }
+
+  /** The color given by an a:srgbClr or a:schemeClr child of `parent` (see colorOf for the result). */
+  private colorNode(parent: XNode | undefined): string | undefined {
+    const node = child(parent, 'a:srgbClr') ?? child(parent, 'a:schemeClr');
     if (!node) return undefined;
     const hex = tagOf(node) === 'a:srgbClr' ? attrs(node).val : this.colors[attrs(node).val];
     if (!hex || !/^[0-9A-Fa-f]{6}$/.test(hex)) return undefined;
@@ -329,6 +345,15 @@ class Importer {
     if (alpha <= 0) return 'none';
     const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
     return `rgba(${r}, ${g}, ${b}, ${Math.round(alpha / 1000) / 100})`;
+  }
+
+  /** The first opaque color among a gradient's stops. */
+  private solidColorIn(gsLst: XNode | undefined): string | undefined {
+    for (const gs of children(gsLst, 'a:gs')) {
+      const col = this.colorNode(gs);
+      if (col && col !== 'none') return col;
+    }
+    return undefined;
   }
 
   /** colorOf without the "none" case, for text and outlines. */
