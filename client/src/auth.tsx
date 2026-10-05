@@ -4,6 +4,8 @@ import { api, ApiError, type User } from './api.ts';
 interface AuthState {
   user: User | null;
   loading: boolean;
+  /** Whether the server offers "Continue with Google". */
+  googleLogin: boolean;
   login(email: string, password: string): Promise<void>;
   register(email: string, password: string): Promise<void>;
   logout(): Promise<void>;
@@ -16,6 +18,7 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [googleLogin, setGoogleLogin] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -25,7 +28,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       for (let attempt = 0; ; attempt++) {
         try {
           const r = await api.me();
-          if (!cancelled) setUser(r.user);
+          if (!cancelled) {
+            setUser(r.user);
+            setGoogleLogin(!!r.googleLogin);
+          }
           break;
         } catch (e) {
           if (cancelled) return;
@@ -54,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, googleLogin, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

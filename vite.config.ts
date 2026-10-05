@@ -7,7 +7,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { '/api': 'http://localhost:3001' },
+    // Keep the browser's Host header so OAuth redirect URIs built by the server point at this dev server.
+    proxy: { '/api': { target: 'http://localhost:3001', changeOrigin: false } },
   },
   build: { outDir: '../dist/client', emptyOutDir: true },
   test: {

@@ -58,7 +58,7 @@ async function uploadImage(file: Blob): Promise<string> {
 
 export const api = {
   uploadImage,
-  me: () => request<{ user: User | null }>('GET', '/api/auth/me'),
+  me: () => request<{ user: User | null; googleLogin: boolean }>('GET', '/api/auth/me'),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
   register: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/register', { email, password }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),

@@ -72,6 +72,28 @@ export class AuthService {
     return { id: row.id, email: row.email };
   }
 
+  /**
+   * Sign in (or up) with a Google account. The Google account id is the durable key; on first sign-in an
+   * existing account with the same verified email is linked, otherwise a new one is created.
+   */
+  loginWithGoogle(identity: { sub: string; email: string; emailVerified: boolean }): User | 'unverified' {
+    const bySub = this.db.prepare('SELECT id, email FROM users WHERE google_sub = ?').get(identity.sub) as User | undefined;
+    if (bySub) return bySub;
+    // Linking by email is only safe when Google vouches for the address.
+    if (!identity.emailVerified) return 'unverified';
+    const email = normalizeEmail(identity.email);
+    const byEmail = this.db.prepare('SELECT id, email FROM users WHERE email = ?').get(email) as User | undefined;
+    if (byEmail) {
+      this.db.prepare('UPDATE users SET google_sub = ? WHERE id = ?').run(identity.sub, byEmail.id);
+      return byEmail;
+    }
+    const user: User = { id: randomUUID(), email };
+    this.db
+      .prepare("INSERT INTO users (id, email, password_hash, google_sub, created_at) VALUES (?, ?, '', ?, ?)")
+      .run(user.id, user.email, identity.sub, new Date().toISOString());
+    return user;
+  }
+
   createSession(userId: string): { token: string; expires: Date } {
     const token = randomBytes(32).toString('base64url');
     const now = new Date();

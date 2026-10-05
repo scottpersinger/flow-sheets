@@ -16,12 +16,15 @@ import { ConnectorError } from './connectors/types.ts';
 import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
 import { openDb } from './db.ts';
 import { ImageStore } from './images.ts';
+import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 
 const SESSION_COOKIE = 'sid';
+// Ties a Google sign-in callback to the browser that started it (login CSRF).
+const GOOGLE_STATE_COOKIE = 'gstate';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
@@ -45,6 +48,8 @@ export interface AppOptions {
   launchJob?: Launcher;
   /** Sends email (password reset links). Tests pass a stub; the default comes from the environment. */
   sendMail?: Mailer;
+  /** Google sign-in. Defaults to GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET; unset leaves the button off. */
+  google?: GoogleOptions;
   /** Public origin for links in email, e.g. https://sheets.example.com. Defaults to the request's own origin. */
   appUrl?: string;
   /**
@@ -75,6 +80,8 @@ export async function buildApp(opts: AppOptions) {
   const db = openDb(path.join(opts.dataDir, 'app.db'));
   const auth = new AuthService(db);
   const sendMail = opts.sendMail ?? mailerFromEnv((msg) => app.log.info(msg));
+  const googleOpts = opts.google ?? googleFromEnv();
+  const google = googleOpts ? new GoogleLogin(googleOpts) : null;
   // Forgot-password requests per email, to keep the mailbox and the mailer quiet under abuse.
   const resetRequests = new Map<string, number[]>();
   const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
@@ -214,7 +221,44 @@ export async function buildApp(opts: AppOptions) {
     return { ok: true };
   });
 
-  app.get('/api/auth/me', async (req) => ({ user: req.user }));
+  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !!google }));
+
+  // Google sign-in: send the browser to Google; it comes back to the callback, which signs the user in.
+  app.get('/api/auth/google/start', async (req, reply) => {
+    if (!google) return reply.code(404).send({ error: 'Google sign-in is not set up on this server.' });
+    const { next } = req.query as { next?: string };
+    const { url, state } = google.start(`${originOf(req)}/api/auth/google/callback`, next);
+    reply.setCookie(GOOGLE_STATE_COOKIE, state, {
+      path: '/api/auth/google',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: opts.secureCookies ?? false,
+      maxAge: GOOGLE_STATE_TTL_MS / 1000,
+    });
+    return reply.redirect(url);
+  });
+
+  app.get('/api/auth/google/callback', async (req, reply) => {
+    const fail = (message: string) => reply.redirect(`/login?error=${encodeURIComponent(message)}`);
+    if (!google) return fail('Google sign-in is not set up on this server.');
+    const q = req.query as { state?: string; code?: string; error?: string };
+    const expected = req.cookies[GOOGLE_STATE_COOKIE];
+    reply.clearCookie(GOOGLE_STATE_COOKIE, { path: '/api/auth/google' });
+    if (q.error === 'access_denied') return fail('The Google sign-in was cancelled.');
+    if (q.error || !q.state || !q.code) return fail('Google sign-in failed. Try again.');
+    if (!expected || expected !== q.state) return fail('This sign-in link is invalid or has expired. Try again.');
+    try {
+      const { identity, next } = await google.finish(q.state, q.code);
+      const user = auth.loginWithGoogle(identity);
+      if (user === 'unverified') return fail("Your Google account's email address isn't verified, so it can't be used to sign in.");
+      setSessionCookie(reply, user.id);
+      return reply.redirect(next);
+    } catch (e) {
+      if (e instanceof GoogleLoginError) return fail(e.message);
+      req.log.error({ err: e }, 'google sign-in failed');
+      return fail('Google sign-in failed. Try again.');
+    }
+  });
 
   // Liveness/readiness for the hosting platform: verifies the database is reachable.
   app.get('/api/health', async (_req, reply) => {

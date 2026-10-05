@@ -180,6 +180,33 @@ textarea {
   padding: 8px 12px;
   font-size: 13px;
 }
+.btn.google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  font-weight: 500;
+}
+.btn.google:hover {
+  background: #f8f9fa;
+}
+.auth-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.auth-or::before,
+.auth-or::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
 .auth-switch {
   font-size: 13px;
   color: var(--muted);

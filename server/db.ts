@@ -139,6 +139,12 @@ function migrate(db: DB): void {
   // Slide decks share the table and storage with spreadsheets; kind tells them apart.
   if (!cols.has('kind')) db.exec("ALTER TABLE sheets ADD COLUMN kind TEXT NOT NULL DEFAULT 'sheet'");
 
+  // Google sign-in: the Google account id linked to the user. Accounts created by Google sign-in have an empty
+  // password_hash (no password can match it) until the user sets one through "Forgot your password?".
+  const userCols = new Set((db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name));
+  if (!userCols.has('google_sub')) db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub ON users(google_sub)');
+
   // Agent jobs: the record of a change (who asked, what was committed and merged) and revert links.
   const jobCols = new Set((db.prepare('PRAGMA table_info(agent_jobs)').all() as { name: string }[]).map((c) => c.name));
   const jobAdds: [string, string][] = [

@@ -71,6 +71,117 @@ describe('password reset', () => {
   });
 });
 
+describe('google sign-in', () => {
+  /** A Google that accepts any code and reports this identity. */
+  function fakeGoogle(info: Record<string, unknown>) {
+    const tokenBodies: URLSearchParams[] = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith('https://oauth2.googleapis.com/token')) {
+        tokenBodies.push(new URLSearchParams(String(init?.body)));
+        return Response.json({ access_token: 'at-1', id_token: 'x', token_type: 'Bearer' });
+      }
+      if (String(url).startsWith('https://openidconnect.googleapis.com/v1/userinfo')) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer at-1');
+        return Response.json(info);
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+    return { fetchFn, tokenBodies };
+  }
+
+  async function withGoogleApp(info: Record<string, unknown>, fn: (g: Awaited<ReturnType<typeof buildApp>>, tokenBodies: URLSearchParams[]) => Promise<void>) {
+    const gdir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-google-'));
+    const { fetchFn, tokenBodies } = fakeGoogle(info);
+    const g = await buildApp({ dataDir: gdir, sendMail: async () => {}, appUrl: 'https://sheets.test', google: { clientId: 'cid', clientSecret: 'sec', fetch: fetchFn } });
+    try {
+      await fn(g, tokenBodies);
+    } finally {
+      await g.close();
+      rmSync(gdir, { recursive: true, force: true });
+    }
+  }
+
+  /** Runs /start and returns what the callback needs: the state and the state cookie. */
+  async function start(g: Awaited<ReturnType<typeof buildApp>>, next?: string) {
+    const res = await g.inject({ method: 'GET', url: `/api/auth/google/start${next ? `?next=${encodeURIComponent(next)}` : ''}` });
+    expect(res.statusCode).toBe(302);
+    const url = new URL(res.headers.location as string);
+    expect(url.origin).toBe('https://accounts.google.com');
+    expect(url.searchParams.get('client_id')).toBe('cid');
+    expect(url.searchParams.get('redirect_uri')).toBe('https://sheets.test/api/auth/google/callback');
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    const state = url.searchParams.get('state')!;
+    const cookie = cookieFrom(res);
+    expect(cookie).toBe(`gstate=${state}`);
+    return { state, cookie };
+  }
+
+  it('is off unless configured', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/auth/me' })).json().googleLogin).toBe(false);
+    expect((await app.inject({ method: 'GET', url: '/api/auth/google/start' })).statusCode).toBe(404);
+  });
+
+  it('creates an account on first sign-in and reuses it after', async () => {
+    await withGoogleApp({ sub: 'g-1', email: 'Person@Gmail.com', email_verified: true }, async (g, tokenBodies) => {
+      expect((await g.inject({ method: 'GET', url: '/api/auth/me' })).json().googleLogin).toBe(true);
+      const { state, cookie } = await start(g, '/s/abc');
+      let res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${state}&code=the-code`, headers: { cookie } });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/s/abc');
+      expect(tokenBodies[0].get('code')).toBe('the-code');
+      expect(tokenBodies[0].get('code_verifier')).toBeTruthy();
+      const sid = (res.headers['set-cookie'] as string[]).map((c) => c.split(';')[0]).find((c) => c.startsWith('sid='))!;
+      res = await g.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: sid } });
+      expect(res.json().user.email).toBe('person@gmail.com');
+      const id = res.json().user.id;
+
+      // A Google-created account has no password that works.
+      expect((await g.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'person@gmail.com', password: '' } })).statusCode).toBe(401);
+      expect((await g.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'person@gmail.com', password: 'anything1' } })).statusCode).toBe(401);
+
+      // Second sign-in: same account; an off-site "next" falls back to the home page.
+      const again = await start(g, 'https://evil.example/');
+      res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${again.state}&code=c2`, headers: { cookie: again.cookie } });
+      expect(res.headers.location).toBe('/');
+      const sid2 = (res.headers['set-cookie'] as string[]).map((c) => c.split(';')[0]).find((c) => c.startsWith('sid='))!;
+      expect((await g.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: sid2 } })).json().user.id).toBe(id);
+    });
+  });
+
+  it('links to an existing password account with the same verified email', async () => {
+    await withGoogleApp({ sub: 'g-2', email: 'linked@x.com', email_verified: true }, async (g) => {
+      const reg = await g.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'linked@x.com', password: 'password123' } });
+      const id = reg.json().user.id;
+      const { state, cookie } = await start(g);
+      const res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${state}&code=c`, headers: { cookie } });
+      const sid = (res.headers['set-cookie'] as string[]).map((c) => c.split(';')[0]).find((c) => c.startsWith('sid='))!;
+      expect((await g.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: sid } })).json().user.id).toBe(id);
+      // The password still works too.
+      expect((await g.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'linked@x.com', password: 'password123' } })).statusCode).toBe(200);
+    });
+  });
+
+  it('rejects unverified emails, bad states and cancellations', async () => {
+    await withGoogleApp({ sub: 'g-3', email: 'unverified@x.com', email_verified: false }, async (g) => {
+      const { state, cookie } = await start(g);
+      let res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${state}&code=c`, headers: { cookie } });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toMatch(/^\/login\?error=.*verified/);
+      expect(res.headers['set-cookie']).not.toEqual(expect.arrayContaining([expect.stringMatching(/^sid=/)]));
+
+      // A state the server never issued, or one that doesn't match the browser's cookie.
+      res = await g.inject({ method: 'GET', url: '/api/auth/google/callback?state=nope&code=c', headers: { cookie: 'gstate=nope' } });
+      expect(res.headers.location).toMatch(/^\/login\?error=.*expired/);
+      const fresh = await start(g);
+      res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${fresh.state}&code=c` });
+      expect(res.headers.location).toMatch(/^\/login\?error=.*expired/);
+
+      res = await g.inject({ method: 'GET', url: '/api/auth/google/callback?error=access_denied' });
+      expect(res.headers.location).toMatch(/^\/login\?error=.*cancelled/);
+    });
+  });
+});
+
 describe('auth', () => {
   it('registers, logs in and out', async () => {
     let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'A@x.com', password: 'short' } });
