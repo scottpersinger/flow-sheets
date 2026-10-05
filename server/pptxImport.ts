@@ -18,7 +18,7 @@ import {
   type TextRole,
   type TextStyle,
 } from '../shared/deck.ts';
-import { shapeFromPptx } from '../shared/shapes.ts';
+import { shapeFromPptx, tightArc } from '../shared/shapes.ts';
 import { MAX_CELL_IMAGE_BYTES } from '../shared/types.ts';
 import { ImportError, IMPORT_LIMITS } from './xlsxImport.ts';
 
@@ -427,6 +427,8 @@ class Importer {
         const norm = (a: number) => Math.round((((a + rot) % 360) + 360) % 360 * 100) / 100;
         el.startAngle = norm(a1);
         el.endAngle = norm(a2);
+        // Store the tight box around the visible stroke (PowerPoint's box is the whole ellipse).
+        Object.assign(el, tightArc(el));
       }
       if (!hasText) return [el];
       onShape = el; // the text goes in its own element on top, so sizes, fonts and colors survive

@@ -105,6 +105,21 @@ describe('agent deck tools', () => {
     expect(outline.slides[0].elements.find((e: { id: string }) => e.id === id)).toMatchObject({ shape: 'arc', start_angle: 90, end_angle: 200 });
   });
 
+  it('creates an arc from center and radius with a tight box, and keeps the ellipse when angles change', async () => {
+    const { deck, call } = setup();
+    const res = await call('edit_elements', { slide: 1, set: [{ type: 'shape', shape: 'arc', cx: 300, cy: 300, radius: 100, stroke_width: 2, start_angle: 0, end_angle: 90 }] });
+    const id = res.set[0].id;
+    const find = () => deck.deck.slides[0].elements.find((e) => e.id === id)!;
+    // Quarter circle to the bottom right: box spans center..center+radius, plus the stroke.
+    const near = (b: { x: number; y: number; w: number; h: number }, x: number, y: number, w: number, h: number) => {
+      for (const [k, v] of Object.entries({ x, y, w, h })) expect(b[k as 'x']).toBeCloseTo(v, 6);
+    };
+    expect(find()).toMatchObject({ tight: true });
+    near(find(), 299, 299, 102, 102);
+    await call('edit_elements', { slide: 1, set: [{ id, end_angle: 180 }] });
+    near(find(), 199, 299, 202, 102);
+  });
+
   it('styles shape labels with size, font, bold and color', async () => {
     const { deck, call } = setup();
     const res = await call('edit_elements', { slide: 1, set: [{ type: 'shape', text: 'Q1', size: 9, font: 'Poppins', bold: true, color: '#333' }] });

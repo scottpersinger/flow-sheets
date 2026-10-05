@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { arcGeometry, arcTightBox, tightArc } from './shapes.ts';
 import { buildSlide, deckOutline, fromParagraphs, newDeck, newId, slideContent, toParagraphs, updateSlideContent, validateDeck, type Deck, type TextElement } from './deck.ts';
 
 const titleOf = (slide: ReturnType<typeof buildSlide>) => (slide.elements.find((e) => e.type === 'text' && e.role === 'title') as TextElement).paragraphs[0].text;
@@ -65,5 +66,18 @@ describe('deck model', () => {
     expect(out).toMatchObject({ theme: 'dark', slide_count: 1, current_slide: 1 });
     expect(out.slides[0]).toMatchObject({ slide: 1, layout: 'title-body', notes: 'n' });
     expect(out.slides[0].elements.map((e) => (e as { text?: string }).text)).toEqual(['Agenda', '- One\n- Two']);
+  });
+});
+
+describe('tight arcs', () => {
+  it('converts a whole-ellipse arc to its tight box and back to the same ellipse', () => {
+    const old = { x: 180, y: 187, w: 223, h: 223, startAngle: 310, endAngle: 345, strokeWidth: 3 };
+    const t = tightArc(old);
+    expect(t.tight).toBe(true);
+    expect(t.w).toBeLessThan(100);
+    const g = arcGeometry(t);
+    expect(g.rx).toBeCloseTo(111.5);
+    expect(g.cx).toBeCloseTo(291.5);
+    expect(arcTightBox(g, 310, 345, 3).x).toBeCloseTo(t.x);
   });
 });

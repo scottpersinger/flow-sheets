@@ -1,7 +1,7 @@
 // Deck state with patch-based undo/redo, mirroring WorkbookStore. Unlike the workbook (mutated in place for
 // speed), the deck is small and replaced immutably on every change, so React components can compare by
 // reference. An undo step records whole slides before and after, which keeps the patch set tiny.
-import type { Deck, Slide, ThemeId } from '../../../shared/deck.ts';
+import { migrateArcs, type Deck, type Slide, type ThemeId } from '../../../shared/deck.ts';
 
 export type DeckPatch =
   | { k: 'theme'; before: ThemeId; after: ThemeId }
@@ -102,7 +102,7 @@ export class DeckStore<M = unknown> {
   private listeners = new Set<() => void>();
 
   constructor(deck: Deck) {
-    this.deck = deck;
+    this.deck = migrateArcs(deck);
   }
 
   /** The document the AutoSaver saves. */

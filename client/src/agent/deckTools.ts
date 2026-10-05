@@ -18,6 +18,7 @@ import {
   type TextStyle,
   type ThemeId,
 } from '../../../shared/deck.ts';
+import { arcGeometry, arcTightBox, type ArcGeom } from '../../../shared/shapes.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { SlideRender } from '../deck/renderSlide.ts';
@@ -119,6 +120,28 @@ function applyElementSpec(existing: SlideElement | undefined, s: Input): SlideEl
   const endAngle = s.end_angle !== undefined ? s.end_angle : prev?.endAngle;
   if (shape === 'arc' && typeof startAngle === 'number') el.startAngle = startAngle;
   if (shape === 'arc' && typeof endAngle === 'number') el.endAngle = endAngle;
+  if (shape === 'arc') {
+    // x/y/w/h are the arc's own bounding box. Give cx/cy/rx/ry instead to place it by its ellipse; changing only
+    // the angles or stroke of an existing arc keeps its ellipse.
+    const sw = el.strokeWidth ?? 2;
+    const a = el.startAngle ?? 270;
+    const b = el.endAngle ?? 0;
+    const has = (k: string) => typeof s[k] === 'number';
+    const boxGiven = ['x', 'y', 'w', 'h'].some(has);
+    let g: ArcGeom | undefined;
+    if (['cx', 'cy', 'rx', 'ry', 'radius'].some(has)) {
+      const old = prev ? arcGeometry(prev) : { cx: 480, cy: 270, rx: 100, ry: 100 };
+      const radius = typeof s.radius === 'number' ? s.radius : undefined;
+      g = {
+        cx: has('cx') ? (s.cx as number) : old.cx,
+        cy: has('cy') ? (s.cy as number) : old.cy,
+        rx: has('rx') ? (s.rx as number) : (radius ?? old.rx),
+        ry: has('ry') ? (s.ry as number) : (radius ?? (has('rx') ? (s.rx as number) : old.ry)),
+      };
+    } else if (prev && !boxGiven) g = arcGeometry(prev);
+    if (g) Object.assign(el, arcTightBox(g, a, b, sw));
+    el.tight = true;
+  }
   if (text) el.text = text as string;
   if (textColor) el.textColor = textColor as string;
   // Label style; "" or false clears a property, as for text elements.

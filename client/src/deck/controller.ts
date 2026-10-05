@@ -18,7 +18,7 @@ import {
   type TextStyle,
   type ThemeId,
 } from '../../../shared/deck.ts';
-import { SHAPES } from '../../../shared/shapes.ts';
+import { arcTightBox, SHAPES } from '../../../shared/shapes.ts';
 import { AutoSaver } from '../state/store.ts';
 import { DeckStore, type DeckTx } from './store.ts';
 
@@ -271,10 +271,17 @@ export class DeckController {
   }
 
   addShape(shape: ShapeKind): string {
+    if (shape === 'arc') return this.addArc();
     const square = SHAPES[shape].square;
     const w = shape === 'line' ? 300 : square ? 150 : 200;
     const h = shape === 'line' ? 0 : square ? 150 : 120;
     return this.addElement({ type: 'shape', shape, x: (SLIDE_W - w) / 2, y: (SLIDE_H - h) / 2, w, h, ...(shape === 'line' ? { strokeWidth: 3 } : {}) });
+  }
+
+  /** Add an arc (default: the top-right quarter of a circle) with its tight box. */
+  private addArc(): string {
+    const box = arcTightBox({ cx: SLIDE_W / 2, cy: SLIDE_H / 2, rx: 150, ry: 150 }, 270, 0, 2);
+    return this.addElement({ type: 'shape', shape: 'arc', ...box, tight: true, startAngle: 270, endAngle: 0 });
   }
 
   /** Add an image scaled to fit the slide (natural size is used when known). */

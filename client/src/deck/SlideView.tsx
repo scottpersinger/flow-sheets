@@ -15,10 +15,10 @@ import {
   type Theme,
   type ThemeId,
 } from '../../../shared/deck.ts';
-import { arcPath, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
+import { arcGeometry, arcPathOn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
 /** A box override while an element is being dragged or resized. */
-export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>>;
+export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>> & { startAngle?: number; endAngle?: number };
 
 export interface SlideViewProps {
   slide: Slide;
@@ -110,9 +110,14 @@ function ShapePolygon({ el, theme, box }: { el: ShapeElement; theme: Theme; box:
   const w = box.w ?? el.w;
   const h = box.h ?? el.h;
   if (el.shape === 'arc') {
+    // The ellipse follows the live box (so resizing scales the arc); old arcs are drawn on their whole-ellipse box.
+    const sw = el.strokeWidth ?? 2;
+    const start = box.startAngle ?? el.startAngle;
+    const end = box.endAngle ?? el.endAngle;
+    const g = arcGeometry({ ...el, startAngle: start, endAngle: end, x: 0, y: 0, w, h }, sw);
     return (
       <svg className="sl-shape-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">
-        <path d={arcPath(w, h, el.startAngle, el.endAngle)} fill="none" stroke={el.stroke ?? theme.accent} strokeWidth={el.strokeWidth ?? 2} />
+        <path d={arcPathOn(g, 0, 0, start, end)} fill="none" stroke={el.stroke ?? theme.accent} strokeWidth={sw} />
       </svg>
     );
   }
