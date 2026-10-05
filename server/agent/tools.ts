@@ -67,6 +67,18 @@ const schemas = {
     .object({ tab, at_column: column.describe('New columns are inserted before this column.'), count: z.number().int().min(1).max(1000) })
     .describe('Insert empty columns.'),
   delete_columns: z.object({ tab, from_column: column, to_column: column }).describe('Delete columns (inclusive). The user is asked to confirm.'),
+  move_columns: z
+    .object({
+      tab,
+      from_column: column.describe('First (or only) column to move, e.g. "F".'),
+      to_column: column.optional().describe('Last column of the block when moving several adjacent columns. Defaults to from_column.'),
+      before_column: column.describe(
+        'The moved block is placed immediately left of this column (as it is before the move), e.g. "B" moves it to between A and B. Use the column after the last one to move to the end.',
+      ),
+    })
+    .describe(
+      'Move one column or a block of adjacent columns to a new position; the columns in between shift over. Values, formulas, formatting, widths and filter criteria move with the columns, and formulas anywhere in the workbook are updated to keep pointing at the same data. Returns the new range of the moved columns.',
+    ),
   sort_range: z
     .object({
       tab,

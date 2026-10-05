@@ -637,6 +637,27 @@ export class SheetController {
     );
   }
 
+  /** True if the selection is a single block of whole columns that includes column `c` (it can be dragged). */
+  canDragCols(c: number): boolean {
+    const s = this.sel;
+    const rg = this.primary;
+    return s.ranges.length === 1 && rg.r1 === 0 && rg.r2 === this.tab.rows - 1 && c >= rg.c1 && c <= rg.c2;
+  }
+
+  /** Move the selected whole columns so they sit immediately left of column `before`; selects them afterwards. */
+  moveCols(before: number): void {
+    const rg = this.primary;
+    let start: number | null = null;
+    this.run(
+      (tx) => {
+        start = ops.moveColumns(tx, this.tab.id, rg.c1, rg.c2, before);
+      },
+      () => {
+        if (start !== null) this.selectCols(start, start + rg.c2 - rg.c1);
+      },
+    );
+  }
+
   appendRows(n: number): void {
     this.run((tx) => ops.appendRows(tx, this.tab.id, n));
   }

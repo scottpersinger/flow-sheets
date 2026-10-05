@@ -2,6 +2,26 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-05 — Drag a column to a new position
+
+You can now reorder columns by dragging: select one column or a block of adjacent columns by its header, then drag the header. A drop line shows where they will land, Escape cancels, and one undo reverses the whole move. Everything travels with the columns (values, formatting, width, filter settings, images, links), formulas on any tab are updated to keep pointing at the same data, and the moved columns stay selected; typecheck and all tests pass, though I haven't tried the drag in a browser. I also added a new assistant tool, `move_columns(from_column, to_column?, before_column, tab?)`, which places a column or block (from `from_column` through `to_column`, which defaults to `from_column`) immediately left of `before_column` on the given tab (the active tab by default) and returns the new range. For example, `move_columns(from_column="F", before_column="E")` swaps the two balance columns. A range formula like `SUM(A:B)` drops a column that is moved out of it and widens if one is moved into it, and the frozen-column count does not change.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-05.
+
+### Request
+
+The user wants to reorder columns in a spreadsheet by dragging. Today the only ways to reorder are manual cut/paste or insert/delete columns. 
+
+UI: In the grid, the user clicks a column header letter to select the column (or a contiguous multi-column selection), then presses and drags that header; a drop indicator line shows the target column boundary; on release the selected column(s) move there. Dragging should work on the selected columns only (drag starting on an unselected header just selects it as today). Escape cancels the drag. Undo (Cmd/Ctrl+Z) must reverse the whole move in one step.
+
+Behavior: moving column(s) shifts the columns in between by the width of the moved block. Everything travels with the column: values, formulas, formatting, column width, filter state, and images/links. Formulas elsewhere in the workbook (including on other tabs) that reference moved or shifted cells must be updated so they keep pointing at the same data (same as how insert/delete columns rewrite references). Filter range, frozen columns and the selection should follow sensibly (selection ends up on the moved columns in their new position).
+
+Also add an assistant tool move_columns with inputs: from_column (string, column letter, e.g. "F"), to_column (optional string, last column of a block when moving several, defaults to from_column), before_column (string, the column letter the block should be placed in front of; the block ends up immediately left of it), tab (optional string, defaults to active tab). Returns the new range of the moved columns. Example: on the 'Accounts' tab of 'Brex Card Transactions' (columns id, name, status, primary, current_balance, available_balance, currency), move_columns(from_column="F", before_column="E") swaps available_balance in front of current_balance.
+
+Files: client/src/agent/clientTools.test.ts, client/src/agent/clientTools.ts, client/src/agent/describe.ts, client/src/grid/Grid.tsx, client/src/grid/render.ts, client/src/state/controller.ts, client/src/state/ops.test.ts, client/src/state/ops.ts, server/agent/tools.ts, shared/agent/protocol.ts, shared/formula/adjust.ts
+
+Job: 88c2ef97-a49a-4d6c-a263-1b31d04db093
+
 ## 2026-10-04 — Add Connectors framework with Brex connector
 
 I've added the Connectors framework with Brex as the first connector, and three new assistant tools. Typecheck and all tests pass, but I couldn't run the client build here (it needed approval), so the new page has been type-checked but not built or opened in a browser.

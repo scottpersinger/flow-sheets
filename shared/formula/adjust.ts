@@ -110,6 +110,62 @@ export function adjustForDelete(raw: string, ownSheet: string, sheet: string, ax
   });
 }
 
+/**
+ * A move of rows/cols [from, to] (inclusive) to just before index `before` (indexes before the move;
+ * `before` outside [from, to + 1]). The lines in between shift over by the size of the block.
+ */
+export interface LineMove {
+  from: number;
+  to: number;
+  before: number;
+}
+
+/** New index of every line after a move. */
+export function moveIndexMap({ from, to, before }: LineMove): (i: number) => number {
+  const n = to - from + 1;
+  const start = before < from ? before : before - n;
+  return (i) => (i >= from && i <= to ? i - from + start : before < from && i >= before && i < from ? i + n : before > to && i > to && i < before ? i - n : i);
+}
+
+/**
+ * New span of the lines [a, b] after a move. If the lines are still next to each other the span covers them all.
+ * Otherwise the moved lines left the span (like a delete), or landed inside it (like an insert, which widens it).
+ */
+export function moveSpan(a: number, b: number, mv: LineMove): [number, number] {
+  const map = moveIndexMap(mv);
+  let lo = Infinity;
+  let hi = -Infinity;
+  let sLo = Infinity;
+  let sHi = -Infinity;
+  // The map is increasing on each piece (the block, the shifted lines, the rest), so the extremes are at the
+  // ends of [a, b] or next to piece boundaries.
+  const cands = new Set([a, b]);
+  for (const x of [mv.from, mv.to, mv.before]) for (const d of [-1, 0, 1]) if (x + d >= a && x + d <= b) cands.add(x + d);
+  for (const i of cands) {
+    const m = map(i);
+    lo = Math.min(lo, m);
+    hi = Math.max(hi, m);
+    if (i < mv.from || i > mv.to) (sLo = Math.min(sLo, m)), (sHi = Math.max(sHi, m));
+  }
+  const overlaps = a <= mv.to && b >= mv.from;
+  if (!overlaps || hi - lo === b - a || sLo === Infinity) return [lo, hi];
+  return [sLo, sHi];
+}
+
+/** Adjust refs pointing at `sheet` for a move of rows/cols (see moveSpan for how ranges are adjusted). */
+export function adjustForMove(raw: string, ownSheet: string, sheet: string, axis: Axis, mv: LineMove): string {
+  const k = axisKeys(axis);
+  const target = sheet.toLowerCase();
+  const map = moveIndexMap(mv);
+  return transformRefs(raw, ownSheet, (ref, s) => {
+    if (s.toLowerCase() !== target || ref.kind === k.whole) return ref;
+    const [na, nb] = ref.kind === 'cell' ? [map(ref[k.a]), map(ref[k.a])] : moveSpan(ref[k.a], ref[k.b], mv);
+    ref[k.a] = na;
+    ref[k.b] = nb;
+    return ref;
+  });
+}
+
 /** Rename sheet references (case-insensitive match on the old name). */
 export function renameSheetRefs(raw: string, oldName: string, newName: string): string {
   const target = oldName.toLowerCase();

@@ -85,6 +85,41 @@ describe('agent sheet tools', () => {
     expect(ctl.tab.cells.A1.v).toBe('Name');
   });
 
+  it('moves columns with move_columns, updating formulas on other tabs, and undoes in one step', async () => {
+    const { ctl, call } = setup();
+    const header = ['id', 'name', 'status', 'primary', 'current_balance', 'available_balance', 'currency'];
+    await call('write_range', { start: 'A1', rows: [header, [1, 'Ops', 'open', true, 100, 80, 'USD']] });
+    await call('add_tab', { name: 'Summary' });
+    await call('write_range', { tab: 'Summary', start: 'A1', rows: [['=Sheet1!F2', '=SUM(Sheet1!E2:F2)']] });
+    const res = await call('move_columns', { tab: 'Sheet1', from_column: 'F', before_column: 'E' });
+    expect(res).toMatchObject({ new_range: 'E:E', tab: 'Sheet1' });
+    const read = await call('read_range', { tab: 'Sheet1', range: 'A1:G1' });
+    expect(read.values[0]).toEqual(['id', 'name', 'status', 'primary', 'available_balance', 'current_balance', 'currency']);
+    const summary = ctl.store.workbook.tabs[1];
+    expect(summary.cells.A1.v).toBe('=Sheet1!E2');
+    expect(summary.cells.B1.v).toBe('=SUM(Sheet1!E2:F2)');
+    expect(ctl.store.display(summary.id, 0, 0)).toBe('80');
+
+    await expect(call('move_columns', { tab: 'Sheet1', from_column: 'B', to_column: 'C', before_column: 'D' })).rejects.toThrow(ToolError);
+    ctl.undo();
+    expect(ctl.store.workbook.tabs.length).toBe(1);
+    expect(ctl.store.workbook.tabs[0].cells.F1).toBeUndefined();
+  });
+
+  it('drags selected columns: selection follows the moved columns and undo restores in one step', async () => {
+    const { ctl, call } = setup();
+    await call('write_range', { start: 'A1', rows: [['a', 'b', 'c', 'd']] });
+    ctl.selectCols(0, 1);
+    expect(ctl.canDragCols(1)).toBe(true);
+    expect(ctl.canDragCols(2)).toBe(false);
+    ctl.moveCols(4); // A:B to just before E
+    expect(['A1', 'B1', 'C1', 'D1'].map((k) => ctl.tab.cells[k].v)).toEqual(['c', 'd', 'a', 'b']);
+    expect(ctl.primary).toMatchObject({ c1: 2, c2: 3, r1: 0, r2: ctl.tab.rows - 1 });
+    ctl.undo();
+    expect(['A1', 'B1', 'C1', 'D1'].map((k) => ctl.tab.cells[k].v)).toEqual(['a', 'b', 'c', 'd']);
+    expect(ctl.primary).toMatchObject({ c1: 0, c2: 1 });
+  });
+
   it('puts an image from a URL in a cell, reads it as [image], and undoes it', async () => {
     const { ctl, call } = setup();
     const url = 'https://example.com/logo.png';
