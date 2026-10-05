@@ -47,6 +47,11 @@ export interface AppOptions {
   sendMail?: Mailer;
   /** Public origin for links in email, e.g. https://sheets.example.com. Defaults to the request's own origin. */
   appUrl?: string;
+  /**
+   * Old host names that should redirect (301) to appUrl, keeping the path. Defaults to LEGACY_HOSTS
+   * (comma-separated). Lets the app move to a new domain while old links keep working.
+   */
+  legacyHosts?: string[];
   /** Connector overrides (tests pass a fake fetch). */
   connectors?: Partial<Omit<ConnectorServiceOptions, 'keyFile'>>;
 }
@@ -98,6 +103,18 @@ export async function buildApp(opts: AppOptions) {
 
   app.decorate('connectors', connectors);
   app.decorateRequest('user', null);
+
+  // Requests to a retired host name go to the current one (same path and query).
+  const appUrl = (opts.appUrl ?? process.env.APP_URL)?.replace(/\/$/, '');
+  const legacyHosts = new Set((opts.legacyHosts ?? process.env.LEGACY_HOSTS?.split(',') ?? []).map((h) => h.trim().toLowerCase()).filter(Boolean));
+  if (appUrl && legacyHosts.size) {
+    const current = new URL(appUrl).host.toLowerCase();
+    app.addHook('onRequest', async (req, reply) => {
+      const host = String(req.headers.host ?? '').toLowerCase();
+      if (legacyHosts.has(host) && host !== current) return reply.code(301).redirect(`${appUrl}${req.url}`);
+    });
+  }
+
   app.addHook('onRequest', async (req) => {
     req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
   });

@@ -160,6 +160,25 @@ describe('sheets', () => {
   });
 });
 
+describe('legacy hosts', () => {
+  it('redirects retired host names to the app URL, keeping the path', async () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'sheetsweb-host-test-'));
+    const a = await buildApp({ dataDir: d, appUrl: 'https://docs.example.com', legacyHosts: ['sheets.example.com'] });
+    try {
+      let res = await a.inject({ method: 'GET', url: '/s/abc?x=1', headers: { host: 'sheets.example.com' } });
+      expect(res.statusCode).toBe(301);
+      expect(res.headers.location).toBe('https://docs.example.com/s/abc?x=1');
+      res = await a.inject({ method: 'GET', url: '/api/health', headers: { host: 'SHEETS.example.com:443' } });
+      expect(res.statusCode).toBe(200); // a port suffix is not the retired host; only exact matches redirect
+      res = await a.inject({ method: 'GET', url: '/api/health', headers: { host: 'docs.example.com' } });
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await a.close();
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('presentations', () => {
   it('creates, saves, lists, renames and deletes decks, kept apart from spreadsheets', async () => {
     let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'deck@x.com', password: 'password123' } });

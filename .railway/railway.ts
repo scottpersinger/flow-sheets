@@ -22,11 +22,14 @@ export default defineRailway(() => {
       RAILPACK_PRUNE_DEPS: "false",
       // Give in-flight requests a moment to finish when a deploy replaces the container.
       RAILWAY_DEPLOYMENT_DRAINING_SECONDS: "15",
+      // The app lives at docs.freeflow.im; the old sheets.freeflow.im host redirects there.
+      APP_URL: "https://docs.freeflow.im",
+      LEGACY_HOSTS: "sheets.freeflow.im",
     },
     volumeMounts: {
       "/data": volume("flow-sheets-data", { region: "sfo", sizeMB: 5000 }),
     },
-    domains: ["sheets.freeflow.im"],
+    domains: ["docs.freeflow.im", "sheets.freeflow.im"],
     // A volume can only be attached to a single replica.
     replicas: { sfo: 1 },
   });
