@@ -77,7 +77,23 @@ describe('MCP server', () => {
     expect(v2.getServerVersion()?.version).toBe('0.3.0');
     expect(v2.getInstructions()).toContain('read_file');
     expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(['read_file']);
-    expect(newer.filter((t) => t.name !== 'read_file')).toEqual(tools);
+    // Besides read_file, only edit_elements differs: version 2 places an arc by its own box or its center and radius.
+    expect(newer.filter((t) => t.name !== 'read_file' && JSON.stringify(t) !== JSON.stringify(tools.find((o) => o.name === t.name))).map((t) => t.name)).toEqual(['edit_elements']);
+    await v2.close();
+  });
+
+  it('places an arc by the box of its whole ellipse in version 1, and by its own box in version 2', async () => {
+    await call('create_deck', { title: 'Arcs', slides: [{ title: 'Arcs' }] });
+    const v2 = await connect(2);
+    const arc = { type: 'shape', shape: 'arc', x: 100, y: 100, w: 200, h: 200, start_angle: 270, end_angle: 0, stroke_width: 2 };
+    await call('edit_elements', { slide: 1, set: [arc] });
+    await call('edit_elements', { slide: 1, set: [arc] }, v2);
+    const arcs = ((await call('read_deck', { slides: [1] })).data?.slides as { elements: { shape?: string; x: number; y: number; w: number; h: number }[] }[])[0].elements.filter((e) => e.shape === 'arc');
+    // The top-right quarter of a 200-wide circle, stroke included; in version 2 the box given is that box.
+    expect(arcs.map(({ x, y, w, h }) => [x, y, w, h].map(Math.round))).toEqual([
+      [199, 99, 102, 102],
+      [100, 100, 200, 200],
+    ]);
     await v2.close();
   });
 

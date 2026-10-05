@@ -143,6 +143,84 @@ export function isDrawn(kind: ShapeKind): boolean {
   return kind === 'arc' || !!(SHAPES[kind].points || SHAPES[kind].path);
 }
 
+export interface ArcGeom {
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+}
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const rad = (deg: number) => (deg * Math.PI) / 180;
+
+/** Extent of the arc on the unit circle (x = cos, y = sin, y down) from start to end degrees clockwise. */
+function arcExtents(start: number, end: number) {
+  const sweep = (((end - start) % 360) + 360) % 360;
+  const angles = [start, start + sweep];
+  for (let a = Math.ceil(start / 90) * 90; a <= start + sweep; a += 90) angles.push(a);
+  const xs = angles.map((a) => Math.cos(rad(a)));
+  const ys = angles.map((a) => Math.sin(rad(a)));
+  return { u0: Math.min(...xs), u1: Math.max(...xs), v0: Math.min(...ys), v1: Math.max(...ys) };
+}
+
+/** The box that tightly bounds the stroke of an arc along the given ellipse. */
+export function arcTightBox(g: ArcGeom, start: number, end: number, strokeWidth: number): Box {
+  const { u0, u1, v0, v1 } = arcExtents(start, end);
+  const half = strokeWidth / 2;
+  return { x: g.cx + g.rx * u0 - half, y: g.cy + g.ry * v0 - half, w: g.rx * (u1 - u0) + strokeWidth, h: g.ry * (v1 - v0) + strokeWidth };
+}
+
+/** Below this extent on the unit circle (and well below the other side's) a side of an arc's box is too thin to tell the radius from. */
+const FLAT = 0.2;
+
+/** The ellipse implied by a tight box (stroke included) and the arc's angles. */
+export function arcEllipse(box: Box, start: number, end: number, strokeWidth: number): ArcGeom {
+  const { u0, u1, v0, v1 } = arcExtents(start, end);
+  // A short arc across an axis (355° to 5°) is nearly flat one way, and that side of the box says little about
+  // its radius: take that radius from the other side, as for a circle.
+  const du = u1 - u0;
+  const dv = v1 - v0;
+  let rx = Math.max(box.w - strokeWidth, 0) / Math.max(du, 0.01);
+  let ry = Math.max(box.h - strokeWidth, 0) / Math.max(dv, 0.01);
+  if (du < FLAT && du < dv / 4) rx = ry;
+  else if (dv < FLAT && dv < du / 4) ry = rx;
+  return { cx: box.x + strokeWidth / 2 - rx * u0, cy: box.y + strokeWidth / 2 - ry * v0, rx, ry };
+}
+
+/** An arc element's box, angles and stroke width as stored; `tight` is false for old arcs whose box is the whole ellipse. */
+interface ArcLike extends Box {
+  startAngle?: number;
+  endAngle?: number;
+  strokeWidth?: number;
+  tight?: boolean;
+}
+
+/** The ellipse an arc element is drawn on, in slide coordinates. */
+export function arcGeometry(el: ArcLike, strokeWidth = el.strokeWidth ?? 2): ArcGeom {
+  if (!el.tight) return { cx: el.x + el.w / 2, cy: el.y + el.h / 2, rx: el.w / 2, ry: el.h / 2 };
+  return arcEllipse(el, el.startAngle ?? 270, el.endAngle ?? 0, strokeWidth);
+}
+
+/** The element's box and flag converted to the tight form (a no-op for arcs that already are). */
+export function tightArc<T extends ArcLike>(el: T, strokeWidth = el.strokeWidth ?? 2): T & { tight?: boolean } {
+  if (el.tight) return el;
+  const box = arcTightBox(arcGeometry(el), el.startAngle ?? 270, el.endAngle ?? 0, strokeWidth);
+  return { ...el, ...box, tight: true };
+}
+
+/** SVG path of an arc along an ellipse, in the local coordinates of a box whose top-left is (ox, oy). */
+export function arcPathOn(g: ArcGeom, ox: number, oy: number, start = 270, end = 0): string {
+  const pt = (deg: number) => `${g.cx - ox + g.rx * Math.cos(rad(deg))} ${g.cy - oy + g.ry * Math.sin(rad(deg))}`;
+  const sweep = (((end - start) % 360) + 360) % 360;
+  if (sweep === 0) return `M ${pt(start)}`;
+  return `M ${pt(start)} A ${g.rx} ${g.ry} 0 ${sweep > 180 ? 1 : 0} 1 ${pt(end)}`;
+}
+
 /** SVG polygon points for a polygon shape, scaled to a box; undefined for the CSS-drawn shapes. */
 export function polygonPoints(kind: ShapeKind, w: number, h: number): string | undefined {
   const pts = SHAPES[kind].points;

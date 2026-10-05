@@ -55,7 +55,11 @@ const slideSpec = z.object({ layout: layout.optional().describe('Defaults to tit
 const connection = z
   .object({ element_id: z.string().describe('Id of the element to attach to (from read_deck).'), site: z.enum(['top', 'right', 'bottom', 'left']).describe('Which side: the connection point is the middle of that side.') })
   .nullable();
-const elementSpec = z
+/**
+ * An element as version 1 of the ChatGPT plugin's tools describes it (an arc's box is its whole ellipse); the
+ * plugin keeps offering it unchanged. `elementSpec` is the current one.
+ */
+const elementSpecV1 = z
   .object({
     id: z.string().optional().describe('Id of an existing element (from read_deck) to change. Omit to add a new element.'),
     type: z.enum(['text', 'image', 'shape', 'line']).optional().describe('Required for a new element. Use "line" for lines, arrows and connectors.'),
@@ -92,6 +96,34 @@ const elementSpec = z
     stroke_width: z.number().min(0).max(100).optional().describe('Outline width of a shape, or the thickness of a line (default 3).'),
     start_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: start angle in degrees, clockwise from 3 o'clock (default 270 = top). The arc is an open stroke (no fill) along the ellipse in the shape's box, drawn clockwise to end_angle."),
     end_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: end angle in degrees, clockwise from 3 o'clock (default 0 = right)."),
+  })
+  .describe('An element to add or change. Only the properties given change.');
+
+const editElements = <T extends z.ZodType>(spec: T) =>
+  z
+    .object({
+      slide: slideNumber,
+      set: z.array(spec).max(50).optional().describe('Elements to add (no id) or change (with id).'),
+      remove: z.array(z.string()).max(50).optional().describe('Ids of elements to remove.'),
+    })
+    .describe('Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images, shapes, and lines/arrows/connectors (type "line"). Prefer update_slide for text changes.');
+
+/** edit_elements as version 1 of the ChatGPT plugin's tools has it. */
+export const editElementsV1 = editElements(elementSpecV1);
+
+const elementSpec = elementSpecV1
+  .extend({
+    start_angle: z
+      .number()
+      .min(-360)
+      .max(720)
+      .optional()
+      .describe("Arc shapes: start angle in degrees, clockwise from 3 o'clock (default 270 = top). The arc is an open stroke (no fill) along an ellipse, drawn clockwise to end_angle. Its x/y/w/h are the box around the visible stroke, not the whole ellipse."),
+    cx: z.number().optional().describe("Arc shapes: x of the ellipse center, as an alternative to x/y/w/h. For an arc, x/y/w/h are the bounding box of the visible arc stroke itself (read_deck reports the same), not the whole ellipse; the ellipse is derived from it and the angles, so resizing scales the arc."),
+    cy: z.number().optional().describe('Arc shapes: y of the ellipse center.'),
+    radius: z.number().min(0).optional().describe('Arc shapes: circle radius (use rx/ry for an ellipse). With cx, cy, start_angle and end_angle this creates an arc; the box is computed.'),
+    rx: z.number().min(0).optional().describe('Arc shapes: horizontal ellipse radius.'),
+    ry: z.number().min(0).optional().describe('Arc shapes: vertical ellipse radius.'),
   })
   .describe('An element to add or change. Only the properties given change.');
 
@@ -237,13 +269,7 @@ export const schemas = {
     .describe(
       'Change the content of one slide by role: title, subtitle, body, body2, image, caption, notes, background. Only the properties given change, and elements keep their positions. Pass layout to rearrange the slide.',
     ),
-  edit_elements: z
-    .object({
-      slide: slideNumber,
-      set: z.array(elementSpec).max(50).optional().describe('Elements to add (no id) or change (with id).'),
-      remove: z.array(z.string()).max(50).optional().describe('Ids of elements to remove.'),
-    })
-    .describe('Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images, shapes, and lines/arrows/connectors (type "line"). Prefer update_slide for text changes.'),
+  edit_elements: editElements(elementSpec),
   render_slide: z
     .object({
       slide: slideNumber,
