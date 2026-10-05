@@ -218,6 +218,19 @@ textarea {
 .auth-sep {
   margin: 0 8px;
 }
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--blue);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.link-button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
 .auth-text {
   margin: 0;
   font-size: 14px;

@@ -13,7 +13,7 @@ import { AgentStore } from './agent/store.ts';
 import { registerConnectorService } from './agent/tools.ts';
 import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
 import { ConnectorError } from './connectors/types.ts';
-import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, validateCredentials, type User } from './auth.ts';
+import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, VERIFY_TTL_MS, validateCredentials, type User } from './auth.ts';
 import { openDb } from './db.ts';
 import { ImageStore } from './images.ts';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
@@ -82,8 +82,17 @@ export async function buildApp(opts: AppOptions) {
   const sendMail = opts.sendMail ?? mailerFromEnv((msg) => app.log.info(msg));
   const googleOpts = opts.google ?? googleFromEnv();
   const google = googleOpts ? new GoogleLogin(googleOpts) : null;
-  // Forgot-password requests per email, to keep the mailbox and the mailer quiet under abuse.
-  const resetRequests = new Map<string, number[]>();
+  // Emails sent per kind and address (password resets, verification links), to keep the mailbox and the
+  // mailer quiet under abuse: at most 5 an hour.
+  const mailRequests = new Map<string, number[]>();
+  const tooManyMails = (kind: string, email: string): boolean => {
+    const key = `${kind}:${email.trim().toLowerCase()}`;
+    const now = Date.now();
+    const recent = (mailRequests.get(key) ?? []).filter((t) => now - t < 60 * 60 * 1000);
+    if (recent.length >= 5) return true;
+    mailRequests.set(key, [...recent, now]);
+    return false;
+  };
   const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
@@ -147,14 +156,33 @@ export async function buildApp(opts: AppOptions) {
   };
 
   // --- Auth ----------------------------------------------------------------
+  /** Email the link that verifies a new account's address. */
+  const sendVerification = async (req: FastifyRequest, user: User) => {
+    const { token } = auth.createEmailVerification(user.id);
+    const link = `${originOf(req)}/verify?token=${token}`;
+    const hours = Math.round(VERIFY_TTL_MS / 3600000);
+    await sendMail({
+      to: user.email,
+      subject: 'Verify your email for Sheets',
+      text: `Welcome to Sheets! Confirm that ${user.email} is your address by opening this link (it expires in ${hours} hours):\n${link}\n\nIf you didn't create a Sheets account, you can ignore this email.`,
+    });
+  };
+
+  // Sign-up creates the account but no session: the user is signed in by the link in the verification email.
   app.post('/api/auth/register', async (req, reply) => {
     const { email, password } = (req.body ?? {}) as { email?: unknown; password?: unknown };
     const problem = validateCredentials(email, password);
     if (problem) return reply.code(400).send({ error: problem });
+    if (tooManyMails('verify', email as string)) return reply.code(429).send({ error: 'Too many sign-up attempts for this address. Try again in an hour.' });
     const user = await auth.register(email as string, password as string);
     if (user === 'exists') return reply.code(409).send({ error: 'An account with this email already exists.' });
-    setSessionCookie(reply, user.id);
-    return { user };
+    try {
+      await sendVerification(req, user);
+    } catch (e) {
+      req.log.error({ err: e }, 'verification email failed');
+      return reply.code(500).send({ error: 'The verification email could not be sent. Try again later.' });
+    }
+    return { pending: true, email: user.email };
   });
 
   app.post('/api/auth/login', async (req, reply) => {
@@ -164,6 +192,35 @@ export async function buildApp(opts: AppOptions) {
     }
     const user = await auth.login(email, password);
     if (!user) return reply.code(401).send({ error: 'Invalid email or password.' });
+    if (user === 'unverified') {
+      return reply.code(403).send({ error: 'Please verify your email address first. Check your inbox for the link we sent you.', code: 'unverified' });
+    }
+    setSessionCookie(reply, user.id);
+    return { user };
+  });
+
+  // Send the verification link again. Always answers OK so the response doesn't reveal account state.
+  app.post('/api/auth/verify/resend', async (req, reply) => {
+    const { email } = (req.body ?? {}) as { email?: unknown };
+    if (typeof email !== 'string' || !email.trim()) return reply.code(400).send({ error: 'Please enter your email address.' });
+    if (tooManyMails('verify', email)) return reply.code(429).send({ error: 'Too many verification emails for this address. Try again in an hour.' });
+    const user = auth.unverifiedUser(email);
+    if (user) {
+      try {
+        await sendVerification(req, user);
+      } catch (e) {
+        req.log.error({ err: e }, 'verification email failed');
+        return reply.code(500).send({ error: 'The verification email could not be sent. Try again later.' });
+      }
+    }
+    return { ok: true };
+  });
+
+  // The emailed link opens /verify, which posts the token here; a good token signs the user in.
+  app.post('/api/auth/verify', async (req, reply) => {
+    const { token } = (req.body ?? {}) as { token?: unknown };
+    const user = typeof token === 'string' ? auth.verifyEmail(token) : null;
+    if (!user) return reply.code(400).send({ error: 'This verification link is invalid or has expired. Sign in to request a new one.' });
     setSessionCookie(reply, user.id);
     return { user };
   });
@@ -172,11 +229,7 @@ export async function buildApp(opts: AppOptions) {
   app.post('/api/auth/forgot', async (req, reply) => {
     const { email } = (req.body ?? {}) as { email?: unknown };
     if (typeof email !== 'string' || !email.trim()) return reply.code(400).send({ error: 'Please enter your email address.' });
-    const key = email.trim().toLowerCase();
-    const now = Date.now();
-    const recent = (resetRequests.get(key) ?? []).filter((t) => now - t < 60 * 60 * 1000);
-    if (recent.length >= 5) return reply.code(429).send({ error: 'Too many reset requests for this address. Try again in an hour.' });
-    resetRequests.set(key, [...recent, now]);
+    if (tooManyMails('reset', email)) return reply.code(429).send({ error: 'Too many reset requests for this address. Try again in an hour.' });
 
     const reset = auth.createPasswordReset(email);
     if (reset) {

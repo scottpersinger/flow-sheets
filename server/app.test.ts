@@ -5,15 +5,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildSlide, newId } from '../shared/deck.ts';
 import { buildPptx } from '../shared/pptxExport.ts';
 import { buildApp } from './app.ts';
+import { mailbox, signUp } from './testing.ts';
 
 let dir: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
 
-const sentMail: { to: string; subject: string; text: string }[] = [];
+const box = mailbox();
+const sentMail = box.sent;
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-test-'));
-  app = await buildApp({ dataDir: dir, sendMail: async (m) => void sentMail.push(m), appUrl: 'https://sheets.test' });
+  app = await buildApp({ dataDir: dir, sendMail: box.send, appUrl: 'https://sheets.test' });
 });
 
 afterAll(async () => {
@@ -29,7 +31,8 @@ function cookieFrom(res: { headers: Record<string, unknown> }): string {
 
 describe('password reset', () => {
   it('emails a one-time link that sets a new password and signs the user in', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'reset@x.com', password: 'oldpassword1' } });
+    await signUp(app, box, 'reset@x.com', 'oldpassword1');
+    sentMail.length = 0;
 
     // Unknown address: same answer, no mail.
     let res = await app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: 'nobody@x.com' } });
@@ -89,12 +92,13 @@ describe('google sign-in', () => {
     return { fetchFn, tokenBodies };
   }
 
-  async function withGoogleApp(info: Record<string, unknown>, fn: (g: Awaited<ReturnType<typeof buildApp>>, tokenBodies: URLSearchParams[]) => Promise<void>) {
+  async function withGoogleApp(info: Record<string, unknown>, fn: (g: Awaited<ReturnType<typeof buildApp>>, tokenBodies: URLSearchParams[], gbox: ReturnType<typeof mailbox>) => Promise<void>) {
     const gdir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-google-'));
     const { fetchFn, tokenBodies } = fakeGoogle(info);
-    const g = await buildApp({ dataDir: gdir, sendMail: async () => {}, appUrl: 'https://sheets.test', google: { clientId: 'cid', clientSecret: 'sec', fetch: fetchFn } });
+    const gbox = mailbox();
+    const g = await buildApp({ dataDir: gdir, sendMail: gbox.send, appUrl: 'https://sheets.test', google: { clientId: 'cid', clientSecret: 'sec', fetch: fetchFn } });
     try {
-      await fn(g, tokenBodies);
+      await fn(g, tokenBodies, gbox);
     } finally {
       await g.close();
       rmSync(gdir, { recursive: true, force: true });
@@ -148,16 +152,34 @@ describe('google sign-in', () => {
     });
   });
 
-  it('links to an existing password account with the same verified email', async () => {
-    await withGoogleApp({ sub: 'g-2', email: 'linked@x.com', email_verified: true }, async (g) => {
-      const reg = await g.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'linked@x.com', password: 'password123' } });
-      const id = reg.json().user.id;
+  it('links to an existing verified password account with the same email', async () => {
+    await withGoogleApp({ sub: 'g-2', email: 'linked@x.com', email_verified: true }, async (g, _tokens, gbox) => {
+      const { user } = await signUp(g, gbox, 'linked@x.com');
+      const id = user.id;
       const { state, cookie } = await start(g);
       const res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${state}&code=c`, headers: { cookie } });
       const sid = (res.headers['set-cookie'] as string[]).map((c) => c.split(';')[0]).find((c) => c.startsWith('sid='))!;
       expect((await g.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: sid } })).json().user.id).toBe(id);
       // The password still works too.
       expect((await g.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'linked@x.com', password: 'password123' } })).statusCode).toBe(200);
+    });
+  });
+
+  it('takes over an unverified password account with the same email', async () => {
+    await withGoogleApp({ sub: 'g-4', email: 'squatted@x.com', email_verified: true }, async (g) => {
+      // Someone registered with this address but never opened the verification link.
+      const reg = await g.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'squatted@x.com', password: 'password123' } });
+      expect(reg.statusCode).toBe(200);
+      expect(reg.headers['set-cookie']).toBeUndefined();
+
+      const { state, cookie } = await start(g);
+      const res = await g.inject({ method: 'GET', url: `/api/auth/google/callback?state=${state}&code=c`, headers: { cookie } });
+      expect(res.headers.location).toBe('/');
+      const sid = (res.headers['set-cookie'] as string[]).map((c) => c.split(';')[0]).find((c) => c.startsWith('sid='))!;
+      expect((await g.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: sid } })).json().user.email).toBe('squatted@x.com');
+      // The squatter's password no longer opens the account, and it now counts as taken.
+      expect((await g.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'squatted@x.com', password: 'password123' } })).statusCode).toBe(401);
+      expect((await g.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'squatted@x.com', password: 'password456' } })).statusCode).toBe(409);
     });
   });
 
@@ -183,14 +205,45 @@ describe('google sign-in', () => {
 });
 
 describe('auth', () => {
-  it('registers, logs in and out', async () => {
+  it('registers, verifies the email, logs in and out', async () => {
     let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'A@x.com', password: 'short' } });
     expect(res.statusCode).toBe(400);
 
+    // Sign-up sends a link and gives no session yet.
     res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'A@x.com', password: 'password123' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ pending: true, email: 'a@x.com' });
+    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(sentMail.at(-1)?.to).toBe('a@x.com');
+    expect(sentMail.at(-1)?.subject).toMatch(/verify/i);
+
+    // The right password doesn't help until the link is opened.
+    res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@x.com', password: 'password123' } });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe('unverified');
+
+    // Signing up again before verifying just replaces the password and sends a fresh link; the old link dies.
+    const firstToken = box.tokenFor('a@x.com', 'verify');
+    res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'a@x.com', password: 'password456' } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'POST', url: '/api/auth/verify', payload: { token: firstToken } });
+    expect(res.statusCode).toBe(400);
+
+    // Send-again works for an unverified account and says nothing about unknown ones.
+    res = await app.inject({ method: 'POST', url: '/api/auth/verify/resend', payload: { email: 'a@x.com' } });
+    expect(res.statusCode).toBe(200);
+    const before = sentMail.length;
+    res = await app.inject({ method: 'POST', url: '/api/auth/verify/resend', payload: { email: 'ghost@x.com' } });
+    expect(res.statusCode).toBe(200);
+    expect(sentMail.length).toBe(before);
+
+    res = await app.inject({ method: 'POST', url: '/api/auth/verify', payload: { token: box.tokenFor('a@x.com', 'verify') } });
     expect(res.statusCode).toBe(200);
     expect(res.json().user.email).toBe('a@x.com');
     const cookie = cookieFrom(res);
+    // One use only.
+    res = await app.inject({ method: 'POST', url: '/api/auth/verify', payload: { token: box.tokenFor('a@x.com', 'verify') } });
+    expect(res.statusCode).toBe(400);
 
     res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } });
     expect(res.json().user.email).toBe('a@x.com');
@@ -205,8 +258,14 @@ describe('auth', () => {
     res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } });
     expect(res.json().user).toBe(null);
 
-    res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@x.com', password: 'password123' } });
+    res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@x.com', password: 'password456' } });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('limits verification emails per address', async () => {
+    for (let i = 0; i < 5; i++) await app.inject({ method: 'POST', url: '/api/auth/verify/resend', payload: { email: 'vlimited@x.com' } });
+    const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'vlimited@x.com', password: 'password123' } });
+    expect(res.statusCode).toBe(429);
   });
 });
 
@@ -217,10 +276,9 @@ describe('sheets', () => {
   });
 
   it('creates, saves, lists, renames and deletes sheets with per-user isolation', async () => {
-    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'b@x.com', password: 'password123' } });
-    const cookie = cookieFrom(res);
-    res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'c@x.com', password: 'password123' } });
-    const other = cookieFrom(res);
+    const { cookie } = await signUp(app, box, 'b@x.com');
+    const { cookie: other } = await signUp(app, box, 'c@x.com');
+    let res;
 
     res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Budget' } });
     const { sheet } = res.json();
@@ -292,10 +350,9 @@ describe('legacy hosts', () => {
 
 describe('presentations', () => {
   it('creates, saves, lists, renames and deletes decks, kept apart from spreadsheets', async () => {
-    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'deck@x.com', password: 'password123' } });
-    const cookie = cookieFrom(res);
-    res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'deck2@x.com', password: 'password123' } });
-    const other = cookieFrom(res);
+    const { cookie } = await signUp(app, box, 'deck@x.com');
+    const { cookie: other } = await signUp(app, box, 'deck2@x.com');
+    let res;
 
     res = await app.inject({ method: 'POST', url: '/api/decks', headers: { cookie }, payload: { title: 'Kickoff' } });
     expect(res.statusCode).toBe(200);
@@ -360,10 +417,9 @@ describe('presentations', () => {
 
 describe('cell images', () => {
   it('stores large images as files referenced from cells, readable only by their owner', async () => {
-    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'img@x.com', password: 'password123' } });
-    const cookie = cookieFrom(res);
-    res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'img2@x.com', password: 'password123' } });
-    const other = cookieFrom(res);
+    const { cookie } = await signUp(app, box, 'img@x.com');
+    const { cookie: other } = await signUp(app, box, 'img2@x.com');
+    let res;
 
     // A 50 MB PNG.
     const big = Buffer.alloc(50 * 1024 * 1024, 7);
@@ -401,8 +457,8 @@ describe('cell images', () => {
 
 describe('branches', () => {
   it('branches a sheet, compares against the live original, and detaches when it is deleted', async () => {
-    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'br@x.com', password: 'password123' } });
-    const cookie = cookieFrom(res);
+    const { cookie } = await signUp(app, box, 'br@x.com');
+    let res;
     const put = (id: string, workbook: unknown) => app.inject({ method: 'PUT', url: `/api/sheets/${id}`, headers: { cookie }, payload: { workbook } });
 
     res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Plan' } });

@@ -7,6 +7,9 @@ import type { AgentContext, AgentEvent, AgentTurnRequest } from '../shared/agent
 import type { ModelCall } from './agent/agent.ts';
 import { resetSearchRateLimit, runServerTool, validateToolInput } from './agent/tools.ts';
 import { buildApp } from './app.ts';
+import { mailbox, signUp } from './testing.ts';
+
+const box = mailbox();
 import type { SheetStore } from './sheets.ts';
 
 type Params = Parameters<ModelCall>[0];
@@ -45,14 +48,14 @@ beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-agent-test-'));
   app = await buildApp({
     dataDir: dir,
+    sendMail: box.send,
     agent: { model: fakeModel },
     launchJob: (job) => {
       launchedJobs.push(job.id);
       return process.pid;
     },
   });
-  const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'agent@x.com', password: 'password123' } });
-  cookie = String(res.headers['set-cookie']).split(';')[0];
+  cookie = (await signUp(app, box, 'agent@x.com')).cookie;
 });
 
 afterAll(async () => {

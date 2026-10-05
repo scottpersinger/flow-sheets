@@ -144,6 +144,20 @@ function migrate(db: DB): void {
   const userCols = new Set((db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name));
   if (!userCols.has('google_sub')) db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub ON users(google_sub)');
+  // Email verification: a password sign-up gets a session only once the emailed link is opened. Accounts that
+  // predate this are taken as verified. Google sign-ins are verified by Google.
+  if (!userCols.has('email_verified_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
+    db.exec('UPDATE users SET email_verified_at = created_at');
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )
+  `);
 
   // Agent jobs: the record of a change (who asked, what was committed and merged) and revert links.
   const jobCols = new Set((db.prepare('PRAGMA table_info(agent_jobs)').all() as { name: string }[]).map((c) => c.name));

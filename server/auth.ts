@@ -7,6 +7,7 @@ const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number,
 const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 64 };
 export const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
 export const RESET_TTL_MS = 60 * 60 * 1000;
+export const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface User {
   id: string;
@@ -47,21 +48,33 @@ export class AuthService {
     this.db = db;
   }
 
+  /**
+   * Create an account that still has to verify its email (see createEmailVerification). An unverified account
+   * with this email belongs to nobody yet, so signing up again just replaces its password; a verified one is
+   * taken ('exists').
+   */
   async register(email: string, password: string): Promise<User | 'exists'> {
     const norm = normalizeEmail(email);
-    const existing = this.db.prepare('SELECT id FROM users WHERE email = ?').get(norm);
-    if (existing) return 'exists';
-    const user: User = { id: randomUUID(), email: norm };
+    const existing = this.db.prepare('SELECT id, email, email_verified_at FROM users WHERE email = ?').get(norm) as
+      | { id: string; email: string; email_verified_at: string | null }
+      | undefined;
+    if (existing?.email_verified_at) return 'exists';
     const hash = await hashPassword(password);
+    if (existing) {
+      this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, existing.id);
+      return { id: existing.id, email: existing.email };
+    }
+    const user: User = { id: randomUUID(), email: norm };
     this.db
       .prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)')
       .run(user.id, user.email, hash, new Date().toISOString());
     return user;
   }
 
-  async login(email: string, password: string): Promise<User | null> {
-    const row = this.db.prepare('SELECT id, email, password_hash FROM users WHERE email = ?').get(normalizeEmail(email)) as
-      | { id: string; email: string; password_hash: string }
+  /** The user for a correct password; 'unverified' when the password is right but the email isn't verified yet. */
+  async login(email: string, password: string): Promise<User | 'unverified' | null> {
+    const row = this.db.prepare('SELECT id, email, password_hash, email_verified_at FROM users WHERE email = ?').get(normalizeEmail(email)) as
+      | { id: string; email: string; password_hash: string; email_verified_at: string | null }
       | undefined;
     if (!row) {
       // Spend comparable time so response timing doesn't reveal whether the account exists.
@@ -69,7 +82,43 @@ export class AuthService {
       return null;
     }
     if (!(await verifyPassword(password, row.password_hash))) return null;
+    if (!row.email_verified_at) return 'unverified';
     return { id: row.id, email: row.email };
+  }
+
+  // --- Email verification -----------------------------------------------------
+
+  /** A fresh one-time verification token to email; earlier ones for the account stop working. */
+  createEmailVerification(userId: string): { token: string; expires: Date } {
+    this.db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(userId);
+    const token = randomBytes(32).toString('base64url');
+    const now = new Date();
+    const expires = new Date(now.getTime() + VERIFY_TTL_MS);
+    this.db
+      .prepare('INSERT INTO email_verifications (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+      .run(sha256(token), userId, now.toISOString(), expires.toISOString());
+    return { token, expires };
+  }
+
+  /** The unverified account with this email, if there is one (for sending the link again). */
+  unverifiedUser(email: string): User | null {
+    const row = this.db.prepare('SELECT id, email FROM users WHERE email = ? AND email_verified_at IS NULL').get(normalizeEmail(email)) as User | undefined;
+    return row ?? null;
+  }
+
+  /** Mark the account verified with an emailed token. Uses up the token. */
+  verifyEmail(token: string): User | null {
+    const row = this.db
+      .prepare('SELECT u.id, u.email, v.expires_at FROM email_verifications v JOIN users u ON u.id = v.user_id WHERE v.token_hash = ?')
+      .get(sha256(token)) as { id: string; email: string; expires_at: string } | undefined;
+    if (!row || new Date(row.expires_at).getTime() < Date.now()) return null;
+    this.markVerified(row.id);
+    return { id: row.id, email: row.email };
+  }
+
+  private markVerified(userId: string): void {
+    this.db.prepare('UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?').run(new Date().toISOString(), userId);
+    this.db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(userId);
   }
 
   /**
@@ -82,15 +131,25 @@ export class AuthService {
     // Linking by email is only safe when Google vouches for the address.
     if (!identity.emailVerified) return 'unverified';
     const email = normalizeEmail(identity.email);
-    const byEmail = this.db.prepare('SELECT id, email FROM users WHERE email = ?').get(email) as User | undefined;
+    const byEmail = this.db.prepare('SELECT id, email, email_verified_at FROM users WHERE email = ?').get(email) as
+      | { id: string; email: string; email_verified_at: string | null }
+      | undefined;
     if (byEmail) {
+      if (!byEmail.email_verified_at) {
+        // Whoever set that password never proved they own the address; the Google user just did. The account
+        // becomes theirs: the password stops working and any sessions on it are signed out.
+        this.db.prepare("UPDATE users SET password_hash = '' WHERE id = ?").run(byEmail.id);
+        this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(byEmail.id);
+      }
       this.db.prepare('UPDATE users SET google_sub = ? WHERE id = ?').run(identity.sub, byEmail.id);
-      return byEmail;
+      this.markVerified(byEmail.id);
+      return { id: byEmail.id, email: byEmail.email };
     }
     const user: User = { id: randomUUID(), email };
+    const now = new Date().toISOString();
     this.db
-      .prepare("INSERT INTO users (id, email, password_hash, google_sub, created_at) VALUES (?, ?, '', ?, ?)")
-      .run(user.id, user.email, identity.sub, new Date().toISOString());
+      .prepare("INSERT INTO users (id, email, password_hash, google_sub, email_verified_at, created_at) VALUES (?, ?, '', ?, ?, ?)")
+      .run(user.id, user.email, identity.sub, now, now);
     return user;
   }
 
@@ -126,6 +185,7 @@ export class AuthService {
   purgeExpiredSessions(): void {
     this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString());
     this.db.prepare('DELETE FROM password_resets WHERE expires_at < ?').run(new Date().toISOString());
+    this.db.prepare('DELETE FROM email_verifications WHERE expires_at < ?').run(new Date().toISOString());
   }
 
   // --- Password reset ---------------------------------------------------------
@@ -154,12 +214,16 @@ export class AuthService {
     return { id: row.id, email: row.email };
   }
 
-  /** Set a new password with a reset token. Uses up the token and signs the account out everywhere. */
+  /**
+   * Set a new password with a reset token. Uses up the token and signs the account out everywhere. Opening
+   * the emailed link also proves the address, so an unverified account becomes verified.
+   */
   async resetPassword(token: string, password: string): Promise<User | null> {
     const user = this.userForResetToken(token);
     if (!user) return null;
     const hash = await hashPassword(password);
     this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+    this.markVerified(user.id);
     this.db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ?').run(new Date().toISOString(), sha256(token));
     this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
     return user;

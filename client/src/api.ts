@@ -10,9 +10,12 @@ export interface User {
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** Machine-readable reason, when the server gives one (e.g. 'unverified'). */
+  readonly code: string | undefined;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -25,7 +28,10 @@ async function request<T>(method: string, url: string, body?: unknown, init?: Re
     ...init,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `Request failed (${res.status})`);
+  if (!res.ok) {
+    const { error, code } = data as { error?: string; code?: string };
+    throw new ApiError(res.status, error ?? `Request failed (${res.status})`, code);
+  }
   return data as T;
 }
 
@@ -60,7 +66,9 @@ export const api = {
   uploadImage,
   me: () => request<{ user: User | null; googleLogin: boolean }>('GET', '/api/auth/me'),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
-  register: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/register', { email, password }),
+  register: (email: string, password: string) => request<{ pending: true; email: string }>('POST', '/api/auth/register', { email, password }),
+  verifyEmail: (token: string) => request<{ user: User }>('POST', '/api/auth/verify', { token }),
+  resendVerification: (email: string) => request<{ ok: true }>('POST', '/api/auth/verify/resend', { email }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
   forgotPassword: (email: string) => request<{ ok: true }>('POST', '/api/auth/forgot', { email }),
   checkResetToken: (token: string) => request<{ email: string }>('GET', `/api/auth/reset?token=${encodeURIComponent(token)}`),

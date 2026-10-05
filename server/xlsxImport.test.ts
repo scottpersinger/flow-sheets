@@ -7,6 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Engine } from '../shared/formula/engine.ts';
 import { formatValue } from '../shared/values.ts';
 import { buildApp } from './app.ts';
+import { mailbox, signUp } from './testing.ts';
+
+const box = mailbox();
 import { IMPORT_LIMITS, ImportError, importExcel, importXlsx, mapNumFmt } from './xlsxImport.ts';
 
 // A genuine BIFF8 .xls written by xlwt (formulas, formats, merge, two sheets).
@@ -164,7 +167,7 @@ describe('POST /api/sheets/import', () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   beforeAll(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-import-'));
-    app = await buildApp({ dataDir: dir });
+    app = await buildApp({ dataDir: dir, sendMail: box.send });
   });
   afterAll(async () => {
     await app.close();
@@ -172,9 +175,8 @@ describe('POST /api/sheets/import', () => {
   });
 
   it('imports an uploaded workbook into a new sheet', async () => {
-    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'imp@x.com', password: 'password123' } });
-    const sc = res.headers['set-cookie'];
-    const cookie = (Array.isArray(sc) ? sc[0] : String(sc)).split(';')[0];
+    const { cookie } = await signUp(app, box, 'imp@x.com');
+    let res;
 
     res = await app.inject({
       method: 'POST',

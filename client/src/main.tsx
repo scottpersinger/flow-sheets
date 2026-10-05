@@ -11,6 +11,7 @@ import { DeckPage } from './pages/DeckPage.tsx';
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordResetPages.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
+import { VerifyEmailPage } from './pages/VerifyEmailPage.tsx';
 import './styles.css';
 
 function RequireAuth({ children }: { children: ReactElement }) {
@@ -39,6 +40,7 @@ function AppShell() {
           <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
           <Route path="/forgot" element={<GuestOnly><ForgotPasswordPage /></GuestOnly>} />
           <Route path="/reset" element={<GuestOnly><ResetPasswordPage /></GuestOnly>} />
+          <Route path="/verify" element={<GuestOnly><VerifyEmailPage /></GuestOnly>} />
           <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
           <Route path="/s/:id" element={<RequireAuth><SpreadsheetPage /></RequireAuth>} />
           <Route path="/d/:id" element={<RequireAuth><DeckPage /></RequireAuth>} />

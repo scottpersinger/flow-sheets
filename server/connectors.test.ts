@@ -6,6 +6,9 @@ import { z } from 'zod';
 import { toCellInput } from '../shared/connectors.ts';
 import { registerConnectorService, runServerTool, validateToolInput } from './agent/tools.ts';
 import { buildApp } from './app.ts';
+import { mailbox, signUp } from './testing.ts';
+
+const box = mailbox();
 import { brex } from './connectors/brex.ts';
 import { ConnectorService } from './connectors/service.ts';
 import { decrypt, encrypt, loadKey } from './connectors/secrets.ts';
@@ -198,10 +201,10 @@ describe('connections', () => {
 
   beforeAll(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'sheets-connectors-'));
-    app = await buildApp({ dataDir: dir, connectors: { fetch: fakeBrex, sleep: noSleep } });
-    const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'conn@x.com', password: 'password123' } });
-    cookie = String(res.headers['set-cookie']).split(';')[0];
-    userId = (res.json() as { user: { id: string } }).user.id;
+    app = await buildApp({ dataDir: dir, sendMail: box.send, connectors: { fetch: fakeBrex, sleep: noSleep } });
+    const signedUp = await signUp(app, box, 'conn@x.com');
+    cookie = signedUp.cookie;
+    userId = signedUp.user.id;
     // The app's service, registered for the agent tools under a stand-in SheetStore.
     sheets = {} as SheetStore;
     registerConnectorService(sheets, app.connectors);
@@ -281,8 +284,7 @@ describe('connections', () => {
 
   it('keeps other users out of a connection', async () => {
     const [conn] = (await inject('GET', '/api/connections')).json().connections;
-    const other = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'other@x.com', password: 'password123' } });
-    const otherCookie = String(other.headers['set-cookie']).split(';')[0];
+    const otherCookie = (await signUp(app, box, 'other@x.com')).cookie;
     const res = await app.inject({ method: 'POST', url: `/api/connections/${conn.id}/fetch`, payload: { dataset: 'cards' }, headers: { cookie: otherCookie } });
     expect(res.statusCode).toBe(404);
   });

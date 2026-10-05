@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { Logo } from '../components/Logo.tsx';
 
@@ -14,6 +15,11 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   // A failed Google sign-in comes back to /login?error=...
   const [error, setError] = useState<string | null>(params.get('error'));
   const [busy, setBusy] = useState(false);
+  // After sign-up: the address we told to check its inbox. After a sign-in refused for an unverified
+  // address: offer to send the link again.
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [unverified, setUnverified] = useState(false);
+  const [resent, setResent] = useState(false);
   const isLogin = mode === 'login';
   const from = (location.state as { from?: string } | null)?.from;
   const googleHref = `/api/auth/google/start${from && from !== '/login' ? `?next=${encodeURIComponent(from)}` : ''}`;
@@ -21,16 +27,63 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const submit = async () => {
     setError(null);
     if (!isLogin && password !== confirm) return setError('Passwords do not match.');
+    setUnverified(false);
     setBusy(true);
     try {
-      if (isLogin) await auth.login(email, password);
-      else await auth.register(email, password);
-      navigate(from && from !== '/login' ? from : '/', { replace: true });
+      if (isLogin) {
+        await auth.login(email, password);
+        navigate(from && from !== '/login' ? from : '/', { replace: true });
+      } else {
+        await auth.register(email, password);
+        setPendingEmail(email.trim().toLowerCase());
+        setBusy(false);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setUnverified(e instanceof ApiError && e.code === 'unverified');
       setBusy(false);
     }
   };
+
+  const resend = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await api.resendVerification(pendingEmail ?? email);
+      setResent(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (pendingEmail) {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <Logo size={36} />
+            <span>Sheets</span>
+          </div>
+          <h1>Check your email</h1>
+          <p className="auth-text">
+            We sent a link to <strong>{pendingEmail}</strong>. Open it to verify your address and sign in. It expires in 24 hours.
+          </p>
+          {resent && <div className="form-ok">Sent again. Give it a minute, and check your spam folder.</div>}
+          {error && <div className="form-error">{error}</div>}
+          <div className="auth-switch">
+            Didn't get it?{' '}
+            <button type="button" className="link-button" onClick={() => void resend()} disabled={busy}>
+              Send it again
+            </button>
+            <span className="auth-sep">·</span>
+            <Link to="/login">Back to sign in</Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="auth-page">
@@ -80,6 +133,14 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         )}
         {!isLogin && <div className="field-hint">At least 8 characters.</div>}
         {error && <div className="form-error">{error}</div>}
+        {unverified && !resent && (
+          <div className="auth-switch">
+            <button type="button" className="link-button" onClick={() => void resend()} disabled={busy}>
+              Send the verification email again
+            </button>
+          </div>
+        )}
+        {resent && <div className="form-ok">Verification email sent. Open the link in it to sign in.</div>}
         <button type="submit" className="btn primary wide" disabled={busy}>
           {busy ? 'Please wait…' : isLogin ? 'Sign in' : 'Create account'}
         </button>

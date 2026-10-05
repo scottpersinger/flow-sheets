@@ -7,6 +7,7 @@ interface AuthState {
   /** Whether the server offers "Continue with Google". */
   googleLogin: boolean;
   login(email: string, password: string): Promise<void>;
+  /** Creates the account; the user is signed in by the link in the verification email, not here. */
   register(email: string, password: string): Promise<void>;
   logout(): Promise<void>;
   /** Mark the user as signed in after a flow that set the session cookie elsewhere (password reset). */
@@ -53,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser((await api.login(email, password)).user);
   }, []);
   const register = useCallback(async (email: string, password: string) => {
-    setUser((await api.register(email, password)).user);
+    await api.register(email, password);
   }, []);
   const logout = useCallback(async () => {
     await api.logout();
