@@ -59,6 +59,11 @@ const elementSpec = z
     stroke_width: z.number().min(0).max(100).optional(),
     start_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: start angle in degrees, clockwise from 3 o'clock (default 270 = top). The arc is an open stroke (no fill) along the ellipse in the shape's box, drawn clockwise to end_angle."),
     end_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: end angle in degrees, clockwise from 3 o'clock (default 0 = right)."),
+    cx: z.number().optional().describe("Arc shapes: x of the ellipse center, as an alternative to x/y/w/h. For an arc, x/y/w/h are the bounding box of the visible arc stroke itself (read_deck reports the same), not the whole ellipse; the ellipse is derived from it and the angles, so resizing scales the arc."),
+    cy: z.number().optional().describe('Arc shapes: y of the ellipse center.'),
+    radius: z.number().min(0).optional().describe('Arc shapes: circle radius (use rx/ry for an ellipse). With cx, cy, start_angle and end_angle this creates an arc; the box is computed.'),
+    rx: z.number().min(0).optional().describe('Arc shapes: horizontal ellipse radius.'),
+    ry: z.number().min(0).optional().describe('Arc shapes: vertical ellipse radius.'),
   })
   .describe('An element to add or change. Only the properties given change.');
 

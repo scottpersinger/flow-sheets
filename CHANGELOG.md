@@ -2,6 +2,35 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-05 — Arc shape: bounding box should fit the arc, not the full ellipse
+
+Arcs now use a tight box around the visible stroke (path bounding box plus half the stroke width), and typecheck and all 177 tests pass. I haven't run the app, so the editor's endpoint-drag handles are untested.
+
+- **Model:** the arc's ellipse is derived from the tight box, the angles and the stroke width, so resizing the box scales the arc. A new `tight` flag marks arcs in this form. Existing full-ellipse arcs are converted on load, and also when read, rendered or exported, so they look the same.
+- **Rendering, editor and PPTX:** the editor and present-mode rendering use the derived ellipse. A selected arc shows two endpoint handles instead of the eight box handles. Dragging an endpoint rotates it about the fixed center, so the arc can no longer be resized by dragging its box; resizing works through the tool or by changing the box values. PPTX import converts to the tight box, and export converts back to the full ellipse box plus angle adjustments.
+- **`edit_elements` / `read_deck`:** for arcs, `x/y/w/h` are the box around the visible stroke, and `read_deck` reports the same. I added optional `cx`, `cy`, `radius` (or `rx`/`ry`) inputs that create an arc from its center, radius and angles, with the box computed. Changing only the angles or stroke of an existing arc keeps its ellipse.
+- **Backward compatibility:** I did not add a way to create an arc by giving the full ellipse box. When an assistant passes `x/y/w/h` with angles, they are taken as the tight box, so the old full-ellipse form would make a much larger arc than intended. Those callers should use `cx/cy/radius` instead.
+
+No new tool was added.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-05.
+
+### Request
+
+Background: the new "arc" shape (shape: "arc", start_angle, end_angle in degrees clockwise from 3 o'clock) currently uses the full bounding box of the underlying ellipse as the element's x/y/w/h, even when only a short arc is drawn. So selecting a short arc shows a huge box (e.g. 223x223 for a 35-degree arc), which is confusing to move/resize, and the selection handles don't relate to the visible arc.
+
+Requested change: make the element's box tightly bound the visible arc stroke (the bounding box of the arc path from start_angle to end_angle, plus half the stroke width), and keep the underlying ellipse geometry implicit/derived. Resizing the box should scale the arc (the ellipse radius/center are recomputed so the arc still spans the same angles). Ideally the selected arc shows just two adjustment handles at its endpoints that can be dragged to change start_angle and end_angle (dragging an endpoint rotates it around the ellipse center); the center and radii stay fixed while dragging the endpoints.
+Details:
+- Rendering (editor, present mode, render_slide, thumbnails): draw the arc path inside the tight box by computing the ellipse implied by the box + angles.
+- Data model: keep start_angle/end_angle; store enough to reconstruct the ellipse (e.g. internal ellipse center/radii, or derive from box+angles so the box fully determines it). Existing arcs stored with the full-ellipse box must be migrated/handled so they render identically (convert to the tight box on load).
+- PPTX import: OOXML arc has the full ellipse box with adj1/adj2; convert to the tight box on import, and on export convert back to the full ellipse box with adj values so PowerPoint renders it identically.
+- edit_elements / read_deck: x,y,w,h report the tight box. For backward compatibility an assistant should still be able to create an arc by giving the full ellipse box plus angles; document the semantic in the tool description (x/y/w/h = bounding box of the arc itself) and, if feasible, add optional inputs to create an arc from center, radius and angles.
+Example: slide 3 of deck cd1049a6-e261-4f30-a8ea-9844582a4c00 has four arcs with box x=180,y=187,w=223,h=223 and angles 310-345, 20-55, 125-160, 195-230; each should end up with a small box around just its own stroke, with two endpoint handles.
+
+Files: client/src/agent/deckTools.test.ts, client/src/agent/deckTools.ts, client/src/deck/DeckEditor.tsx, client/src/deck/SlideView.tsx, client/src/deck/controller.ts, client/src/deck/store.ts, server/agent/tools.ts, server/pptxImport.ts, shared/deck.test.ts, shared/deck.ts, shared/pptxExport.ts, shared/shapes.ts
+
+Job: 2780a844-b313-4b1d-8db6-b0326046fecd
+
 ## 2026-10-05 — Support "arc" shapes in PPT import and editor
 
 Typecheck and all 175 tests now pass. The one failure, `google sign-in > is off unless configured` in `server/app.test.ts`, wasn't caused by the arc change. The test builds the app with no `google` option, so the app read Google credentials from the environment here. I made the test clear `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` before building the app, so it no longer depends on the machine's environment. I couldn't read the environment variables directly to confirm they were set, so that cause is inferred from the code and the passing run. No new assistant tool; the arc support from before is unchanged: `edit_elements` takes `shape: "arc"`, `start_angle` and `end_angle`.

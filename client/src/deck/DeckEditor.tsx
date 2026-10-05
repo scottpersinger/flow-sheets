@@ -3,6 +3,7 @@
 // image files dropped on the slide become image elements.
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { SLIDE_H, SLIDE_W, type SlideElement } from '../../../shared/deck.ts';
+import { arcGeometry, arcTightBox, type ArcGeom } from '../../../shared/shapes.ts';
 import type { DeckController } from './controller.ts';
 import { SlideView, type BoxPreview } from './SlideView.tsx';
 
@@ -10,8 +11,10 @@ type Box = { x: number; y: number; w: number; h: number };
 type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 interface Drag {
-  kind: 'move' | 'resize';
+  kind: 'move' | 'resize' | 'arc';
   handle?: Handle;
+  /** Arc endpoint drags: which end moves; the ellipse (center and radii) stays fixed. */
+  arc?: { end: 'start' | 'end'; geom: ArcGeom; start: number; stop: number; sw: number };
   startX: number;
   startY: number;
   boxes: Record<string, Box>;
@@ -70,7 +73,7 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
   const slide = ctl.slide;
   const selected = ctl.selected;
 
-  const beginDrag = (e: ReactMouseEvent, kind: Drag['kind'], ids: string[], handle?: Handle) => {
+  const beginDrag = (e: ReactMouseEvent, kind: Drag['kind'], ids: string[], handle?: Handle, arc?: Drag['arc']) => {
     const boxes: Record<string, Box> = {};
     const ratios: Record<string, number | null> = {};
     for (const el of slide.elements) {
@@ -78,7 +81,7 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       boxes[el.id] = { x: el.x, y: el.y, w: el.w, h: el.h };
       ratios[el.id] = el.type === 'image' && el.w > 0 ? el.h / el.w : null;
     }
-    const d: Drag = { kind, handle, startX: e.clientX, startY: e.clientY, boxes, ratios, preview: {}, moved: false };
+    const d: Drag = { kind, handle, arc, startX: e.clientX, startY: e.clientY, boxes, ratios, preview: {}, moved: false };
     dragRef.current = d;
     setDrag(d);
   };
@@ -92,7 +95,20 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       const dx = (e.clientX - d.startX) / scale;
       const dy = (e.clientY - d.startY) / scale;
       const preview: Record<string, BoxPreview> = {};
-      for (const id in d.boxes) {
+      if (d.arc) {
+        // Rotate the dragged endpoint about the fixed ellipse center to point at the mouse.
+        const { geom, sw } = d.arc;
+        const rect = wrapRef.current?.querySelector('.slide')?.getBoundingClientRect();
+        if (rect) {
+          const px = (e.clientX - rect.left) / scale - geom.cx;
+          const py = (e.clientY - rect.top) / scale - geom.cy;
+          const deg = Math.round(((Math.atan2(py / (geom.ry || 1), px / (geom.rx || 1)) * 180) / Math.PI + 360) % 360);
+          const start = d.arc.end === 'start' ? deg : d.arc.start;
+          const stop = d.arc.end === 'end' ? deg : d.arc.stop;
+          preview[Object.keys(d.boxes)[0]] = { ...arcTightBox(geom, start, stop, sw), startAngle: start, endAngle: stop };
+        }
+      }
+      for (const id in d.arc ? {} : d.boxes) {
         const b = d.boxes[id];
         preview[id] = d.kind === 'move' ? { x: Math.round(b.x + dx), y: Math.round(b.y + dy) } : resizeBox(b, d.handle!, dx, dy, e.shiftKey ? null : d.ratios[id]);
       }
@@ -193,7 +209,35 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
           const b = boxOf(el);
           return <div key={el.id} className="sl-outline" style={{ left: b.x, top: b.y, width: b.w, height: b.h, borderWidth: 1.5 / scale }} />;
         })}
+        {single?.type === 'shape' &&
+          single.shape === 'arc' &&
+          (['start', 'end'] as const).map((end) => {
+            // Two endpoint handles; dragging one rotates it about the fixed ellipse center.
+            const b = boxOf(single);
+            const sw = single.strokeWidth ?? 2;
+            const start = drag?.preview[single.id]?.startAngle ?? single.startAngle ?? 270;
+            const stop = drag?.preview[single.id]?.endAngle ?? single.endAngle ?? 0;
+            const geom = drag?.arc?.geom ?? arcGeometry({ ...single, ...b, startAngle: start, endAngle: stop }, sw);
+            const a = ((end === 'start' ? start : stop) * Math.PI) / 180;
+            const left = geom.cx + geom.rx * Math.cos(a);
+            const top = geom.cy + geom.ry * Math.sin(a);
+            return (
+              <div
+                key={end}
+                className="sl-handle"
+                style={{ left: left - hs / 2, top: top - hs / 2, width: hs, height: hs, borderWidth: 1 / scale }}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  wrapRef.current?.focus();
+                  beginDrag(e, 'arc', [single.id], undefined, { end, geom: arcGeometry(single, sw), start: single.startAngle ?? 270, stop: single.endAngle ?? 0, sw });
+                }}
+              />
+            );
+          })}
         {single &&
+          !(single.type === 'shape' && single.shape === 'arc') &&
           (single.type === 'shape' && single.shape === 'line' ? ((single.h > single.w ? ['n', 's'] : ['e', 'w']) as Handle[]) : HANDLES).map((h) => {
             const b = boxOf(single);
             const p = handlePos(h, b);

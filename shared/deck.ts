@@ -5,7 +5,7 @@
 // (same storage as cell images) and simple shapes. Slides are usually built from a layout: a handful of
 // named arrangements (title, title + body, two columns, ...) that turn plain content into positioned
 // elements, so both the UI and the assistant can make slides without choosing coordinates.
-import { SHAPE_KINDS, type ShapeKind } from './shapes.ts';
+import { SHAPE_KINDS, tightArc, type ShapeKind } from './shapes.ts';
 import { checkCellImage } from './types.ts';
 
 export type { ShapeKind };
@@ -86,6 +86,8 @@ export interface ShapeElement extends ElementBase {
   /** Arc shapes: start and end angle in degrees, clockwise from 3 o'clock. Default 270 and 0 (the top-right quarter). */
   startAngle?: number;
   endAngle?: number;
+  /** Arc shapes: the box tightly bounds the arc stroke (the ellipse is derived from box, angles and stroke width). Absent on old arcs whose box is the whole ellipse. */
+  tight?: boolean;
   /** Optional label centered in the shape. */
   text?: string;
   textColor?: string;
@@ -489,6 +491,14 @@ export function validateDeck(d: unknown): string | null {
 }
 
 // ---------------------------------------------------------------------------
+/** Convert arcs stored with the whole-ellipse box to the tight box, in place. */
+export function migrateArcs(deck: Deck): Deck {
+  for (const s of deck.slides) {
+    s.elements = s.elements.map((e) => (e.type === 'shape' && e.shape === 'arc' && !e.tight ? tightArc(e) : e));
+  }
+  return deck;
+}
+
 // Compact description for the assistant
 
 export function deckOutline(deck: Deck, current?: number) {
@@ -501,6 +511,7 @@ export function deckOutline(deck: Deck, current?: number) {
       ...(s.layout ? { layout: s.layout } : {}),
       ...(s.bg ? { background: s.bg } : {}),
       elements: s.elements.map((e) => {
+        if (e.type === 'shape' && e.shape === 'arc') e = tightArc(e);
         const box = { id: e.id, x: e.x, y: e.y, w: e.w, h: e.h };
         if (e.type === 'text') return { ...box, type: 'text', ...(e.role ? { role: e.role } : {}), text: fromParagraphs(e.paragraphs).join('\n'), ...(e.style ? { style: e.style } : {}) };
         if (e.type === 'image') return { ...box, type: 'image', src: e.src.length > 80 ? `${e.src.slice(0, 77)}...` : e.src };
