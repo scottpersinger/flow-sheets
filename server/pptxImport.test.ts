@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildSlide, newId, slideTitle, type Deck, type ImageElement, type ShapeElement, type TextElement } from '../shared/deck.ts';
 import { buildPptx, fontFace, hexColor } from '../shared/pptxExport.ts';
+import JSZip from 'jszip';
 import { importPptx, isPptx } from './pptxImport.ts';
 
 // A 1×1 red PNG.
@@ -12,6 +13,70 @@ async function pptxBuffer(deck: Deck): Promise<{ buf: Buffer; warnings: string[]
   return { buf: Buffer.from(out), warnings };
 }
 
+const NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+/**
+ * A presentation the way Google Slides exports one: text takes its size, weight, color and font from the master's
+ * text styles and placeholders, not from the runs.
+ */
+async function googleStylePptx(): Promise<Buffer> {
+  const rels = (items: [string, string, string][]) =>
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.map(([id, type, target]) => `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`).join('')}</Relationships>`;
+  const lvl = (inner: string) => `<a:lvl1pPr>${inner}</a:lvl1pPr>`;
+  const sp = (id: string, inner: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="s${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>${inner}</p:sp>`;
+  const ph = (id: string, phAttrs: string, inner: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="s${id}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:ph ${phAttrs}/></p:nvPr></p:nvSpPr>${inner}</p:sp>`;
+  const xfrm = (x: number, y: number, cx: number, cy: number, flip = '') => `<a:xfrm${flip}><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;
+  const geom = (prst: string) => `<a:prstGeom prst="${prst}"><a:avLst/></a:prstGeom>`;
+  const theme = `<a:theme ${NS} name="T"><a:themeElements><a:clrScheme name="Simple Light"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="595959"/></a:dk2><a:lt2><a:srgbClr val="EEEEEE"/></a:lt2><a:accent1><a:srgbClr val="4285F4"/></a:accent1><a:accent2><a:srgbClr val="212121"/></a:accent2><a:accent3><a:srgbClr val="78909C"/></a:accent3><a:accent4><a:srgbClr val="FFAB40"/></a:accent4><a:accent5><a:srgbClr val="0097A7"/></a:accent5><a:accent6><a:srgbClr val="EEFF41"/></a:accent6><a:hlink><a:srgbClr val="0097A7"/></a:hlink><a:folHlink><a:srgbClr val="0097A7"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Arial"/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>`;
+  const master =
+    `<p:sldMaster ${NS}><p:cSld><p:spTree>` +
+    ph('1', 'type="title"', `<p:spPr>${xfrm(311700, 445025, 8520600, 572700)}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle>${lvl('<a:defRPr sz="2800"><a:solidFill><a:schemeClr val="dk1"/></a:solidFill></a:defRPr>')}</a:lstStyle><a:p/></p:txBody>`) +
+    ph('2', 'idx="1" type="body"', `<p:spPr>${xfrm(311700, 1152475, 8520600, 3416400)}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle>${lvl('<a:lnSpc><a:spcPct val="115000"/></a:lnSpc><a:buChar char="●"/><a:defRPr sz="1800"><a:solidFill><a:schemeClr val="dk2"/></a:solidFill></a:defRPr>')}</a:lstStyle><a:p/></p:txBody>`) +
+    `</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>` +
+    `<p:txStyles><p:titleStyle>${lvl('<a:defRPr b="0" sz="1400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="+mj-lt"/></a:defRPr>')}</p:titleStyle>` +
+    `<p:bodyStyle>${lvl('<a:defRPr b="0" sz="1400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="+mn-lt"/></a:defRPr>')}</p:bodyStyle>` +
+    `<p:otherStyle>${lvl('<a:defRPr b="0" i="1" sz="1400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="Arial"/></a:defRPr>')}</p:otherStyle></p:txStyles></p:sldMaster>`;
+  const layout =
+    `<p:sldLayout ${NS}><p:cSld><p:spTree>` +
+    ph('1', 'type="title"', `<p:spPr>${xfrm(311700, 445025, 8520600, 572700)}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle>${lvl('<a:defRPr/>')}</a:lstStyle><a:p/></p:txBody>`) +
+    ph('2', 'idx="1" type="body"', `<p:spPr>${xfrm(311700, 1152475, 8520600, 3416400)}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle>${lvl('<a:defRPr/>')}</a:lstStyle><a:p/></p:txBody>`) +
+    `</p:spTree></p:cSld></p:sldLayout>`;
+  const run = (text: string, rPr = '<a:rPr lang="en"/>') => `<a:r>${rPr}<a:t>${text}</a:t></a:r>`;
+  const link = (text: string) => run(text, '<a:rPr lang="en" u="sng"><a:solidFill><a:schemeClr val="hlink"/></a:solidFill><a:hlinkClick r:id="rId9"/></a:rPr>');
+  const fill = `<a:solidFill><a:schemeClr val="lt2"/></a:solidFill><a:ln w="9525"><a:solidFill><a:schemeClr val="dk2"/></a:solidFill><a:headEnd type="none"/><a:tailEnd type="none"/></a:ln>`;
+  const shapeBody = (ps: string) => `<p:txBody><a:bodyPr anchor="ctr" bIns="91425" lIns="91425" rIns="91425" tIns="91425"><a:noAutofit/></a:bodyPr><a:lstStyle/>${ps}</p:txBody>`;
+  const cxn = (id: string, x: string, ln: string) => `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="c${id}"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>${x}${geom('straightConnector1')}<a:noFill/><a:ln w="9525"><a:solidFill><a:schemeClr val="dk2"/></a:solidFill>${ln}</a:ln></p:spPr></p:cxnSp>`;
+  const slide =
+    `<p:sld ${NS}><p:cSld><p:spTree>` +
+    ph('10', 'type="title"', `<p:spPr>${xfrm(311700, 445025, 8520600, 572700)}${geom('rect')}</p:spPr><p:txBody><a:bodyPr><a:normAutofit fontScale="90000"/></a:bodyPr><a:lstStyle/><a:p><a:pPr><a:buNone/></a:pPr>${run('Intro')}</a:p></p:txBody>`) +
+    ph('11', 'idx="1" type="body"', `<p:spPr>${xfrm(311700, 1152475, 8520600, 3416400)}${geom('rect')}</p:spPr><p:txBody><a:bodyPr><a:normAutofit/></a:bodyPr><a:lstStyle/>` +
+      `<a:p><a:pPr><a:spcBef><a:spcPts val="0"/></a:spcBef><a:buNone/></a:pPr>${run('Deployed on Fly.io:')}</a:p>` +
+      `<a:p><a:pPr marL="457200" indent="-342900"><a:spcBef><a:spcPts val="1200"/></a:spcBef><a:buChar char="-"/></a:pPr>${run('sc-dashboard')}</a:p>` +
+      `<a:p><a:pPr marL="457200" indent="-342900"><a:spcBef><a:spcPts val="0"/></a:spcBef><a:buChar char="-"/></a:pPr>${run('engine')}</a:p></p:txBody>`) +
+    sp('12', `<p:spPr>${xfrm(490800, 1325150, 2110500, 1246500)}${geom('rect')}${fill}</p:spPr>${shapeBody(`<a:p><a:pPr algn="ctr"><a:buNone/></a:pPr>${link('Fly.io')}${run(' machines')}</a:p>`)}`) +
+    sp('13', `<p:spPr>${xfrm(3523875, 1168075, 1757050, 1560725)}${geom('flowChartMagneticDisk')}${fill}</p:spPr>${shapeBody(`<a:p><a:pPr algn="ctr"><a:buNone/></a:pPr>${run('Redis')}</a:p>`)}`) +
+    sp('14', `<p:spPr>${xfrm(6000000, 3000000, 1500000, 800000)}${geom('rect')}${fill}</p:spPr>${shapeBody(`<a:p><a:pPr algn="ctr"><a:buNone/></a:pPr>${link('Rollbar')}${run(' ')}</a:p><a:p><a:pPr algn="ctr"><a:buNone/></a:pPr>${run('ops@example.com')}</a:p>`)}`) +
+    sp('15', `<p:spPr>${xfrm(6000000, 4000000, 1500000, 800000)}${geom('roundRect')}<a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>${shapeBody(`<a:p>${run('Styled')}</a:p>`)}`) +
+    cxn('16', xfrm(2601300, 1948400, 922500, 0), '<a:headEnd type="none"/><a:tailEnd type="triangle"/>') +
+    cxn('17', xfrm(1546050, 2571650, 360900, 628200), '<a:headEnd type="none"/><a:tailEnd type="triangle"/>') +
+    cxn('18', xfrm(1546050, 3571650, 360900, 628200, ' flipH="1"'), '<a:headEnd type="triangle"/><a:tailEnd type="none"/>') +
+    `</p:spTree></p:cSld></p:sld>`;
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  zip.file('_rels/.rels', rels([['rId1', 'officeDocument', 'ppt/presentation.xml']]));
+  zip.file('ppt/presentation.xml', `<p:presentation ${NS}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>`);
+  zip.file('ppt/_rels/presentation.xml.rels', rels([['rId1', 'slideMaster', 'slideMasters/slideMaster1.xml'], ['rId2', 'slide', 'slides/slide1.xml']]));
+  zip.file('ppt/slideMasters/slideMaster1.xml', master);
+  zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml'], ['rId2', 'theme', '../theme/theme1.xml']]));
+  zip.file('ppt/slideLayouts/slideLayout1.xml', layout);
+  zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels', rels([['rId1', 'slideMaster', '../slideMasters/slideMaster1.xml']]));
+  zip.file('ppt/theme/theme1.xml', theme);
+  zip.file('ppt/slides/slide1.xml', slide);
+  zip.file('ppt/slides/_rels/slide1.xml.rels', rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml'], ['rId9', 'hyperlink', 'https://fly.io']]));
+  return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+}
+
 describe('pptx export and import', () => {
   it('round-trips arcs with their angles and no warning', async () => {
     const s = buildSlide('blank', {}, newId);
@@ -21,6 +86,40 @@ describe('pptx export and import', () => {
     const arc = deck.slides[0].elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'arc')!;
     expect(arc).toMatchObject({ fill: 'none', stroke: '#ff0000', startAngle: 90, endAngle: 200 });
     expect(warnings.join(' ')).not.toMatch(/arc/);
+  });
+
+  it('inherits text styles from the master and layout, keeps link colors to links, and converts lines and cylinders', async () => {
+    const { deck, warnings } = await importPptx(await googleStylePptx(), async () => '');
+    expect(warnings).toEqual([]);
+    const els = deck.slides[0].elements;
+    const texts = els.filter((e): e is TextElement => e.type === 'text');
+    // The title: 28pt from the master placeholder, shrunk to 90% by autofit, regular weight, the heading font.
+    const title = texts.find((t) => t.role === 'title')!;
+    expect(title.style).toEqual({ size: 34, font: 'Arial', bold: false });
+    // The body: 18pt in the theme's dark gray from the master placeholder, 115% line spacing, the body font;
+    // the widest gap between paragraphs stands for the box.
+    const body = texts.find((t) => t.paragraphs[0].text === 'Deployed on Fly.io:')!;
+    expect(body.style).toEqual({ size: 24, font: 'Verdana', color: '#595959', lineHeight: 1.38, paraSpacing: 16 });
+    expect(body.paragraphs.map((p) => !!p.bullet)).toEqual([false, true, true]);
+    // Text in a plain shape: 14pt italic (the master's "other" style) in the theme text color, not white, and
+    // a hyperlink inside it does not recolor the whole box.
+    const fly = texts.find((t) => t.paragraphs[0].text === 'Fly.io machines')!;
+    expect(fly.style).toEqual({ size: 19, font: 'Arial', italic: true, align: 'center', valign: 'middle' });
+    // A paragraph that is only a link keeps the link color.
+    const rollbar = texts.find((t) => t.paragraphs[0].text === 'Rollbar ')!;
+    expect(rollbar.style?.color).toBeUndefined();
+    expect(rollbar.paragraphs[0].color).toBe('#0097a7');
+    expect(rollbar.paragraphs[1].color).toBeUndefined();
+    // A styled shape's font reference gives its text color (PowerPoint's light text on filled shapes).
+    expect(texts.find((t) => t.paragraphs[0].text === 'Styled')!.style?.color).toBe('#ffffff');
+    // Cylinders, and connectors with their arrowheads and diagonals.
+    expect(els.find((e) => e.type === 'shape' && e.shape === 'cylinder')).toMatchObject({ fill: '#eeeeee', stroke: '#595959' });
+    const lines = els.filter((e): e is ShapeElement => e.type === 'shape' && e.shape === 'line');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatchObject({ h: 0, arrow: 'end', stroke: '#595959', strokeWidth: 1 });
+    expect(lines[1]).toMatchObject({ w: 38, h: 66, arrow: 'end' });
+    expect(lines[1].flip).toBeUndefined();
+    expect(lines[2]).toMatchObject({ w: 38, h: 66, arrow: 'end', flip: true }); // flipped: the start is on the right
   });
 
   it('converts colors and fonts for PowerPoint', () => {
@@ -54,6 +153,8 @@ describe('pptx export and import', () => {
         style: { size: 17, align: 'center', color: '#ffffff', font: 'Poppins', lineHeight: 1.5 },
       },
       { id: newId(), type: 'shape', shape: 'arrow', x: 300, y: 420, w: 160, h: 60, fill: 'none', stroke: '#0000ff', strokeWidth: 2 },
+      { id: newId(), type: 'shape', shape: 'cylinder', x: 840, y: 100, w: 80, h: 100, fill: '#dddddd', stroke: '#333333', strokeWidth: 1 },
+      { id: newId(), type: 'shape', shape: 'line', x: 700, y: 60, w: 120, h: 80, flip: true, arrow: 'both', stroke: '#123456', strokeWidth: 2 },
       { id: newId(), type: 'image', x: 600, y: 160, w: 200, h: 150, src: PNG },
     );
     const deck: Deck = { version: 1, theme: 'light', slides: [title, body] };
@@ -116,6 +217,12 @@ describe('pptx export and import', () => {
     // Preset geometries map both ways through the shape table.
     expect(s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'star')).toMatchObject({ fill: '#ffcc00', w: 100, h: 100 });
     expect(s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'arrow')).toMatchObject({ fill: 'none', stroke: '#0000ff' });
+    // Cylinders, diagonal lines and arrowheads round-trip too.
+    expect(s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'cylinder')).toMatchObject({ fill: '#dddddd', stroke: '#333333' });
+    const diagonal = s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'line' && e.w > 0 && e.h > 0)!;
+    expect(diagonal).toMatchObject({ flip: true, arrow: 'both', stroke: '#123456' });
+    expect(Math.abs(diagonal.w - 120)).toBeLessThanOrEqual(2);
+    expect(Math.abs(diagonal.h - 80)).toBeLessThanOrEqual(2);
     const img = s2.elements.find((e): e is ImageElement => e.type === 'image')!;
     expect(img.src).toBe('/api/images/00000000-0000-0000-0000-000000000001');
     expect(stored).toEqual([{ type: 'image/png', size: expect.any(Number) }]);

@@ -15,7 +15,7 @@ import {
   type Theme,
   type ThemeId,
 } from '../../../shared/deck.ts';
-import { arcPath, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
+import { arcPath, isDrawn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
 /** A box override while an element is being dragged or resized. */
 export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>>;
@@ -69,8 +69,8 @@ export function textStyleOf(el: TextElement, theme: Theme): CSSProperties {
 function boxStyle(el: SlideElement, preview?: BoxPreview): CSSProperties {
   const b = { x: el.x, y: el.y, w: el.w, h: el.h, ...preview };
   const style: CSSProperties = { left: b.x, top: b.y, width: b.w, height: b.h };
-  // A line's thickness comes from its stroke; the vertical/horizontal style overrides the zero dimension.
-  if (el.type === 'shape' && el.shape === 'line') {
+  // A straight line's thickness comes from its stroke; the vertical/horizontal style overrides the zero dimension.
+  if (el.type === 'shape' && el.shape === 'line' && !isDiagonal(el)) {
     const sw = el.strokeWidth ?? 3;
     if (el.h > el.w) {
       style.width = sw;
@@ -83,11 +83,21 @@ function boxStyle(el: SlideElement, preview?: BoxPreview): CSSProperties {
   return style;
 }
 
+/** A line that runs corner to corner of its box rather than along one edge. */
+function isDiagonal(el: ShapeElement): boolean {
+  return el.shape === 'line' && el.w > 0 && el.h > 0;
+}
+
+/** Lines with arrowheads or a diagonal run are drawn by an SVG (see ShapeDrawing); plain ones are a CSS rule. */
+function isDrawnLine(el: ShapeElement): boolean {
+  return el.shape === 'line' && (!!el.arrow || isDiagonal(el));
+}
+
 function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
   const fill = el.fill === 'none' ? 'transparent' : (el.fill ?? theme.accent);
   const stroke = el.stroke ?? (el.shape === 'line' ? theme.accent : undefined);
   const sw = el.strokeWidth ?? (el.shape === 'line' ? 3 : stroke ? 2 : 0);
-  if (el.shape === 'line') return { background: el.stroke ?? el.fill ?? theme.accent };
+  if (el.shape === 'line') return isDrawnLine(el) ? {} : { background: el.stroke ?? el.fill ?? theme.accent };
   const text: CSSProperties = {
     color: el.textColor ?? (el.fill === 'none' ? theme.text : '#fff'),
     fontFamily: el.textFont ? `"${el.textFont.replace(/"/g, '')}", ${theme.bodyFont}` : theme.bodyFont,
@@ -95,8 +105,8 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
     ...(el.textBold ? { fontWeight: 700 } : {}),
     ...(el.textItalic ? { fontStyle: 'italic' } : {}),
   };
-  // Polygon shapes are drawn by an SVG inside the box (see ShapePolygon); the box itself stays transparent.
-  if (SHAPES[el.shape].points || el.shape === 'arc') return text;
+  // Polygon and path shapes are drawn by an SVG inside the box (see ShapeDrawing); the box itself stays transparent.
+  if (isDrawn(el.shape)) return text;
   return {
     background: fill,
     borderRadius: el.shape === 'ellipse' ? '50%' : el.shape === 'rounded' ? 16 : 0,
@@ -105,8 +115,46 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
   };
 }
 
-/** The polygon of a non-CSS shape, in the element's own coordinates so strokes scale with the slide. */
-function ShapePolygon({ el, theme, box }: { el: ShapeElement; theme: Theme; box: BoxPreview }) {
+/** The arrowhead length for a line of a stroke width. */
+export function arrowSize(strokeWidth: number): number {
+  return strokeWidth * 3 + 6;
+}
+
+/**
+ * The geometry of a line with arrowheads, in its box's coordinates: the stroke (shortened so it does not poke
+ * through the arrow tips) and the arrowhead polygons. The box is the line's own box (a straight line's box is
+ * stroke-width tall or wide).
+ */
+export function lineGeometry(el: ShapeElement, w: number, h: number, sw: number): { x1: number; y1: number; x2: number; y2: number; heads: string[] } {
+  const diagonal = w > 0 && h > 0;
+  let [x1, y1, x2, y2] = diagonal ? [0, el.flip ? h : 0, w, el.flip ? 0 : h] : h >= w ? [w / 2, 0, w / 2, h] : [0, h / 2, w, h / 2];
+  const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+  const ux = (x2 - x1) / len;
+  const uy = (y2 - y1) / len;
+  const size = Math.min(arrowSize(sw), len / 2);
+  const heads: string[] = [];
+  const head = (tx: number, ty: number, dx: number, dy: number) => {
+    // A triangle with its tip at (tx, ty), pointing along (dx, dy).
+    const bx = tx - dx * size;
+    const by = ty - dy * size;
+    const hw = size / 2;
+    heads.push(`${tx},${ty} ${bx - dy * hw},${by + dx * hw} ${bx + dy * hw},${by - dx * hw}`);
+  };
+  if (el.arrow === 'end' || el.arrow === 'both') {
+    head(x2, y2, ux, uy);
+    x2 -= ux * size * 0.8;
+    y2 -= uy * size * 0.8;
+  }
+  if (el.arrow === 'start' || el.arrow === 'both') {
+    head(x1, y1, -ux, -uy);
+    x1 += ux * size * 0.8;
+    y1 += uy * size * 0.8;
+  }
+  return { x1, y1, x2, y2, heads };
+}
+
+/** The SVG of a non-CSS shape (a polygon, a path, or a line with arrowheads), in the element's own coordinates so strokes scale with the slide. */
+function ShapeDrawing({ el, theme, box }: { el: ShapeElement; theme: Theme; box: BoxPreview }) {
   const w = box.w ?? el.w;
   const h = box.h ?? el.h;
   if (el.shape === 'arc') {
@@ -116,13 +164,34 @@ function ShapePolygon({ el, theme, box }: { el: ShapeElement; theme: Theme; box:
       </svg>
     );
   }
-  const points = polygonPoints(el.shape, w, h);
-  if (!points) return null;
+  if (el.shape === 'line') {
+    if (!isDrawnLine(el)) return null;
+    const sw = el.strokeWidth ?? 3;
+    const color = el.stroke ?? el.fill ?? theme.accent;
+    // A straight line's box is as thin as its stroke (see boxStyle); a diagonal one spans its box.
+    const bw = w > 0 && h > 0 ? w : h >= w ? sw : w;
+    const bh = w > 0 && h > 0 ? h : h >= w ? h : sw;
+    const g = lineGeometry(el, bw, bh, sw);
+    return (
+      <svg className="sl-shape-svg" viewBox={`0 0 ${bw} ${bh}`} width={bw} height={bh} aria-hidden="true">
+        <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke={color} strokeWidth={sw} />
+        {g.heads.map((pts, i) => (
+          <polygon key={i} points={pts} fill={color} />
+        ))}
+      </svg>
+    );
+  }
+  const def = SHAPES[el.shape];
   const fill = el.fill === 'none' ? 'none' : (el.fill ?? theme.accent);
   const sw = el.strokeWidth ?? (el.stroke ? 2 : 0);
+  const stroke = sw ? (el.stroke ?? fill) : 'none';
   return (
     <svg className="sl-shape-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">
-      <polygon points={points} fill={fill} stroke={sw ? (el.stroke ?? fill) : 'none'} strokeWidth={sw} strokeLinejoin="round" />
+      {def.path ? (
+        <path d={def.path(w, h)} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+      ) : (
+        <polygon points={polygonPoints(el.shape, w, h)} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+      )}
     </svg>
   );
 }
@@ -301,7 +370,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
             );
           }
           const style = { ...box, ...shapeStyle(el, theme) };
-          const polygon = <ShapePolygon el={el} theme={theme} box={preview?.[el.id] ?? {}} />;
+          const polygon = <ShapeDrawing el={el} theme={theme} box={preview?.[el.id] ?? {}} />;
           if (editing?.id === el.id) {
             return (
               <div key={el.id} className="sl-el sl-shape" style={style} data-el={el.id}>

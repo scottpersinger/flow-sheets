@@ -119,6 +119,9 @@ function applyElementSpec(existing: SlideElement | undefined, s: Input): SlideEl
   const endAngle = s.end_angle !== undefined ? s.end_angle : prev?.endAngle;
   if (shape === 'arc' && typeof startAngle === 'number') el.startAngle = startAngle;
   if (shape === 'arc' && typeof endAngle === 'number') el.endAngle = endAngle;
+  const arrow = s.arrow !== undefined ? s.arrow : prev?.arrow;
+  if (arrow && arrow !== 'none') el.arrow = arrow as ShapeElement['arrow'];
+  if (prev?.flip) el.flip = true;
   if (text) el.text = text as string;
   if (textColor) el.textColor = textColor as string;
   // Label style; "" or false clears a property, as for text elements.

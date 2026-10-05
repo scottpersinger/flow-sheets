@@ -123,12 +123,20 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     const accent = hexColor(theme.accent) ?? '1A73E8';
     const strokeColor = hexColor(el.stroke);
     if (el.shape === 'line') {
+      const diagonal = el.w > 0 && el.h > 0;
       const vertical = el.h > el.w;
       const lineColor = el.stroke ?? el.fill;
       s.addShape(pres.ShapeType.line, {
         ...box,
-        ...(vertical ? { w: 0 } : { h: 0 }),
-        line: { color: hexColor(lineColor) ?? accent, width: pt(el.strokeWidth ?? 3), transparency: transparencyOf(lineColor) },
+        ...(diagonal ? {} : vertical ? { w: 0 } : { h: 0 }),
+        ...(diagonal && el.flip ? { flipV: true } : {}),
+        line: {
+          color: hexColor(lineColor) ?? accent,
+          width: pt(el.strokeWidth ?? 3),
+          transparency: transparencyOf(lineColor),
+          ...(el.arrow === 'start' || el.arrow === 'both' ? { beginArrowType: 'triangle' } : {}),
+          ...(el.arrow === 'end' || el.arrow === 'both' ? { endArrowType: 'triangle' } : {}),
+        },
       });
       return;
     }

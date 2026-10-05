@@ -21,6 +21,7 @@ export const SHAPE_KINDS = [
   'callout',
   'plus',
   'heart',
+  'cylinder',
   'line',
   'arc',
 ] as const;
@@ -33,6 +34,8 @@ export interface ShapeDef {
   pptx: string;
   /** Polygon vertices in a 100×100 box, as [x, y, x, y, ...]; absent for the CSS-drawn shapes. */
   points?: number[];
+  /** SVG path for a shape with curves, for a box of the given size (the cylinder). */
+  path?: (w: number, h: number) => string;
   /** Keep width and height equal when inserted. */
   square?: boolean;
 }
@@ -69,19 +72,40 @@ export const SHAPES: Record<ShapeKind, ShapeDef> = {
   callout: { name: 'Speech bubble', pptx: 'wedgeRectCallout', points: [0, 0, 100, 0, 100, 75, 40, 75, 18, 100, 24, 75, 0, 75] },
   plus: { name: 'Plus', pptx: 'mathPlus', points: [35, 0, 65, 0, 65, 35, 100, 35, 100, 65, 65, 65, 65, 100, 35, 100, 35, 65, 0, 65, 0, 35, 35, 35], square: true },
   heart: { name: 'Heart', pptx: 'heart', points: heartPoints(), square: true },
+  cylinder: { name: 'Cylinder', pptx: 'can', path: cylinderPath },
   line: { name: 'Line', pptx: 'line' },
   arc: { name: 'Arc', pptx: 'arc', square: true },
 };
+
+/** A cylinder (database) outline: an elliptical top rim over a body with a curved bottom. */
+function cylinderPath(w: number, h: number): string {
+  const ry = Math.min(h / 4, w / 4); // half the rim's height
+  const rx = w / 2;
+  const n = (v: number) => Math.round(v * 100) / 100;
+  // The outline: down the left side, round the bottom, up the right side, over the top; then the rim's front arc.
+  return (
+    `M0,${n(ry)} V${n(h - ry)} A${n(rx)},${n(ry)} 0 0 0 ${n(w)},${n(h - ry)} V${n(ry)} A${n(rx)},${n(ry)} 0 0 0 0,${n(ry)} Z ` +
+    `M0,${n(ry)} A${n(rx)},${n(ry)} 0 0 0 ${n(w)},${n(ry)}`
+  );
+}
 
 const BY_PPTX = new Map<string, ShapeKind>(SHAPE_KINDS.map((k) => [SHAPES[k].pptx, k]));
 // Other PowerPoint presets that are close enough to one of ours.
 const PPTX_ALIASES: Record<string, ShapeKind> = {
   round1Rect: 'rounded',
+  snip1Rect: 'rect',
+  snip2SameRect: 'rect',
+  snip2DiagRect: 'rect',
+  flowChartPunchedCard: 'rect',
+  flowChartMagneticDisk: 'cylinder',
+  flowChartMagneticDrum: 'cylinder',
   round2SameRect: 'rounded',
   round2DiagRect: 'rounded',
   snipRoundRect: 'rounded',
   straightConnector1: 'line',
   flowChartDecision: 'diamond',
+  bentConnector3: 'line',
+  curvedConnector3: 'line',
   flowChartProcess: 'rect',
   flowChartTerminator: 'rounded',
   flowChartConnector: 'ellipse',
@@ -112,6 +136,11 @@ export function arcPath(w: number, h: number, start = 270, end = 0): string {
   const sweep = (((end - start) % 360) + 360) % 360;
   if (sweep === 0) return `M ${pt(start)}`;
   return `M ${pt(start)} A ${rx} ${ry} 0 ${sweep > 180 ? 1 : 0} 1 ${pt(end)}`;
+}
+
+/** True for shapes drawn by an SVG inside their box (polygons and paths) rather than with CSS. */
+export function isDrawn(kind: ShapeKind): boolean {
+  return kind === 'arc' || !!(SHAPES[kind].points || SHAPES[kind].path);
 }
 
 /** SVG polygon points for a polygon shape, scaled to a box; undefined for the CSS-drawn shapes. */

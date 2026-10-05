@@ -77,8 +77,14 @@ export interface ImageElement extends ElementBase {
 
 export interface ShapeElement extends ElementBase {
   type: 'shape';
-  /** A line is horizontal when it is wider than tall (h is usually 0), vertical otherwise (w is 0). */
+  /**
+   * A line runs across its box: horizontal when h is 0, vertical when w is 0, and diagonal (top-left to
+   * bottom-right) when both are set; `flip` makes a diagonal run bottom-left to top-right.
+   */
   shape: ShapeKind;
+  /** Lines: arrowheads at the end (the right, or the bottom of a vertical line), the start, or both. */
+  arrow?: 'start' | 'end' | 'both';
+  flip?: boolean;
   /** Fill color (any CSS color, including rgba() for translucency); defaults to the theme accent. "none" for no fill. */
   fill?: string;
   stroke?: string;
@@ -448,6 +454,8 @@ export function validateElement(e: unknown, where: string): string | null {
       if (el.strokeWidth !== undefined && !num(el.strokeWidth, 0, 100)) return `${where}: invalid stroke width`;
       if (el.startAngle !== undefined && !num(el.startAngle, -360, 720)) return `${where}: invalid start angle`;
       if (el.endAngle !== undefined && !num(el.endAngle, -360, 720)) return `${where}: invalid end angle`;
+      if (el.arrow !== undefined && !['start', 'end', 'both'].includes(el.arrow)) return `${where}: invalid arrow`;
+      if (el.flip !== undefined && typeof el.flip !== 'boolean') return `${where}: invalid flip`;
       if (el.text !== undefined && (typeof el.text !== 'string' || el.text.length > MAX_TEXT)) return `${where}: invalid shape text`;
       if (el.textColor !== undefined && !isColor(el.textColor)) return `${where}: invalid text color`;
       if (el.textSize !== undefined && !num(el.textSize, 4, 400)) return `${where}: invalid label font size`;

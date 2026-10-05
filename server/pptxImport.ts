@@ -1,6 +1,6 @@
-// Convert an uploaded .pptx file into a deck. Keeps text boxes (with bullets, sizes, colors and alignment),
-// pictures, simple shapes, slide backgrounds and speaker notes. Tables, charts, SmartArt, gradients, themed
-// colors and animations are dropped and reported as warnings.
+// Convert an uploaded .pptx file into a deck. Keeps text boxes (with bullets, sizes, colors and alignment, including
+// what they inherit from the master and layout), pictures, simple shapes, lines with arrowheads, slide backgrounds
+// and speaker notes. Tables, charts, SmartArt, gradients and animations are dropped and reported as warnings.
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import {
@@ -87,9 +87,10 @@ class Importer {
   private warn = new Map<string, number>();
   private imageCache = new Map<string, Promise<string | null>>();
   private xmlCache = new Map<string, Promise<XNode[] | null>>();
-  private themeCache = new Map<string, Record<string, string>>();
-  /** Color scheme of the master of the slide being converted. */
+  private themeCache = new Map<string, ThemeInfo>();
+  /** Color scheme and fonts of the master of the slide being converted. */
   private colors: Record<string, string> = {};
+  private fonts: ThemeInfo['fonts'] = {};
   // Scale and offset from the file's slide size to our 960×540 canvas.
   private scale = 1;
   private ox = 0;
@@ -173,7 +174,9 @@ class Importer {
     const masterDoc = masterFile ? await this.xml(masterFile) : null;
     const master = masterDoc && root(masterDoc, 'p:sldMaster');
     const inherit = [layout, master].filter((n): n is XNode => !!n);
-    this.colors = await this.themeColors(masterFile, master ?? undefined);
+    const theme = await this.theme(masterFile, master ?? undefined);
+    this.colors = theme.colors;
+    this.fonts = theme.fonts;
 
     const elements: SlideElement[] = [];
     const cSld = child(sld ?? undefined, 'p:cSld');
@@ -289,39 +292,41 @@ class Importer {
   /** The placeholder's box from the layout or master when the slide's shape has no xfrm of its own. */
   private inheritedBox(ph: Record<string, string>, inherit: XNode[], group: GroupTransform | null) {
     for (const part of inherit) {
-      const tree = path(part, 'p:cSld', 'p:spTree');
-      const sps = children(tree, 'p:sp');
-      const match = (byIdx: boolean) =>
-        sps.find((sp) => {
-          const a = attrs(path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph'));
-          if (!path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph')) return false;
-          return byIdx ? ph.idx !== undefined && a.idx === ph.idx : sameType(a.type, ph.type);
-        });
-      const sp = match(true) ?? match(false);
+      const sp = this.placeholderIn(part, ph);
       const b = sp && this.box(path(sp, 'p:spPr', 'a:xfrm'), group);
       if (b) return b;
     }
     return null;
   }
 
-  /** The theme's color scheme for a master (dk1, lt1, accent1, ... plus the bg1/tx1 aliases from its clrMap). */
-  private async themeColors(masterFile: string | undefined, master: XNode | undefined): Promise<Record<string, string>> {
-    if (!masterFile) return {};
+  /**
+   * The theme of a master: its color scheme (dk1, lt1, accent1, ... plus the bg1/tx1 aliases from the master's
+   * clrMap) and its heading and body fonts.
+   */
+  private async theme(masterFile: string | undefined, master: XNode | undefined): Promise<ThemeInfo> {
+    if (!masterFile) return { colors: {}, fonts: {} };
     const cached = this.themeCache.get(masterFile);
     if (cached) return cached;
-    const map: Record<string, string> = {};
+    const colors: Record<string, string> = {};
     const themeFile = (await this.rels(masterFile)).find((r) => r.type.endsWith('/theme'))?.target;
     const themeDoc = themeFile ? await this.xml(themeFile) : null;
-    const scheme = path(root(themeDoc ?? [], 'a:theme'), 'a:themeElements', 'a:clrScheme');
-    for (const c of kids(scheme)) {
+    const elements = path(root(themeDoc ?? [], 'a:theme'), 'a:themeElements');
+    for (const c of kids(child(elements, 'a:clrScheme'))) {
       const name = tagOf(c).replace('a:', '');
       const v = attrs(child(c, 'a:srgbClr')).val ?? attrs(child(c, 'a:sysClr')).lastClr;
-      if (v && /^[0-9A-Fa-f]{6}$/.test(v)) map[name] = v.toLowerCase();
+      if (v && /^[0-9A-Fa-f]{6}$/.test(v)) colors[name] = v.toLowerCase();
     }
     const clrMap = attrs(child(master, 'p:clrMap'));
-    for (const k of ['bg1', 'tx1', 'bg2', 'tx2']) if (clrMap[k] && map[clrMap[k]]) map[k] = map[clrMap[k]];
-    this.themeCache.set(masterFile, map);
-    return map;
+    for (const k of ['bg1', 'tx1', 'bg2', 'tx2']) if (clrMap[k] && colors[clrMap[k]]) colors[k] = colors[clrMap[k]];
+    const fontScheme = child(elements, 'a:fontScheme');
+    const fonts: ThemeInfo['fonts'] = {};
+    const major = attrs(path(fontScheme, 'a:majorFont', 'a:latin')).typeface;
+    const minor = attrs(path(fontScheme, 'a:minorFont', 'a:latin')).typeface;
+    if (major) fonts.major = major;
+    if (minor) fonts.minor = minor;
+    const info = { colors, fonts };
+    this.themeCache.set(masterFile, info);
+    return info;
   }
 
   /**
@@ -362,6 +367,84 @@ class Importer {
     return c === 'none' ? undefined : c;
   }
 
+  /** True for the theme's main text color (dk1/tx1): text in it keeps our theme's text color instead. */
+  private isTextColor(color: string | undefined): boolean {
+    if (!color) return false;
+    const hex = color.slice(1);
+    return hex === this.colors.tx1 || hex === this.colors.dk1 || hex === '000000';
+  }
+
+  /** The font family a run property names: an explicit typeface, or the theme's heading/body font for +mj-lt/+mn-lt. */
+  private fontName(rPr: XNode | undefined): { name?: string; bold: boolean } {
+    const typeface = attrs(child(rPr, 'a:latin')).typeface;
+    if (!typeface) return { bold: false };
+    if (typeface.startsWith('+mj')) return { ...(this.fonts.major ? { name: this.fonts.major } : {}), bold: false };
+    if (typeface.startsWith('+mn')) return { ...(this.fonts.minor ? { name: this.fonts.minor } : {}), bold: false };
+    return fontOf(typeface);
+  }
+
+  /** Fold a list-style level (an a:lvlNpPr or a:defPPr node) into inherited text defaults. */
+  private applyLevel(d: TextDefaults, lvl: XNode | undefined): void {
+    if (!lvl) return;
+    const a = attrs(lvl);
+    if (a.algn) d.algn = a.algn;
+    const pct = num(attrs(path(lvl, 'a:lnSpc', 'a:spcPct')).val);
+    if (pct !== undefined) d.lineSpc = pct;
+    const bef = num(attrs(path(lvl, 'a:spcBef', 'a:spcPts')).val);
+    if (bef !== undefined) d.spcBef = bef;
+    const aft = num(attrs(path(lvl, 'a:spcAft', 'a:spcPts')).val);
+    if (aft !== undefined) d.spcAft = aft;
+    const rPr = child(lvl, 'a:defRPr');
+    if (!rPr) return;
+    const r = attrs(rPr);
+    const sz = num(r.sz);
+    if (sz) d.size = sz;
+    if (r.b !== undefined) d.bold = r.b === '1';
+    if (r.i !== undefined) d.italic = r.i === '1';
+    const color = this.solidColor(rPr);
+    if (color) d.color = this.isTextColor(color) ? undefined : color;
+    const face = this.fontName(rPr);
+    if (face.name) d.font = face.name;
+    if (face.bold) d.bold = true;
+  }
+
+  /**
+   * What a text box inherits when its runs say nothing: the master's text styles (title, body or other), then
+   * the master's and the layout's matching placeholder, then the shape's own list style. A styled shape's font
+   * reference (the light text PowerPoint draws on filled shapes) sits underneath all of them.
+   */
+  private textDefaults(sp: XNode, ph: Record<string, string> | undefined, role: TextRole, inherit: XNode[]): TextDefaults {
+    const d: TextDefaults = {};
+    const styles = inherit.map((n) => child(n, 'p:txStyles')).find((n) => !!n);
+    const styleName = !ph ? 'p:otherStyle' : role === 'title' ? 'p:titleStyle' : 'p:bodyStyle';
+    this.applyLevel(d, child(child(styles, styleName), 'a:lvl1pPr'));
+    if (ph) {
+      // The master first, then the layout: the layout's placeholder overrides the master's.
+      for (const part of [...inherit].reverse()) {
+        const match = this.placeholderIn(part, ph);
+        this.applyLevel(d, path(match, 'p:txBody', 'a:lstStyle', 'a:lvl1pPr'));
+      }
+    }
+    this.applyLevel(d, path(sp, 'p:txBody', 'a:lstStyle', 'a:lvl1pPr'));
+    // The master's "other" style names the plain text color, which the font reference of a styled shape beats.
+    const refColor = this.colorNode(path(sp, 'p:style', 'a:fontRef'));
+    if (!d.color && refColor && refColor !== 'none' && !this.isTextColor(refColor)) d.color = refColor;
+    return d;
+  }
+
+  /** The placeholder shape in a layout or master that a slide's placeholder inherits from. */
+  private placeholderIn(part: XNode, ph: Record<string, string>): XNode | undefined {
+    const sps = children(path(part, 'p:cSld', 'p:spTree'), 'p:sp');
+    const match = (byIdx: boolean) =>
+      sps.find((sp) => {
+        const node = path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph');
+        if (!node) return false;
+        const a = attrs(node);
+        return byIdx ? ph.idx !== undefined && a.idx === ph.idx : sameType(a.type, ph.type);
+      });
+    return match(true) ?? match(false);
+  }
+
   /** A shape becomes a shape element, a text element, or both (a filled shape with text keeps its text styling). */
   private async shape(sp: XNode, inherit: XNode[], group: GroupTransform | null): Promise<SlideElement[]> {
     const ph = path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph');
@@ -370,7 +453,8 @@ class Importer {
     // Dates, footers, slide numbers and empty picture placeholders are chrome, not content.
     if (phType && ['dt', 'ftr', 'sldNum', 'pic', 'media', 'clipArt', 'tbl', 'chart', 'dgm'].includes(phType)) return [];
     const spPr = child(sp, 'p:spPr');
-    let box = this.box(child(spPr, 'a:xfrm'), group);
+    const xfrm = child(spPr, 'a:xfrm');
+    let box = this.box(xfrm, group);
     if (!box && ph) box = this.inheritedBox(phAttrs, inherit, group);
     if (!box) return [];
     if (box.w <= 0 && box.h <= 0) return [];
@@ -397,10 +481,7 @@ class Importer {
     let onShape: ShapeElement | null = null;
     if (!ph && (filled || stroked || geometric)) {
       const el: ShapeElement = { id: newId(), type: 'shape', shape: shapeKind(prst, (m) => this.note(m)), ...box };
-      if (el.shape === 'line') {
-        if (box.h > box.w) el.w = 0;
-        else el.h = 0;
-      }
+      if (el.shape === 'line') this.lineProps(el, xfrm, ln);
       if (fillColor) el.fill = fillColor;
       else if (!filled) el.fill = 'none';
       if (strokeColor) el.stroke = strokeColor;
@@ -434,12 +515,16 @@ class Importer {
     if (!hasText && !ph) return [];
 
     // Text sits inside the box's insets (PowerPoint's defaults are 0.1in left/right and 0.05in top/bottom).
+    const bodyPr = child(txBody, 'a:bodyPr');
     if (txBody) {
-      const bp = attrs(child(txBody, 'a:bodyPr'));
+      const bp = attrs(bodyPr);
       const inset = (k: string, dflt: number) => ((num(bp[k]) ?? dflt) / EMU_PER_PX) * this.scale;
       const [l, r, t, b] = [inset('lIns', 91440), inset('rIns', 91440), inset('tIns', 45720), inset('bIns', 45720)];
       box = { x: Math.round(box.x + l), y: Math.round(box.y + t), w: Math.max(1, Math.round(box.w - l - r)), h: Math.max(1, Math.round(box.h - t - b)) };
     }
+    // Shrink-on-overflow text is stored at its full size with the scale PowerPoint last applied.
+    const fontScale = (num(attrs(child(bodyPr, 'a:normAutofit')).fontScale) ?? 100000) / 100000;
+    const defaults = this.textDefaults(sp, ph ? phAttrs : undefined, role, inherit);
 
     const bodyBullets = role === 'body';
     const ps: Paragraph[] = [];
@@ -458,18 +543,17 @@ class Importer {
     if (!ps.length) ps.push({ text: '' });
 
     const el: TextElement = { id: newId(), type: 'text', role, ...box, paragraphs: ps };
-    const st = this.textStyle(paragraphs, txBody, role) ?? {};
+    const st = this.textStyle(paragraphs, txBody, role, defaults, fontScale) ?? {};
     if (onShape) {
-      // PowerPoint centers text in shapes and draws it in the light theme color on filled ones.
+      // PowerPoint centers text in shapes.
       st.align ??= 'center';
       st.valign ??= 'middle';
-      if (!st.color && onShape.fill !== 'none') st.color = '#ffffff';
     }
     if (Object.keys(st).length) el.style = st;
     // Paragraphs styled differently from the box (a big figure over a small caption) keep their own look.
     const base = { size: st?.size, bold: st?.bold ?? role === 'title', italic: !!st?.italic, color: st?.color, font: st?.font };
     paragraphs.forEach((p, k) => {
-      const run = this.runProps(p);
+      const run = this.runProps(p, defaults, fontScale);
       if (!run || !ps[k] || ps[k].text.trim() === '') return;
       if (run.size !== undefined && run.size !== base.size) ps[k].size = run.size;
       if (run.bold !== undefined && run.bold !== base.bold) ps[k].bold = run.bold;
@@ -480,54 +564,74 @@ class Importer {
     return onShape ? [onShape, el] : [el];
   }
 
-  /** Size, weight, slant, color and font of a paragraph's first run. */
-  private runProps(p: XNode): { size?: number; bold?: boolean; italic?: boolean; color?: string; font?: string } | null {
-    const run = children(p, 'a:r')[0] ?? children(p, 'a:fld')[0];
+  /** A font size in our units (points on the 960-wide canvas) from PowerPoint's hundredths of a point. */
+  private fontSize(sz: number, fontScale: number): number {
+    return Math.max(4, Math.round((sz / 100) * (4 / 3) * fontScale * this.scale));
+  }
+
+  /** Size, weight, slant, color and font of a paragraph's first run, with the inherited defaults filled in. */
+  private runProps(p: XNode, d: TextDefaults, fontScale: number): { size?: number; bold?: boolean; italic?: boolean; color?: string; font?: string } | null {
+    const run = firstRun(p);
     if (!run) return null;
     const rPrNode = child(run, 'a:rPr');
     const rPr = attrs(rPrNode);
-    const sz = num(rPr.sz);
-    const face = fontOf(attrs(child(rPrNode, 'a:latin')).typeface);
+    const sz = num(rPr.sz) ?? d.size;
+    const face = this.fontName(rPrNode);
+    const bold = rPr.b !== undefined ? rPr.b === '1' : face.bold ? true : d.bold;
+    const italic = rPr.i !== undefined ? rPr.i === '1' : d.italic;
+    const color = this.solidColor(rPrNode) ?? d.color;
+    const font = face.name ?? d.font;
     return {
-      ...(sz ? { size: Math.round((((sz / 100) * 4) / 3) * this.scale) } : {}),
-      ...(rPr.b !== undefined || face.bold ? { bold: rPr.b === '1' || face.bold } : {}),
-      ...(rPr.i !== undefined ? { italic: rPr.i === '1' } : {}),
-      ...(this.solidColor(rPrNode) ? { color: this.solidColor(rPrNode) } : {}),
-      ...(face.name ? { font: face.name } : {}),
+      ...(sz ? { size: this.fontSize(sz, fontScale) } : {}),
+      ...(bold !== undefined ? { bold } : {}),
+      ...(italic !== undefined ? { italic } : {}),
+      ...(color ? { color } : {}),
+      ...(font ? { font } : {}),
     };
   }
 
   /** The style of the first run (sizes and colors are per run in PowerPoint; we keep one per text box). */
-  private textStyle(paragraphs: XNode[], txBody: XNode | undefined, role: TextRole): TextStyle | undefined {
+  private textStyle(paragraphs: XNode[], txBody: XNode | undefined, role: TextRole, d: TextDefaults, fontScale: number): TextStyle | undefined {
     const st: TextStyle = {};
     const first = paragraphs.find((p) => paragraphText(p).trim() !== '') ?? paragraphs[0];
-    const run = children(first, 'a:r')[0] ?? children(first, 'a:fld')[0];
+    const run = firstRun(first);
     const rPrNode = child(run, 'a:rPr');
     const rPr = attrs(rPrNode);
-    const sz = num(rPr.sz);
-    if (sz) st.size = Math.round((((sz / 100) * 4) / 3) * this.scale);
+    const sz = num(rPr.sz) ?? d.size;
+    if (sz) st.size = this.fontSize(sz, fontScale);
     // Font families such as "Poppins Black" carry their weight in the name.
-    const face = fontOf(attrs(child(rPrNode, 'a:latin')).typeface);
-    if (face.name) st.font = face.name;
-    if ((rPr.b === '1' || face.bold) && role !== 'title') st.bold = true;
-    if (rPr.b === '0' && !face.bold && role === 'title') st.bold = false;
-    if (rPr.i === '1') st.italic = true;
-    const color = this.runColor(paragraphs);
+    const face = this.fontName(rPrNode);
+    const font = face.name ?? d.font;
+    if (font) st.font = font;
+    const bold = rPr.b !== undefined ? rPr.b === '1' : face.bold ? true : d.bold;
+    // Our titles are bold unless told otherwise; other text is regular unless told otherwise.
+    if (bold === true && role !== 'title') st.bold = true;
+    if (bold === false && role === 'title') st.bold = false;
+    if ((rPr.i !== undefined ? rPr.i === '1' : d.italic) === true) st.italic = true;
+    const color = this.runColor(paragraphs) ?? d.color;
     if (color) st.color = color;
     const pPr = child(first, 'a:pPr');
-    const algn = attrs(pPr).algn;
+    const algn = attrs(pPr).algn ?? d.algn;
     if (algn === 'ctr') st.align = 'center';
     else if (algn === 'r') st.align = 'right';
     // Line spacing: PowerPoint's 100% is about 1.2 × the font size.
-    const pct = num(attrs(path(pPr, 'a:lnSpc', 'a:spcPct')).val);
+    const pct = num(attrs(path(pPr, 'a:lnSpc', 'a:spcPct')).val) ?? d.lineSpc;
     if (pct) {
       const lh = Math.round((pct / 100000) * 1.2 * 100) / 100;
-      if (Math.abs(lh - 1.25) > 0.03) st.lineHeight = Math.min(4, Math.max(0.5, lh));
+      if (Math.abs(lh - 1.25) > 0.06) st.lineHeight = Math.min(4, Math.max(0.5, lh)); // single spacing is ours
     }
-    const before = num(attrs(path(pPr, 'a:spcBef', 'a:spcPts')).val);
-    const after = num(attrs(path(pPr, 'a:spcAft', 'a:spcPts')).val);
-    if (paragraphs.length > 1 && (before !== undefined || after !== undefined)) {
-      st.paraSpacing = Math.min(200, Math.round((((before ?? 0) + (after ?? 0)) / 100) * (4 / 3) * this.scale * 10) / 10);
+    // Space between paragraphs is per paragraph in PowerPoint; the widest gap stands for the box.
+    if (paragraphs.length > 1) {
+      let gap: number | undefined;
+      let prevAfter = 0;
+      paragraphs.forEach((p, k) => {
+        const pp = child(p, 'a:pPr');
+        const before = num(attrs(path(pp, 'a:spcBef', 'a:spcPts')).val) ?? d.spcBef;
+        const after = num(attrs(path(pp, 'a:spcAft', 'a:spcPts')).val) ?? d.spcAft;
+        if (k > 0 && (before !== undefined || after !== undefined || gap !== undefined)) gap = Math.max(gap ?? 0, (before ?? 0) + prevAfter);
+        prevAfter = after ?? 0;
+      });
+      if (gap !== undefined) st.paraSpacing = Math.min(200, Math.round((gap / 100) * (4 / 3) * this.scale * 10) / 10);
     }
     const anchor = attrs(child(txBody, 'a:bodyPr')).anchor;
     if (anchor === 'ctr') st.valign = 'middle';
@@ -535,28 +639,60 @@ class Importer {
     return Object.keys(st).length ? st : undefined;
   }
 
+  /**
+   * The first explicit run color in a box. Hyperlink runs carry the link color, so they only count when the box
+   * holds nothing but links.
+   */
   private runColor(paragraphs: XNode[]): string | undefined {
+    let link: string | undefined;
+    let plain = false;
     for (const p of paragraphs) {
       for (const r of children(p, 'a:r')) {
-        const c = this.solidColor(child(r, 'a:rPr'));
-        if (c) return c;
+        if (textOf(child(r, 'a:t')).trim() === '') continue;
+        const rPr = child(r, 'a:rPr');
+        const c = this.solidColor(rPr);
+        if (child(rPr, 'a:hlinkClick')) link ??= c;
+        else if (c) return c;
+        else plain = true;
       }
     }
-    return undefined;
+    return plain ? undefined : link;
+  }
+
+  /** Arrowheads and direction of a line, from its outline and transform. */
+  private lineProps(el: ShapeElement, xfrm: XNode | undefined, ln: XNode | undefined): void {
+    const diagonal = el.w > 2 && el.h > 2;
+    if (!diagonal) {
+      if (el.h > el.w) el.w = 0;
+      else el.h = 0;
+    }
+    const x = attrs(xfrm);
+    const flipH = x.flipH === '1' || x.flipH === 'true';
+    const flipV = x.flipV === '1' || x.flipV === 'true';
+    if (diagonal && flipH !== flipV) el.flip = true;
+    const isArrow = (end: string) => {
+      const type = attrs(child(ln, end)).type;
+      return !!type && type !== 'none';
+    };
+    // headEnd is at the start of the line, which a horizontal flip moves to the right.
+    const [start, end] = flipH ? [isArrow('a:tailEnd'), isArrow('a:headEnd')] : [isArrow('a:headEnd'), isArrow('a:tailEnd')];
+    if (start && end) el.arrow = 'both';
+    else if (start) el.arrow = 'start';
+    else if (end) el.arrow = 'end';
   }
 
   private connector(cxn: XNode, group: GroupTransform | null): SlideElement | null {
     const spPr = child(cxn, 'p:spPr');
-    const box = this.box(child(spPr, 'a:xfrm'), group);
+    const xfrm = child(spPr, 'a:xfrm');
+    const box = this.box(xfrm, group);
     if (!box) return null;
     const ln = child(spPr, 'a:ln');
-    const vertical = box.h > box.w;
-    const el: ShapeElement = { id: newId(), type: 'shape', shape: 'line', ...box, ...(vertical ? { w: 0 } : { h: 0 }) };
+    const el: ShapeElement = { id: newId(), type: 'shape', shape: 'line', ...box };
+    this.lineProps(el, xfrm, ln);
     const color = this.solidColor(ln);
     if (color) el.stroke = color;
     const w = num(attrs(ln).w);
     if (w !== undefined) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
-    if (box.h > 2 && box.w > 2) this.note('Diagonal lines were drawn straight.');
     return el;
   }
 
@@ -602,6 +738,27 @@ class Importer {
   }
 }
 
+interface ThemeInfo {
+  colors: Record<string, string>;
+  fonts: { major?: string; minor?: string };
+}
+
+/** Text properties inherited from masters, layouts and list styles (sizes and spacing in PowerPoint's units). */
+interface TextDefaults {
+  /** Hundredths of a point. */
+  size?: number;
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+  font?: string;
+  algn?: string;
+  /** Line spacing in thousandths of a percent. */
+  lineSpc?: number;
+  /** Space before and after a paragraph, in hundredths of a point. */
+  spcBef?: number;
+  spcAft?: number;
+}
+
 interface GroupTransform {
   parent: GroupTransform | null;
   apply(b: { x: number; y: number; w: number; h: number }): { x: number; y: number; w: number; h: number };
@@ -621,6 +778,13 @@ function fontOf(typeface: string | undefined): { name?: string; bold: boolean } 
 function sameType(a: string | undefined, b: string | undefined): boolean {
   const norm = (t: string | undefined) => (t === 'ctrTitle' ? 'title' : t === 'obj' || t === undefined ? 'body' : t);
   return norm(a) === norm(b);
+}
+
+/** The run whose properties stand for a paragraph: the first one with text that is not a hyperlink, else the first. */
+function firstRun(p: XNode | undefined): XNode | undefined {
+  const runs = children(p, 'a:r');
+  const texts = runs.filter((r) => textOf(child(r, 'a:t')).trim() !== '');
+  return texts.find((r) => !child(child(r, 'a:rPr'), 'a:hlinkClick')) ?? texts[0] ?? runs[0] ?? children(p, 'a:fld')[0];
 }
 
 /** The text of one paragraph: runs and fields, with line breaks as newlines. */
