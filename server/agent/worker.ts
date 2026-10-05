@@ -173,11 +173,20 @@ try {
 
 /**
  * Environment for Claude Code (the coding and research jobs). It never gets the GitHub token, and it uses
- * CODING_API_KEY as its Anthropic key when set, so the jobs can be billed apart from the live assistant.
+ * CODING_API_KEY as its credential when set, so the jobs can be billed apart from the live assistant.
+ * CODING_API_KEY may be an API key (sk-ant-api...) or a Claude Code OAuth token from `claude setup-token`
+ * (sk-ant-oat...); the latter goes in CLAUDE_CODE_OAUTH_TOKEN, and the live assistant's API key is removed
+ * so it cannot shadow the token.
  */
 function claudeCodeEnv(): Record<string, string> {
   const { GITHUB_TOKEN: _token, CODING_API_KEY: codingKey, ...env } = process.env;
-  if (codingKey?.trim()) env.ANTHROPIC_API_KEY = codingKey.trim();
+  const key = codingKey?.trim();
+  if (key?.startsWith('sk-ant-oat')) {
+    delete env.ANTHROPIC_API_KEY;
+    env.CLAUDE_CODE_OAUTH_TOKEN = key;
+  } else if (key) {
+    env.ANTHROPIC_API_KEY = key;
+  }
   return env as Record<string, string>;
 }
 
