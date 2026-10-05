@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
+import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
+import { ASSISTANT_PANEL } from '../panelSize.ts';
 import { useAgent } from './AgentProvider.tsx';
 import { targetOf } from './clientTools.ts';
 import { toolLabel } from './describe.ts';
@@ -26,6 +28,8 @@ export function AgentButton() {
 
 export function AgentPanel() {
   const agent = useAgent();
+  // The panel and the page beside it share the window; the panel takes at most half of it.
+  const panel = usePanelWidth(ASSISTANT_PANEL, () => ({ available: window.innerWidth, viewport: window.innerWidth, maxFraction: 0.5 }));
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -79,7 +83,8 @@ export function AgentPanel() {
   const thinking = agent.running && !agent.confirm && last?.kind !== 'assistant';
 
   return (
-    <aside className="agent-panel" aria-label="Assistant">
+    <aside className="agent-panel" aria-label="Assistant" style={{ width: panel.width }}>
+      <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />
       <div className="agent-head">
         <SparkIcon />
         <span className="agent-title">Assistant</span>

@@ -11,6 +11,7 @@ import { isMac, MOD } from '../commands.ts';
 import { DeckIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
+import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { DeckController, useDeckController } from '../deck/controller.ts';
 import { DeckEditor } from '../deck/DeckEditor.tsx';
 import { useDeckFonts } from '../deck/fonts.ts';
@@ -20,6 +21,7 @@ import { PresentMode } from '../deck/PresentMode.tsx';
 import { checkPptxFile, pickPptxFile } from '../importFile.ts';
 import { SlideView } from '../deck/SlideView.tsx';
 import { ThumbnailStrip } from '../deck/ThumbnailStrip.tsx';
+import { SLIDE_TRAY } from '../panelSize.ts';
 
 /** Natural size of an image, for sizing a new image element. */
 function imageSize(src: string): Promise<{ w: number; h: number } | undefined> {
@@ -114,6 +116,9 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
   const [printing, setPrinting] = useState(false);
   const [, setSaveTick] = useState(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The thumbnail tray shares the body with the canvas (less the 8px gap between them).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const tray = usePanelWidth(SLIDE_TRAY, () => (bodyRef.current ? { available: bodyRef.current.clientWidth - 8 } : {}), bodyRef);
 
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
@@ -466,8 +471,9 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
               </button>
             </div>
           )}
-          <div className="deck-body">
-            <ThumbnailStrip ctl={ctl} onContextMenu={onThumbContextMenu} />
+          <div className="deck-body" ref={bodyRef}>
+            <ThumbnailStrip ctl={ctl} width={tray.width} onContextMenu={onThumbContextMenu} />
+            <ResizeHandle panel={tray} side="left" label="Resize slide thumbnails" className="deck-thumbs-resize" />
             <div className="deck-main">
               <DeckEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
               {showNotes && <NotesPane ctl={ctl} />}

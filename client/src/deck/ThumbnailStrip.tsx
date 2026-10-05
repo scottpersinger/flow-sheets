@@ -4,14 +4,16 @@ import { SLIDE_W, slideTitle } from '../../../shared/deck.ts';
 import type { DeckController } from './controller.ts';
 import { SlideView } from './SlideView.tsx';
 
-const THUMB_W = 168;
+/** Room in a thumbnail row besides the picture: list padding and border, slide number, gap, picture border. */
+const THUMB_CHROME = 46;
 
-export function ThumbnailStrip({ ctl, onContextMenu }: { ctl: DeckController; onContextMenu(e: MouseEvent, index: number): void }) {
+export function ThumbnailStrip({ ctl, width, onContextMenu }: { ctl: DeckController; width: number; onContextMenu(e: MouseEvent, index: number): void }) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
-  const scale = THUMB_W / SLIDE_W;
+  // Thumbnails fill the tray's width (and keep the slide's 16:9 shape).
+  const scale = Math.max(40, width - THUMB_CHROME) / SLIDE_W;
   return (
-    <div className="deck-thumbs" role="listbox" aria-label="Slides">
+    <div className="deck-thumbs" role="listbox" aria-label="Slides" style={{ width }}>
       {ctl.deck.slides.map((s, i) => (
         <div
           key={s.id}
