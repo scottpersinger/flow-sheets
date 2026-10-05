@@ -22,10 +22,10 @@ import {
 import { createPortal } from 'react-dom';
 import { fontFamilies } from './fonts.ts';
 import { dashArray, DEFAULT_LINE_WIDTH, lineGeometry as routeGeometry } from '../../../shared/lines.ts';
-import { arcPath, isDrawn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
+import { arcGeometry, arcPathOn, isDrawn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
 /** A box override while an element is being dragged or resized. */
-export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>> & Partial<Pick<LineElement, 'flipH' | 'flipV' | 'startConnection' | 'endConnection' | 'bend'>>;
+export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>> & Partial<Pick<LineElement, 'flipH' | 'flipV' | 'startConnection' | 'endConnection' | 'bend'>> & { startAngle?: number; endAngle?: number };
 
 export interface SlideViewProps {
   slide: Slide;
@@ -225,9 +225,14 @@ function ShapeDrawing({ el, theme, box }: { el: ShapeElement; theme: Theme; box:
   const w = box.w ?? el.w;
   const h = box.h ?? el.h;
   if (el.shape === 'arc') {
+    // The ellipse follows the live box (so resizing scales the arc); old arcs are drawn on their whole-ellipse box.
+    const sw = el.strokeWidth ?? 2;
+    const start = box.startAngle ?? el.startAngle;
+    const end = box.endAngle ?? el.endAngle;
+    const g = arcGeometry({ ...el, startAngle: start, endAngle: end, x: 0, y: 0, w, h }, sw);
     return (
       <svg className="sl-shape-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">
-        <path d={arcPath(w, h, el.startAngle, el.endAngle)} fill="none" stroke={el.stroke ?? theme.accent} strokeWidth={el.strokeWidth ?? 2} />
+        <path d={arcPathOn(g, 0, 0, start, end)} fill="none" stroke={el.stroke ?? theme.accent} strokeWidth={sw} />
       </svg>
     );
   }

@@ -8,7 +8,7 @@ import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType } from '../../shared/types.ts';
-import { schemas } from '../../server/agent/tools.ts';
+import { editElementsV1, schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
@@ -241,6 +241,22 @@ export function appHtml(bundle: Bundle, assetOrigin: string | null, appUrl: stri
 }
 
 const HELLO = '<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px system-ui;padding:16px}</style></head><body><h1>Docs</h1><p>Hello from the Docs plugin. If you can read this, ChatGPT can show our pages.</p></body></html>';
+
+/**
+ * Version 1 describes an arc's x/y/w/h as the box of its whole ellipse; the editor now takes the box around the
+ * visible stroke, with the ellipse given by its center and radii. An arc given with its whole box is placed by
+ * that ellipse instead.
+ */
+export function arcsAsEllipseBoxes(input: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(input.set)) return input;
+  const set = input.set.map((spec: Record<string, unknown>) => {
+    const isArc = spec.shape === 'arc' || spec.start_angle !== undefined || spec.end_angle !== undefined;
+    const { x, y, w, h, ...rest } = spec;
+    if (!isArc || typeof x !== 'number' || typeof y !== 'number' || typeof w !== 'number' || typeof h !== 'number') return spec;
+    return { ...rest, cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2 };
+  });
+  return { ...input, set };
+}
 
 export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
   const version = opts.version ?? 1;
@@ -732,13 +748,13 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   for (const name of DECK_EDIT_TOOLS) {
     server.registerTool(
       name,
-      { description: describe(name), inputSchema: { ...schemas[name].shape, deck_id: optionalDeckId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
+      { description: describe(name), inputSchema: { ...(name === 'edit_elements' && version === 1 ? editElementsV1 : schemas[name]).shape, deck_id: optionalDeckId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { deck_id, ...input } = args as Record<string, unknown> & { deck_id?: string };
           const id = service.target('deck', deck_id);
           if (!id) return fail('No presentation is open in the app. Pass deck_id (see list_files), or open one with open_file.');
-          return ok(await service.editDeck(id, name, input));
+          return ok(await service.editDeck(id, name, name === 'edit_elements' && version === 1 ? arcsAsEllipseBoxes(input) : input));
         }),
     );
   }

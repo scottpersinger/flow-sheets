@@ -6,7 +6,7 @@ import { fillColor, ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideEle
 
 /** PowerPoint's arrowhead types for ours (its "arrow" is the open one, "stealth" the barbed filled one). */
 const PPTX_ARROW: Record<Exclude<ArrowStyle, 'none'>, 'arrow' | 'diamond' | 'oval' | 'stealth' | 'triangle'> = { arrow: 'stealth', open: 'arrow', triangle: 'triangle', circle: 'oval', diamond: 'diamond' };
-import { SHAPES } from './shapes.ts';
+import { arcGeometry, SHAPES } from './shapes.ts';
 
 /** Returns a data URL for an image address, or null if it cannot be loaded. */
 export type ImageLoader = (src: string) => Promise<string | null>;
@@ -183,8 +183,10 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     const sw = el.strokeWidth ?? (strokeColor ? 2 : 0);
     const line: PptxGenJS.ShapeLineProps = strokeColor && sw ? { color: strokeColor, width: pt(sw), transparency: transparencyOf(el.stroke) } : { type: 'none' };
     const shapeType = (pres.ShapeType as unknown as Record<string, PptxGenJS.SHAPE_NAME>)[SHAPES[el.shape].pptx] ?? pres.ShapeType.rect;
+    // PowerPoint's arc box is the whole ellipse; ours is the tight box around the stroke.
+    const g = el.shape === 'arc' ? arcGeometry(el, sw) : undefined;
     const common = {
-      ...box,
+      ...(g ? { x: inch(g.cx - g.rx), y: inch(g.cy - g.ry), w: inch(2 * g.rx), h: inch(2 * g.ry) } : box),
       fill,
       line,
       ...(el.shape === 'rounded' ? { rectRadius: inch(16) } : {}),
