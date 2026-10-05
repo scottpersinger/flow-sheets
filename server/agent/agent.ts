@@ -31,7 +31,8 @@ export interface AgentOptions {
   dailyRequestLimit?: number;
 }
 
-const MODEL = 'claude-sonnet-5-5';
+/** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
+const MODEL = process.env.AGENT_MODEL?.trim() || 'claude-sonnet-5-5';
 const EFFORT = (process.env.AGENT_EFFORT ?? 'medium') as 'low' | 'medium' | 'high';
 /** Model calls in one turn before the agent stops and hands back to the user. */
 const MAX_STEPS = 30;

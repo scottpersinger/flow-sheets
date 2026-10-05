@@ -33,7 +33,7 @@ Every job is a record of the change (request, the coding agent's summary, files,
 
 Password reset: **Forgot your password?** on the sign-in page emails a one-time link (valid for an hour) that opens `/reset` to set a new password and signs the user in; other sessions are signed out. Email goes through Resend when `RESEND_API_KEY` (and optionally `MAIL_FROM`) is set; otherwise the message, link included, is written to the server log, so on a single-operator deployment the link can be copied from the Railway logs. `APP_URL` sets the origin used in the link (defaults to the requesting origin).
 
-Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments. The assistant needs `ANTHROPIC_API_KEY`. For local development, copy `.env.example` to `.env` (git-ignored) and fill it in; the server loads it on start (`server/env.ts`), so restart it after editing. You can also set `AGENT_EFFORT` (`low`, `medium` (default) or `high`) and `AGENT_DAILY_REQUEST_LIMIT` (model calls per user per day, default 500).
+Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments. The assistant needs `ANTHROPIC_API_KEY`. For local development, copy `.env.example` to `.env` (git-ignored) and fill it in; the server loads it on start (`server/env.ts`), so restart it after editing. You can also set `AGENT_MODEL` (`claude-sonnet-5-5` by default, or `claude-opus-5-5`), `AGENT_EFFORT` (`low`, `medium` (default) or `high`) and `AGENT_DAILY_REQUEST_LIMIT` (model calls per user per day, default 500).
 
 ## Layout
 
@@ -46,7 +46,7 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 
 ## Assistant
 
-**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. You can ask it in plain language to read, edit, format, sort or restructure the open spreadsheet, or to find, read, create and open other spreadsheets. It knows which spreadsheet, tab and selection you're looking at. It uses Claude Sonnet 5.5 through one API key on the server.
+**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. You can ask it in plain language to read, edit, format, sort or restructure the open spreadsheet, or to find, read, create and open other spreadsheets. It knows which spreadsheet, tab and selection you're looking at. It uses Claude Sonnet 5.5 by default (`AGENT_MODEL` switches it, for example to Opus 5.5) through one API key on the server.
 
 - **Edits appear immediately** and save like your own. Everything the assistant changes for one message undoes as a single step with ⌘Z. Deleting tabs, rows or columns, and clearing more than 100 cells, asks you first.
 - **One ongoing conversation per user**, kept across page loads and navigation. **New chat** starts over (old conversations stay in the database).
