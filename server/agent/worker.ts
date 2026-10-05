@@ -171,14 +171,29 @@ try {
 // ---------------------------------------------------------------------------
 // Coding
 
+/**
+ * Environment for Claude Code (the coding and research jobs). It never gets the GitHub token, and it uses
+ * CODING_API_KEY as its Anthropic key when set, so the jobs can be billed apart from the live assistant.
+ */
+function claudeCodeEnv(): Record<string, string> {
+  const { GITHUB_TOKEN: _token, CODING_API_KEY: codingKey, ...env } = process.env;
+  if (codingKey?.trim()) env.ANTHROPIC_API_KEY = codingKey.trim();
+  return env as Record<string, string>;
+}
+
+/** CODING_MODEL pins the model Claude Code runs on; unset, Claude Code uses its own default. */
+function codingModel(): Pick<Options, 'model'> {
+  const model = process.env.CODING_MODEL?.trim();
+  return model ? { model } : {};
+}
+
 /** One Claude Code session (or a resumed one) over the repository. */
 async function code(prompt: string, resume?: string): Promise<{ summary: string; sessionId?: string; cost: number; aborted: boolean }> {
-  // The coding agent never needs the GitHub token.
-  const { GITHUB_TOKEN: _token, ...env } = process.env;
   const options: Options = {
     cwd: REPO_ROOT,
     abortController: abort,
-    env: env as Record<string, string>,
+    env: claudeCodeEnv(),
+    ...codingModel(),
     // Loads CLAUDE.md, which explains the codebase and how to add an assistant tool.
     settingSources: ['project'],
     permissionMode: 'acceptEdits',
@@ -355,11 +370,11 @@ ${job.spec}${sheetNote}
 - Reply with the report only, in plain text or simple markdown: the answer first, then the details. When the result is one line per item, include it as a markdown table or a CSV block so the assistant can write it into the spreadsheet.
 - Keep the report under about 3000 words.`;
 
-  const { GITHUB_TOKEN: _token, ...env } = process.env;
   const options: Options = {
     cwd: dir,
     abortController: abort,
-    env: env as Record<string, string>,
+    env: claudeCodeEnv(),
+    ...codingModel(),
     settingSources: [],
     tools: ['WebSearch', 'WebFetch', 'Read', 'Glob', 'Grep'],
     allowedTools: ['WebSearch', 'WebFetch', 'Read', 'Glob', 'Grep'],
