@@ -2,6 +2,35 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-05 — Add a tool to render a slide as an image so the assistant can check its work
+
+Typecheck and all 153 tests now pass. The one failing test was picking up this machine's `AGENT_MODEL` setting, so I set it to empty in the test config (`vite.config.ts`) and the test now checks the default model again.
+
+The new assistant tool, **render_slide**, takes a PNG of a slide using the app's own slide renderer, with the same fonts, theme, images and text wrapping. Its inputs are `slide` (required, 1-based), `scale` (0.5–2, default 1 = 960×540) and `deck_id` (defaults to the open presentation, including unsaved edits). It returns the stored /api/images/... address, the pixel size, and an `overflow` list of text boxes and shape labels whose text is bigger than their box. Two limits: the picture comes in the message right after the tool results rather than inside them, and the image-making step is covered by unit tests but hasn't been tried in a real browser. Shape labels now follow the `size`, `font`, `bold` and `color` set through edit_elements instead of always showing at 18pt, and the assistant is told to render and check a slide after building or changing it.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-05.
+
+### Request
+
+What the user asked for: the assistant should be able to take a screenshot of a slide to visually check its own edits. Today the assistant only has read_deck, which returns element geometry and text but not what actually renders. That caused a real failure: on deck bc8596c9-dccc-41a7-806a-68d9b2516ddb, slide 16 (a roadmap slide built from about 80 shapes and text boxes), labels set via the shape "text" property ignored the requested "size" (9pt) and rendered at a much larger default. Text wrapped and overlapped badly, and the assistant had no way to see it until the user sent a screenshot.
+
+Proposed tool: render_slide
+- Inputs: slide (integer, 1-based, required); optional scale (number, default 1 = 960x540 px; allow 0.5 to 2); optional deck_id (string, defaults to the open presentation).
+- Behavior: render the slide on the server exactly as the editor/presenter shows it: the same fonts (Poppins, Inter, etc.), theme, background, images, shapes with their labels, text wrapping, line height and valign. Produce a PNG. Use the same rendering code path as the client if possible, e.g. headless browser rendering of the slide view route, so the image matches what the user sees. Don't build a separate approximate renderer.
+- Returns: the PNG as an image content block the model can view directly, i.e. an image in the tool result rather than just a URL. Also return a stored /api/images/... address, plus the slide number and pixel dimensions.
+- Optional but valuable: also return an "overflow" list of text elements whose rendered text is taller or wider than their box, with id, box h and rendered height. Overlaps can then be caught even without looking closely.
+- Errors: clear messages if no presentation is open or the slide number is out of range.
+
+Related bug worth fixing in the same change, if it's simple: edit_elements accepts size/font/bold/color for shape elements that have a "text" label, but the shape label rendering seems to ignore "size" (and maybe font), so labels render far too large. Either honor those properties for shape labels, or document that they aren't supported.
+
+Also update the system prompt / tool guidance: after building or significantly changing a slide, call render_slide and check the result before reporting back to the user.
+
+Example: render_slide({slide: 16}) on the deck above should return a 960x540 PNG of the roadmap slide (timeline track, quarter columns, item tags), which the assistant then inspects for overlapping or overflowing text.
+
+Files: client/src/agent/AgentProvider.tsx, client/src/agent/clientTools.ts, client/src/agent/deckTools.test.ts, client/src/agent/deckTools.ts, client/src/agent/describe.ts, client/src/deck/SlideView.tsx, client/src/deck/fonts.ts, client/src/deck/renderSlide.ts, server/agent/prompt.ts, server/agent/tools.ts, shared/agent/protocol.ts, shared/deck.ts, shared/pptxExport.ts, vite.config.ts
+
+Job: 48c50fe9-ce3b-4453-94cd-630981cd4698
+
 ## 2026-10-05 — Drag a column to a new position
 
 You can now reorder columns by dragging: select one column or a block of adjacent columns by its header, then drag the header. A drop line shows where they will land, Escape cancels, and one undo reverses the whole move. Everything travels with the columns (values, formatting, width, filter settings, images, links), formulas on any tab are updated to keep pointing at the same data, and the moved columns stay selected; typecheck and all tests pass, though I haven't tried the drag in a browser. I also added a new assistant tool, `move_columns(from_column, to_column?, before_column, tab?)`, which places a column or block (from `from_column` through `to_column`, which defaults to `from_column`) immediately left of `before_column` on the given tab (the active tab by default) and returns the new range. For example, `move_columns(from_column="F", before_column="E")` swaps the two balance columns. A range formula like `SUM(A:B)` drops a column that is moved out of it and widens if one is moved into it, and the frozen-column count does not change.

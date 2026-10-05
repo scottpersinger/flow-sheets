@@ -88,7 +88,13 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
   const stroke = el.stroke ?? (el.shape === 'line' ? theme.accent : undefined);
   const sw = el.strokeWidth ?? (el.shape === 'line' ? 3 : stroke ? 2 : 0);
   if (el.shape === 'line') return { background: el.stroke ?? el.fill ?? theme.accent };
-  const text = { color: el.textColor ?? (el.fill === 'none' ? theme.text : '#fff'), fontFamily: theme.bodyFont };
+  const text: CSSProperties = {
+    color: el.textColor ?? (el.fill === 'none' ? theme.text : '#fff'),
+    fontFamily: el.textFont ? `"${el.textFont.replace(/"/g, '')}", ${theme.bodyFont}` : theme.bodyFont,
+    fontSize: el.textSize ?? 18,
+    ...(el.textBold ? { fontWeight: 700 } : {}),
+    ...(el.textItalic ? { fontStyle: 'italic' } : {}),
+  };
   // Polygon shapes are drawn by an SVG inside the box (see ShapePolygon); the box itself stays transparent.
   if (SHAPES[el.shape].points) return text;
   return {
@@ -297,7 +303,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
                   initial={[{ text: el.text ?? '' }]}
                   onCommit={(ps) => editing.onCommit(ps)}
                   onStop={editing.onStop}
-                  style={{ width: '100%', height: '100%', justifyContent: 'center', textAlign: 'center', fontSize: 18 }}
+                  style={{ width: '100%', height: '100%', justifyContent: 'center', textAlign: 'center', fontSize: el.textSize ?? 18 }}
                 />
               </div>
             );

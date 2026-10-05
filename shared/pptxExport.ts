@@ -139,7 +139,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     const common = { ...box, fill, line, ...(el.shape === 'rounded' ? { rectRadius: inch(16) } : {}) };
     if (el.text) {
       const color = hexColor(el.textColor) ?? (el.fill === 'none' ? hexColor(theme.text) : 'FFFFFF');
-      s.addText(el.text, { ...common, shape: shapeType, align: 'center', valign: 'middle', fontSize: pt(18), fontFace: fontFace(theme.bodyFont), ...(color ? { color } : {}) });
+      s.addText(el.text, { ...common, shape: shapeType, align: 'center', valign: 'middle', fontSize: pt(el.textSize ?? 18), fontFace: el.textFont ?? fontFace(theme.bodyFont), ...(el.textBold ? { bold: true } : {}), ...(el.textItalic ? { italic: true } : {}), ...(color ? { color } : {}) });
     } else {
       s.addShape(shapeType, common);
     }

@@ -3,12 +3,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { isJobLive, JOB_ACTIVE_STATUSES, type AgentContext, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, type AgentContext, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
+import { renderSlideImage } from '../deck/renderSlide.ts';
 import type { SheetController } from '../state/controller.ts';
 import { confirmationFor, runClientTool, ToolError } from './clientTools.ts';
 
@@ -333,7 +334,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       });
     });
 
-  const runClientCalls = async (calls: ClientToolCall[], group: string, signal: AbortSignal): Promise<ClientToolResult[]> => {
+  /** `rendered` collects pictures from render_slide, sent along with the results. */
+  const runClientCalls = async (calls: ClientToolCall[], group: string, signal: AbortSignal, rendered: AgentImage[]): Promise<ClientToolResult[]> => {
     const results: ClientToolResult[] = [];
     for (const call of calls) {
       if (signal.aborted) break;
@@ -350,6 +352,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         const content = await runClientTool(call, {
           ctl: sheetRef.current?.ctl ?? null,
           deck: deckRef.current?.ctl ?? null,
+          deckId: deckRef.current?.meta.id ?? null,
+          loadDeck: async (id) => (await api.getDeck(id)).deck,
+          renderSlide: renderSlideImage,
+          attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
           group,
           openSheet: openSheetById,
           openDeck: openDeckById,
@@ -413,9 +419,15 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             await turn();
           }
           if (!calls || abort.signal.aborted) break;
-          const toolResults = await runClientCalls(calls, group, abort.signal);
+          const rendered: AgentImage[] = [];
+          const toolResults = await runClientCalls(calls, group, abort.signal, rendered);
           if (abort.signal.aborted) break;
-          req = { context: context(), toolResults };
+          req = {
+            context: context(),
+            toolResults,
+            // The API only takes text in tool results here, so slide pictures follow them in the same message.
+            ...(rendered.length ? { images: rendered, message: `[render_slide: ${rendered.length === 1 ? 'the rendered slide is' : 'the rendered slides are'} attached above, in call order. Added by the app, not written by the user.]` } : {}),
+          };
         }
       } catch (e) {
         if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));

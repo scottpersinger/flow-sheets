@@ -86,6 +86,12 @@ export interface ShapeElement extends ElementBase {
   /** Optional label centered in the shape. */
   text?: string;
   textColor?: string;
+  /** Label font size in points. Defaults to 18. */
+  textSize?: number;
+  textBold?: boolean;
+  textItalic?: boolean;
+  /** Label font family (e.g. "Inter"); the theme body font is the fallback. */
+  textFont?: string;
 }
 
 export type SlideElement = TextElement | ImageElement | ShapeElement;
@@ -439,6 +445,8 @@ export function validateElement(e: unknown, where: string): string | null {
       if (el.strokeWidth !== undefined && !num(el.strokeWidth, 0, 100)) return `${where}: invalid stroke width`;
       if (el.text !== undefined && (typeof el.text !== 'string' || el.text.length > MAX_TEXT)) return `${where}: invalid shape text`;
       if (el.textColor !== undefined && !isColor(el.textColor)) return `${where}: invalid text color`;
+      if (el.textSize !== undefined && !num(el.textSize, 4, 400)) return `${where}: invalid label font size`;
+      if (el.textFont !== undefined && (typeof el.textFont !== 'string' || el.textFont.length > 64)) return `${where}: invalid label font`;
       return null;
     }
     default:
@@ -491,7 +499,17 @@ export function deckOutline(deck: Deck, current?: number) {
         const box = { id: e.id, x: e.x, y: e.y, w: e.w, h: e.h };
         if (e.type === 'text') return { ...box, type: 'text', ...(e.role ? { role: e.role } : {}), text: fromParagraphs(e.paragraphs).join('\n'), ...(e.style ? { style: e.style } : {}) };
         if (e.type === 'image') return { ...box, type: 'image', src: e.src.length > 80 ? `${e.src.slice(0, 77)}...` : e.src };
-        return { ...box, type: 'shape', shape: e.shape, ...(e.fill ? { fill: e.fill } : {}), ...(e.text ? { text: e.text } : {}) };
+        const label = e.text
+          ? {
+              text: e.text,
+              ...(e.textSize !== undefined ? { size: e.textSize } : {}),
+              ...(e.textFont ? { font: e.textFont } : {}),
+              ...(e.textBold ? { bold: true } : {}),
+              ...(e.textItalic ? { italic: true } : {}),
+              ...(e.textColor ? { color: e.textColor } : {}),
+            }
+          : {};
+        return { ...box, type: 'shape', shape: e.shape, ...(e.fill ? { fill: e.fill } : {}), ...label };
       }),
       ...(s.notes ? { notes: s.notes } : {}),
     })),

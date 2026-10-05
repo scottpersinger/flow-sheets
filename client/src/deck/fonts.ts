@@ -43,6 +43,7 @@ export function fontsIn(deck: Deck): string[] {
   const out = new Set<string>();
   for (const s of deck.slides) {
     for (const e of s.elements) {
+      if (e.type === 'shape' && e.textFont) out.add(e.textFont);
       if (e.type !== 'text') continue;
       if (e.style?.font) out.add(e.style.font);
       for (const p of e.paragraphs) if (p.font) out.add(p.font);
