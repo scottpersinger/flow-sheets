@@ -43,13 +43,13 @@ const elementSpec = z
     h: z.number().min(0).optional(),
     text: z.string().max(20_000).optional().describe('Text elements: the paragraphs, one per line; lines starting with "- " are bullets (two leading spaces per indent level). Shapes: a label centered in the shape.'),
     role: z.enum(['title', 'subtitle', 'body', 'caption']).optional().describe('Text elements: picks the default size and font.'),
-    size: z.number().min(4).max(400).optional().describe('Font size in points.'),
+    size: z.number().min(4).max(400).optional().describe('Font size in points (text elements and shape labels; shape labels default to 18).'),
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
-    color: z.string().max(64).optional().describe('Text CSS color; "" uses the theme color.'),
+    color: z.string().max(64).optional().describe('Text CSS color (text elements and shape labels); "" uses the theme color.'),
     align: z.enum(['left', 'center', 'right']).optional(),
     valign: z.enum(['top', 'middle', 'bottom']).optional(),
-    font: z.string().max(64).optional().describe('Text elements: font family, e.g. "Inter"; "" uses the theme font.'),
+    font: z.string().max(64).optional().describe('Font family of text elements and shape labels, e.g. "Inter"; "" uses the theme font.'),
     line_height: z.number().min(0.5).max(4).optional().describe('Text elements: line height as a multiple of the font size (default 1.25).'),
     src: z.string().optional().describe('Image elements: an http(s) image URL, or the /api/images/... address of an image attached to the chat.'),
     fit: z.enum(['contain', 'cover']).optional().describe('Image elements: how the picture fills its box.'),
@@ -209,6 +209,15 @@ const schemas = {
       remove: z.array(z.string()).max(50).optional().describe('Ids of elements to remove.'),
     })
     .describe('Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images and shapes. Prefer update_slide for text changes.'),
+  render_slide: z
+    .object({
+      slide: slideNumber,
+      scale: z.number().min(0.5).max(2).optional().describe('Image scale: 1 (default) is 960×540 pixels, 2 is 1920×1080.'),
+      deck_id: z.string().optional().describe('Presentation to render. Defaults to the open presentation (including edits not yet saved).'),
+    })
+    .describe(
+      'Take a picture of a slide drawn exactly as the editor and present mode draw it (same fonts, theme, images, wrapping), to check your work. The PNG is attached to the message right after the tool results for you to look at. Returns its stored /api/images/... address, its size in pixels, and "overflow": text boxes and shape labels whose rendered text is taller or wider than their box (box and rendered sizes in points).',
+    ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),

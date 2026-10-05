@@ -1,8 +1,10 @@
 // Deck tools the agent calls, run in the browser against the open presentation's live store, so edits render,
 // autosave and undo (as one step per agent request) like the user's own.
-import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
+import { MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentImage, type ClientToolCall } from '../../../shared/agent/protocol.ts';
 import {
   buildSlide,
+  type Deck,
+  type Slide,
   deckOutline,
   newId,
   toParagraphs,
@@ -18,6 +20,7 @@ import {
 } from '../../../shared/deck.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DeckController } from '../deck/controller.ts';
+import type { SlideRender } from '../deck/renderSlide.ts';
 import { ToolError } from './toolError.ts';
 
 export const DECK_TOOLS: ReadonlySet<string> = new Set(['read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme']);
@@ -114,7 +117,77 @@ function applyElementSpec(existing: SlideElement | undefined, s: Input): SlideEl
   if (typeof strokeWidth === 'number') el.strokeWidth = strokeWidth;
   if (text) el.text = text as string;
   if (textColor) el.textColor = textColor as string;
+  // Label style; "" or false clears a property, as for text elements.
+  const label = <T,>(v: unknown, old: T | undefined): T | undefined => (v === undefined ? old : v === '' || v === false ? undefined : (v as T));
+  const textSize = label<number>(s.size, prev?.textSize);
+  const textFont = label<string>(s.font, prev?.textFont);
+  if (textSize !== undefined) el.textSize = textSize;
+  if (textFont) el.textFont = textFont;
+  if (label<boolean>(s.bold, prev?.textBold)) el.textBold = true;
+  if (label<boolean>(s.italic, prev?.textItalic)) el.textItalic = true;
   return el;
+}
+
+export interface RenderSlideEnv {
+  deck: DeckController | null;
+  /** Id of the open presentation. */
+  deckId?: string | null;
+  /** Load a saved presentation by id. */
+  loadDeck?(id: string): Promise<Deck>;
+  /** Draw a slide with the app's renderer (client/src/deck/renderSlide.ts). */
+  renderSlide?(slide: Slide, theme: ThemeId, scale: number): Promise<SlideRender>;
+  uploadImage(file: Blob): Promise<string>;
+  /** Attach a picture to the message that carries the tool results back to Claude; false if no room is left. */
+  attachImage?(image: AgentImage): boolean;
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
+  return btoa(bin);
+}
+
+/** render_slide: a PNG of a slide as the app draws it, attached for Claude to look at, plus overflowing text. */
+export async function renderSlideTool(call: ClientToolCall, env: RenderSlideEnv): Promise<string> {
+  const i = call.input;
+  if (!env.renderSlide || !env.attachImage) throw new ToolError('Rendering slides is not available here.');
+  const deckId = typeof i.deck_id === 'string' && i.deck_id ? i.deck_id : null;
+  let deck: Deck;
+  if (env.deck && (!deckId || deckId === env.deckId)) deck = env.deck.deck;
+  else if (deckId) {
+    if (!env.loadDeck) throw new ToolError('Only the open presentation can be rendered here.');
+    try {
+      deck = await env.loadDeck(deckId);
+    } catch {
+      throw new ToolError(`No presentation with id "${deckId}". Use list_decks to find ids.`);
+    }
+  } else throw new ToolError('No presentation is open. Pass deck_id, or open one with open_deck.');
+  const n = Number(i.slide);
+  if (!Number.isInteger(n) || n < 1 || n > deck.slides.length) {
+    throw new ToolError(`There is no slide ${i.slide}. The presentation has ${deck.slides.length} slide${deck.slides.length === 1 ? '' : 's'}.`);
+  }
+  const scale = typeof i.scale === 'number' ? i.scale : 1;
+  const r = await env.renderSlide(deck.slides[n - 1], deck.theme, scale);
+  if (r.blob.size > MAX_IMAGE_BYTES) throw new ToolError(`The image is too large (${Math.round(r.blob.size / 1e6)} MB). Use a smaller scale.`);
+  let url: string | null = null;
+  try {
+    url = await env.uploadImage(r.blob);
+  } catch {
+    // The picture is still attached; only the stored address is missing.
+  }
+  const attached = env.attachImage({ mediaType: 'image/png', data: await blobToBase64(r.blob), ...(url ? { url } : {}) });
+  return JSON.stringify({
+    slide: n,
+    width: r.width,
+    height: r.height,
+    ...(url ? { image_url: url } : {}),
+    image: attached
+      ? 'Attached to this message after the tool results, labeled render_slide. Look at it before reporting back.'
+      : `Not attached: at most ${MAX_IMAGES_PER_MESSAGE} pictures fit in one message. Call render_slide again for this slide.`,
+    overflow: r.overflow,
+    ...(r.missingImages.length ? { images_not_rendered: r.missingImages } : {}),
+  });
 }
 
 /** A question to ask before a destructive deck call, or null. */

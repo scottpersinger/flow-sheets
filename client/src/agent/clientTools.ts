@@ -13,12 +13,12 @@ import type { DeckController } from '../deck/controller.ts';
 import type { SheetController } from '../state/controller.ts';
 import * as ops from '../state/ops.ts';
 import type { WorkbookStore } from '../state/store.ts';
-import { DECK_TOOLS, deckConfirmationFor, runDeckTool } from './deckTools.ts';
+import { DECK_TOOLS, deckConfirmationFor, renderSlideTool, runDeckTool, type RenderSlideEnv } from './deckTools.ts';
 import { ToolError } from './toolError.ts';
 
 export { ToolError };
 
-export interface ClientToolEnv {
+export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImage'> {
   /** The open spreadsheet, or null on other pages. */
   ctl: SheetController | null;
   /** The open presentation, or null on other pages. */
@@ -160,6 +160,7 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     const deck = await env.openDeck(String(i.deck_id));
     return JSON.stringify({ opened: true, ...deckOutline(deck.deck, deck.current) });
   }
+  if (call.name === 'render_slide') return renderSlideTool(call, env);
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
 
   const ctl = requireSheet(env);

@@ -174,6 +174,8 @@ export const CLIENT_TOOLS = new Set([
   'delete_slides',
   'move_slide',
   'set_deck_theme',
+  // Drawn by the browser with the app's own slide renderer; the picture is attached to the resumed turn.
+  'render_slide',
   // Fetches through the server (which holds the credentials) and writes into the live spreadsheet.
   'ingest_connector_data',
   // Runs in the browser so the user can confirm it there; the server then queues the job.

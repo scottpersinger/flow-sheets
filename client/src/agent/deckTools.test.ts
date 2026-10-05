@@ -96,6 +96,61 @@ describe('agent deck tools', () => {
     await expect(call('edit_elements', { slide: 1, set: [{ type: 'text', text: 'hi', x: Number.NaN }] })).rejects.toThrow(/invalid x/);
   });
 
+  it('styles shape labels with size, font, bold and color', async () => {
+    const { deck, call } = setup();
+    const res = await call('edit_elements', { slide: 1, set: [{ type: 'shape', text: 'Q1', size: 9, font: 'Poppins', bold: true, color: '#333' }] });
+    const id = res.set[0].id;
+    expect(deck.deck.slides[0].elements.find((e) => e.id === id)).toMatchObject({ text: 'Q1', textSize: 9, textFont: 'Poppins', textBold: true, textColor: '#333' });
+    await call('edit_elements', { slide: 1, set: [{ id, bold: false, font: '' }] });
+    const el = deck.deck.slides[0].elements.find((e) => e.id === id)!;
+    expect(el).toMatchObject({ textSize: 9 });
+    expect(el).not.toHaveProperty('textBold');
+    expect(el).not.toHaveProperty('textFont');
+    const outline = await call('read_deck');
+    expect(outline.slides[0].elements.find((e: { id: string }) => e.id === id)).toMatchObject({ text: 'Q1', size: 9, color: '#333' });
+    await expect(call('edit_elements', { slide: 1, set: [{ id, size: 2 }] })).rejects.toThrow(/label font size/);
+  });
+
+  it('renders a slide, attaches the picture and reports overflowing text', async () => {
+    const { deck, env, call } = setup();
+    await call('add_slides', { slides: [{ title: 'Roadmap' }] });
+    const attached: unknown[] = [];
+    const renders: { title: string; theme: string; scale: number }[] = [];
+    env.attachImage = (img) => attached.push(img) <= 1;
+    env.renderSlide = async (slide, theme, scale) => {
+      renders.push({ title: slideTitle(slide), theme, scale });
+      return {
+        blob: new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }),
+        width: 960 * scale,
+        height: 540 * scale,
+        overflow: [{ id: 'e1', type: 'shape', box_w: 80, box_h: 20, text_w: 80, text_h: 44 }],
+        missingImages: [],
+      };
+    };
+    const res = await call('render_slide', { slide: 2 });
+    expect(renders).toEqual([{ title: 'Roadmap', theme: 'light', scale: 1 }]);
+    expect(res).toMatchObject({ slide: 2, width: 960, height: 540, image_url: '/api/images/00000000-0000-0000-0000-000000000001', overflow: [{ id: 'e1', text_h: 44 }] });
+    expect(res.image).toMatch(/Attached/);
+    expect(attached).toEqual([{ mediaType: 'image/png', data: 'iVBORw==', url: '/api/images/00000000-0000-0000-0000-000000000001' }]);
+
+    // No room left for another picture in this message.
+    expect((await call('render_slide', { slide: 1, scale: 0.5 })).image).toMatch(/Not attached/);
+
+    await expect(call('render_slide', { slide: 3 })).rejects.toThrow(/no slide 3. The presentation has 2 slides/);
+    await expect(runClientTool({ id: 'x', name: 'render_slide', input: { slide: 1 } }, { ...env, deck: null })).rejects.toThrow(/No presentation is open/);
+
+    // Another saved presentation by id.
+    env.deckId = 'open-one';
+    env.loadDeck = async (id) => {
+      if (id !== 'other') throw new Error('404');
+      return { ...newDeck(), theme: 'ocean' };
+    };
+    await call('render_slide', { slide: 1, deck_id: 'other' });
+    expect(renders.at(-1)).toMatchObject({ title: 'Presentation title', theme: 'ocean' });
+    await expect(call('render_slide', { slide: 1, deck_id: 'missing' })).rejects.toThrow(/No presentation with id "missing"/);
+    expect(deck.deck.slides).toHaveLength(2);
+  });
+
   it('deletes and moves slides, asking first and keeping one slide', async () => {
     const { deck, call } = setup();
     await call('add_slides', { slides: [{ title: 'Two' }, { title: 'Three' }] });

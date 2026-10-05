@@ -91,6 +91,8 @@ export function toolLabel(name: string, i: Input): string {
       return `Moved slide ${i.slide} to position ${i.to}`;
     case 'set_deck_theme':
       return `Changed the theme to ${i.theme}`;
+    case 'render_slide':
+      return `Checked how slide ${i.slide} looks`;
     case 'list_decks':
       return typeof i.query === 'string' && i.query ? `Searched your presentations for “${i.query}”` : 'Listed your presentations';
     case 'create_deck':
