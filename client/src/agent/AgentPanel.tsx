@@ -10,8 +10,9 @@ import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/agent/protocol.ts';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
-const SHEET_SUGGESTIONS = ['Summarize what’s in this spreadsheet', 'Add a totals row under the data', 'Make the header row bold and freeze it'];
-const HOME_SUGGESTIONS = ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses'];
+const SHEET_SUGGESTIONS = ['Summarize what’s in this spreadsheet', 'Add a totals row under the data', 'Make the header row bold and freeze it', 'Turn this data into a short presentation'];
+const DECK_SUGGESTIONS = ['Summarize this presentation', 'Add a closing slide with next steps', 'Tighten the bullets on every slide'];
+const HOME_SUGGESTIONS = ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses', 'Create a 5-slide presentation about our quarterly goals'];
 
 export function AgentButton() {
   const { open, setOpen } = useAgent();
@@ -29,6 +30,8 @@ export function AgentPanel() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const onSheet = !!agent.sheet;
+  const onDeck = !!agent.deck;
+  const here = onSheet ? 'this spreadsheet' : onDeck ? 'this presentation' : 'your spreadsheets and presentations';
 
   useEffect(() => inputRef.current?.focus(), []);
 
@@ -94,8 +97,8 @@ export function AgentPanel() {
       <div className="agent-list" ref={listRef}>
         {agent.items.length === 0 && (
           <div className="agent-empty">
-            <p>Ask me to read, edit or format {onSheet ? 'this spreadsheet' : 'your spreadsheets'}, or to find and open another one.</p>
-            {(onSheet ? SHEET_SUGGESTIONS : HOME_SUGGESTIONS).map((s) => (
+            <p>Ask me to read, edit or format {here}, or to find and open another one.</p>
+            {(onSheet ? SHEET_SUGGESTIONS : onDeck ? DECK_SUGGESTIONS : HOME_SUGGESTIONS).map((s) => (
               <button key={s} className="agent-suggestion" onClick={() => submit(s)}>
                 {s}
               </button>
@@ -203,7 +206,7 @@ export function AgentPanel() {
             ref={inputRef}
             rows={1}
             value={draft}
-            placeholder={onSheet ? 'Ask about this spreadsheet, or paste a screenshot…' : 'Ask about your spreadsheets, or paste a screenshot…'}
+            placeholder={`Ask about ${here}, or paste a screenshot…`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {
               const files = imageFiles(e.clipboardData);
@@ -237,10 +240,18 @@ export function AgentPanel() {
 function ToolRow({ item }: { item: ToolItem }) {
   const agent = useAgent();
   const sheet = agent.sheet;
-  const target = sheet && item.status === 'ok' ? targetOf(item, sheet.ctl) : null;
+  const deck = agent.deck;
+  // The slide a deck tool worked on, so clicking the label goes there.
+  const slideNo = deck && item.status === 'ok' && typeof item.input.slide === 'number' && item.input.slide <= deck.ctl.deck.slides.length ? item.input.slide : null;
+  const target = sheet && item.status === 'ok' ? targetOf(item, sheet.ctl) : slideNo ? { slide: slideNo } : null;
   const label = toolLabel(item.name, item.input);
   const reveal = () => {
-    if (!sheet || !target) return;
+    if (!target) return;
+    if ('slide' in target) {
+      deck?.ctl.goTo(target.slide - 1);
+      return;
+    }
+    if (!sheet) return;
     if (sheet.ctl.activeTabId !== target.tabId) sheet.ctl.switchTab(target.tabId);
     sheet.ctl.selectRange(target.range);
   };
@@ -250,7 +261,7 @@ function ToolRow({ item }: { item: ToolItem }) {
         {item.status === 'running' ? <span className="agent-spinner" /> : item.status === 'ok' ? '✓' : '!'}
       </span>
       {target ? (
-        <button className="link agent-tool-label" onClick={reveal} title="Show in the spreadsheet">
+        <button className="link agent-tool-label" onClick={reveal} title={'slide' in target ? 'Go to the slide' : 'Show in the spreadsheet'}>
           {label}
         </button>
       ) : (

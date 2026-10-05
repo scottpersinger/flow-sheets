@@ -2,6 +2,8 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { buildSlide, newId } from '../shared/deck.ts';
+import { buildPptx } from '../shared/pptxExport.ts';
 import { buildApp } from './app.ts';
 
 let dir: string;
@@ -155,6 +157,74 @@ describe('sheets', () => {
     expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${sheet.id}.json`);
     res = await app.inject({ method: 'GET', url: '/api/sheets', headers: { cookie } });
     expect(res.json().sheets).toEqual([]);
+  });
+});
+
+describe('presentations', () => {
+  it('creates, saves, lists, renames and deletes decks, kept apart from spreadsheets', async () => {
+    let res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'deck@x.com', password: 'password123' } });
+    const cookie = cookieFrom(res);
+    res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'deck2@x.com', password: 'password123' } });
+    const other = cookieFrom(res);
+
+    res = await app.inject({ method: 'POST', url: '/api/decks', headers: { cookie }, payload: { title: 'Kickoff' } });
+    expect(res.statusCode).toBe(200);
+    const { deck: meta } = res.json();
+    expect(meta).toMatchObject({ title: 'Kickoff', kind: 'deck' });
+    expect(readdirSync(path.join(dir, 'sheets'))).toContain(`${meta.id}.json`);
+
+    res = await app.inject({ method: 'GET', url: `/api/decks/${meta.id}`, headers: { cookie } });
+    const { deck } = res.json();
+    expect(deck.slides).toHaveLength(1);
+    expect(deck.theme).toBe('light');
+
+    deck.theme = 'dark';
+    deck.slides.push({ id: 's2', layout: 'blank', elements: [{ id: 'e1', type: 'text', x: 10, y: 10, w: 300, h: 60, paragraphs: [{ text: 'Hello', bullet: true }] }] });
+    res = await app.inject({ method: 'PUT', url: `/api/decks/${meta.id}`, headers: { cookie }, payload: { deck } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/decks/${meta.id}`, headers: { cookie } });
+    expect(res.json().deck.slides[1].elements[0].paragraphs[0].text).toBe('Hello');
+
+    // Invalid decks are rejected; the deck is not a spreadsheet and vice versa.
+    res = await app.inject({ method: 'PUT', url: `/api/decks/${meta.id}`, headers: { cookie }, payload: { deck: { version: 1, theme: 'light', slides: [] } } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'POST', url: '/api/decks', headers: { cookie }, payload: { title: 'Bad', deck: { version: 2 } } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'A sheet' } });
+    const sheetId = res.json().sheet.id;
+    res = await app.inject({ method: 'GET', url: `/api/decks/${sheetId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'DELETE', url: `/api/decks/${sheetId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+
+    // Lists stay separate, and other users see nothing.
+    res = await app.inject({ method: 'GET', url: '/api/decks', headers: { cookie } });
+    expect(res.json().decks.map((d: { title: string }) => d.title)).toEqual(['Kickoff']);
+    res = await app.inject({ method: 'GET', url: '/api/sheets', headers: { cookie } });
+    expect(res.json().sheets.map((s: { title: string; kind: string }) => [s.title, s.kind])).toEqual([['A sheet', 'sheet']]);
+    res = await app.inject({ method: 'GET', url: `/api/decks/${meta.id}`, headers: { cookie: other } });
+    expect(res.statusCode).toBe(404);
+
+    res = await app.inject({ method: 'PATCH', url: `/api/decks/${meta.id}`, headers: { cookie }, payload: { title: 'Kickoff 2026' } });
+    expect(res.json().meta.title).toBe('Kickoff 2026');
+
+    // PowerPoint import: a new deck from the upload, or just the converted slides.
+    const { pres } = await buildPptx({ version: 1, theme: 'light', slides: [buildSlide('title-body', { title: 'From PowerPoint', body: ['One', 'Two'] }, newId)] }, 'x', async () => null);
+    const pptx = Buffer.from((await pres.write({ outputType: 'nodebuffer' })) as Buffer);
+    res = await app.inject({ method: 'POST', url: '/api/decks/import?title=Slides', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: pptx });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deck).toMatchObject({ title: 'Slides', kind: 'deck' });
+    res = await app.inject({ method: 'GET', url: `/api/decks/${res.json().deck.id}`, headers: { cookie } });
+    expect(res.json().deck.slides[0].elements[0].paragraphs[0].text).toBe('From PowerPoint');
+    res = await app.inject({ method: 'POST', url: '/api/import/pptx', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: pptx });
+    expect(res.json().deck.slides).toHaveLength(1);
+    res = await app.inject({ method: 'POST', url: '/api/import/pptx', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('garbage') });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'DELETE', url: `/api/decks/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${meta.id}.json`);
   });
 });
 

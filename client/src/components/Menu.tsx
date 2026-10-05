@@ -1,9 +1,9 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 export type MenuItem =
   | 'sep'
   | {
-      label: string;
+      label: ReactNode;
       shortcut?: string;
       action?: () => void;
       disabled?: boolean;

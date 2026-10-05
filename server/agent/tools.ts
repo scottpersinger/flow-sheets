@@ -4,6 +4,8 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
+import { buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
+import { SHAPE_KINDS } from '../../shared/shapes.ts';
 import { Engine } from '../../shared/formula/engine.ts';
 import type { ConnectorService } from '../connectors/service.ts';
 import { ConnectorError } from '../connectors/types.ts';
@@ -14,6 +16,49 @@ const range = z.string().describe('Range in A1 notation, e.g. "B2", "A1:D10", "C
 const column = z.string().regex(/^[A-Za-z]{1,3}$/).describe('Column letter, e.g. "C".');
 const row = z.number().int().min(1).describe('1-based row number.');
 const cellValue = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+// --- Slide decks ---
+const slideNumber = z.number().int().min(1).describe('1-based slide number, as listed by read_deck.');
+const layout = z
+  .enum(LAYOUT_IDS)
+  .describe('title (title + subtitle, centered), section (a divider), title-body (title + bullets), two-column (title + two bullet columns), image (title + image + optional caption), blank.');
+const slideContentFields = {
+  title: z.string().max(500).optional(),
+  subtitle: z.string().max(1000).optional().describe('For the title and section layouts.'),
+  body: z.array(z.string().max(2000)).max(100).optional().describe('Body paragraphs, one string each; they become bullets. Start a line with two spaces per indent level for sub-bullets.'),
+  body2: z.array(z.string().max(2000)).max(100).optional().describe('Right column of the two-column layout.'),
+  image: z.string().optional().describe('For the image layout: an http(s) URL of a PNG, JPEG, GIF or WebP image, or the /api/images/... address of an image attached to the chat.'),
+  caption: z.string().max(1000).optional().describe('Caption under the image.'),
+  notes: z.string().max(5000).optional().describe('Speaker notes.'),
+  background: z.string().max(64).optional().describe('Background CSS color for this slide; "" uses the theme background.'),
+};
+const slideSpec = z.object({ layout: layout.optional().describe('Defaults to title-body.'), ...slideContentFields });
+const elementSpec = z
+  .object({
+    id: z.string().optional().describe('Id of an existing element (from read_deck) to change. Omit to add a new element.'),
+    type: z.enum(['text', 'image', 'shape']).optional().describe('Required for a new element.'),
+    x: z.number().optional().describe('Left edge in points (the slide is 960 wide).'),
+    y: z.number().optional().describe('Top edge in points (the slide is 540 tall).'),
+    w: z.number().min(0).optional(),
+    h: z.number().min(0).optional(),
+    text: z.string().max(20_000).optional().describe('Text elements: the paragraphs, one per line; lines starting with "- " are bullets (two leading spaces per indent level). Shapes: a label centered in the shape.'),
+    role: z.enum(['title', 'subtitle', 'body', 'caption']).optional().describe('Text elements: picks the default size and font.'),
+    size: z.number().min(4).max(400).optional().describe('Font size in points.'),
+    bold: z.boolean().optional(),
+    italic: z.boolean().optional(),
+    color: z.string().max(64).optional().describe('Text CSS color; "" uses the theme color.'),
+    align: z.enum(['left', 'center', 'right']).optional(),
+    valign: z.enum(['top', 'middle', 'bottom']).optional(),
+    font: z.string().max(64).optional().describe('Text elements: font family, e.g. "Inter"; "" uses the theme font.'),
+    line_height: z.number().min(0.5).max(4).optional().describe('Text elements: line height as a multiple of the font size (default 1.25).'),
+    src: z.string().optional().describe('Image elements: an http(s) image URL, or the /api/images/... address of an image attached to the chat.'),
+    fit: z.enum(['contain', 'cover']).optional().describe('Image elements: how the picture fills its box.'),
+    shape: z.enum(SHAPE_KINDS).optional().describe('Shape elements: the kind of shape. Arrows point right; a line is horizontal.'),
+    fill: z.string().max(64).optional().describe('Shape fill CSS color, or "none".'),
+    stroke: z.string().max(64).optional().describe('Shape outline color.'),
+    stroke_width: z.number().min(0).max(100).optional(),
+  })
+  .describe('An element to add or change. Only the properties given change.');
 
 const schemas = {
   // --- Open spreadsheet (run in the browser) ---
@@ -92,7 +137,7 @@ const schemas = {
     .object({
       tab,
       range: range.describe('Cell to put the image in, e.g. "I9". A range puts the image in every cell of it (100 cells at most).'),
-      url: z.string().describe('Image address: an http(s) URL of a PNG, JPEG, GIF or WebP image, or a data:image/...;base64 URL.'),
+      url: z.string().describe('Image address: an http(s) URL of a PNG, JPEG, GIF or WebP image, the /api/images/... address of an image attached to the chat, or a data:image/...;base64 URL.'),
     })
     .describe(
       'Show an image inside a cell, scaled to fit the cell. Replaces the cell\'s value; keeps its formatting. read_range reports such cells as "[image]". Remove an image with clear_range. Make the row taller / column wider (set_row_height, set_column_width) if the image should appear larger.',
@@ -143,6 +188,31 @@ const schemas = {
   open_sheet: z
     .object({ sheet_id: z.string() })
     .describe('Open another spreadsheet in the app (the user navigates to it). Returns its overview. Sheet tools then act on it.'),
+  // --- Open presentation (run in the browser) ---
+  open_deck: z.object({ deck_id: z.string() }).describe('Open a presentation in the app (the user navigates to it; any open spreadsheet closes). Returns its outline. Deck tools then act on it.'),
+  read_deck: z.object({}).describe('Outline of the open presentation: theme, every slide with its layout, elements (id, type, position, text) and notes, and which slide the user is on. Call this before changing slides.'),
+  add_slides: z
+    .object({
+      slides: z.array(slideSpec).min(1).max(50).describe('Slides to add, in order.'),
+      at: slideNumber.optional().describe('Insert before this slide number. Defaults to the end.'),
+    })
+    .describe('Add slides to the open presentation, each built from a layout and plain content. Returns the new slide numbers. Use one call for a whole deck.'),
+  update_slide: z
+    .object({ slide: slideNumber, layout: layout.optional().describe('Rebuild the slide with this layout (its text is kept where the layout has a place for it).'), ...slideContentFields })
+    .describe(
+      'Change the content of one slide by role: title, subtitle, body, body2, image, caption, notes, background. Only the properties given change, and elements keep their positions. Pass layout to rearrange the slide.',
+    ),
+  edit_elements: z
+    .object({
+      slide: slideNumber,
+      set: z.array(elementSpec).max(50).optional().describe('Elements to add (no id) or change (with id).'),
+      remove: z.array(z.string()).max(50).optional().describe('Ids of elements to remove.'),
+    })
+    .describe('Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images and shapes. Prefer update_slide for text changes.'),
+  delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
+  move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
+  set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),
+
   request_app_change: z
     .object({
       title: z.string().min(3).max(120).describe('Short name for the change, e.g. "Add a tool to set filter criteria".'),
@@ -186,6 +256,16 @@ const schemas = {
     })
     .describe('Read another spreadsheet in the account without opening it: an overview, or the values of a range. Not for the open spreadsheet; use read_range for that.'),
   create_sheet: z.object({ title: z.string().min(1).max(200) }).describe('Create a new, empty spreadsheet. Open it with open_sheet to fill it in.'),
+  list_decks: z
+    .object({ query: z.string().optional().describe('Only presentations whose title contains this text (case-insensitive).') })
+    .describe("List the user's presentations (slide decks), most recently edited first (at most 50)."),
+  create_deck: z
+    .object({
+      title: z.string().min(1).max(200),
+      theme: z.enum(THEME_IDS).optional().describe('Defaults to light.'),
+      slides: z.array(slideSpec).max(50).optional().describe('Initial slides, each built from a layout and plain content. Without them the deck has one title slide.'),
+    })
+    .describe('Create a new presentation, optionally with its slides. Open it with open_deck so the user sees it.'),
 
   // --- Connectors: external data sources such as Brex ---
   list_connections: z
@@ -287,6 +367,7 @@ export async function runServerTool(name: string, input: Record<string, unknown>
           ...(s.branch ? { branch_of: s.branch.parentTitle } : {}),
           ...(env.context.page === 'sheet' && env.context.sheetId === s.id ? { open_now: true } : {}),
         })),
+        ...(all.length ? {} : { note: 'No spreadsheets. Presentations are listed separately by list_decks.' }),
       });
     }
     case 'read_other_sheet': {
@@ -305,6 +386,29 @@ export async function runServerTool(name: string, input: Record<string, unknown>
     case 'create_sheet': {
       const sheet = await env.sheets.create(env.userId, String(input.title).trim());
       return JSON.stringify({ id: sheet.id, title: sheet.title });
+    }
+    case 'list_decks': {
+      const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const all = env.sheets.list(env.userId, 'deck').filter((s) => !q || s.title.toLowerCase().includes(q));
+      return JSON.stringify({
+        total: all.length,
+        decks: all.slice(0, 50).map((s) => ({
+          id: s.id,
+          title: s.title,
+          updated_at: s.updatedAt,
+          ...(env.context.page === 'deck' && env.context.deckId === s.id ? { open_now: true } : {}),
+        })),
+      });
+    }
+    case 'create_deck': {
+      const specs = (input.slides as z.infer<typeof slideSpec>[] | undefined) ?? [];
+      const deck: Deck = {
+        version: 1,
+        theme: (input.theme as Deck['theme'] | undefined) ?? 'light',
+        slides: specs.length ? specs.map((s, i) => buildSlide(s.layout ?? (i === 0 ? 'title' : 'title-body'), s, newId)) : [buildSlide('title', {}, newId)],
+      };
+      const meta = await env.sheets.createDeck(env.userId, String(input.title).trim(), deck);
+      return JSON.stringify({ id: meta.id, title: meta.title, slide_count: deck.slides.length, note: 'Call open_deck to show it to the user.' });
     }
     case 'list_connections': {
       const svc = connectorService(env);

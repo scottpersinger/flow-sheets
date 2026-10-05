@@ -1,0 +1,111 @@
+// The shapes a slide can hold. Rectangles, rounded rectangles, ellipses and lines are drawn with CSS; every
+// other shape is a polygon given in a 100×100 box, stretched to the element's size. The same table drives
+// the editor's shape picker, the renderer, and the PowerPoint export and import (`pptx` is the preset name).
+
+export const SHAPE_KINDS = [
+  'rect',
+  'rounded',
+  'ellipse',
+  'triangle',
+  'right-triangle',
+  'diamond',
+  'pentagon',
+  'hexagon',
+  'octagon',
+  'star',
+  'parallelogram',
+  'trapezoid',
+  'arrow',
+  'double-arrow',
+  'chevron',
+  'callout',
+  'plus',
+  'heart',
+  'line',
+] as const;
+
+export type ShapeKind = (typeof SHAPE_KINDS)[number];
+
+export interface ShapeDef {
+  name: string;
+  /** PowerPoint preset geometry name (pptxgenjs ShapeType and the prst attribute in .pptx files). */
+  pptx: string;
+  /** Polygon vertices in a 100×100 box, as [x, y, x, y, ...]; absent for the CSS-drawn shapes. */
+  points?: number[];
+  /** Keep width and height equal when inserted. */
+  square?: boolean;
+}
+
+/** A heart outline as a polygon, from the classic parametric curve, scaled into the 100×100 box. */
+function heartPoints(): number[] {
+  const pts: [number, number][] = [];
+  for (let i = 0; i < 48; i++) {
+    const t = (i / 48) * 2 * Math.PI;
+    pts.push([16 * Math.sin(t) ** 3, 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)]);
+  }
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  return pts.flatMap(([x, y]) => [Math.round(((x - x0) / (x1 - x0)) * 1000) / 10, Math.round(((y1 - y) / (y1 - y0)) * 1000) / 10]);
+}
+
+export const SHAPES: Record<ShapeKind, ShapeDef> = {
+  rect: { name: 'Rectangle', pptx: 'rect' },
+  rounded: { name: 'Rounded rectangle', pptx: 'roundRect' },
+  ellipse: { name: 'Ellipse', pptx: 'ellipse' },
+  triangle: { name: 'Triangle', pptx: 'triangle', points: [50, 0, 100, 100, 0, 100] },
+  'right-triangle': { name: 'Right triangle', pptx: 'rtTriangle', points: [0, 0, 100, 100, 0, 100] },
+  diamond: { name: 'Diamond', pptx: 'diamond', points: [50, 0, 100, 50, 50, 100, 0, 50], square: true },
+  pentagon: { name: 'Pentagon', pptx: 'pentagon', points: [50, 0, 100, 38, 81, 100, 19, 100, 0, 38], square: true },
+  hexagon: { name: 'Hexagon', pptx: 'hexagon', points: [25, 0, 75, 0, 100, 50, 75, 100, 25, 100, 0, 50] },
+  octagon: { name: 'Octagon', pptx: 'octagon', points: [29, 0, 71, 0, 100, 29, 100, 71, 71, 100, 29, 100, 0, 71, 0, 29], square: true },
+  star: { name: 'Star', pptx: 'star5', points: [50, 0, 61, 35, 98, 35, 68, 57, 79, 91, 50, 70, 21, 91, 32, 57, 2, 35, 39, 35], square: true },
+  parallelogram: { name: 'Parallelogram', pptx: 'parallelogram', points: [25, 0, 100, 0, 75, 100, 0, 100] },
+  trapezoid: { name: 'Trapezoid', pptx: 'trapezoid', points: [20, 0, 80, 0, 100, 100, 0, 100] },
+  arrow: { name: 'Arrow', pptx: 'rightArrow', points: [0, 30, 60, 30, 60, 0, 100, 50, 60, 100, 60, 70, 0, 70] },
+  'double-arrow': { name: 'Double arrow', pptx: 'leftRightArrow', points: [0, 50, 25, 0, 25, 30, 75, 30, 75, 0, 100, 50, 75, 100, 75, 70, 25, 70, 25, 100] },
+  chevron: { name: 'Chevron', pptx: 'chevron', points: [0, 0, 75, 0, 100, 50, 75, 100, 0, 100, 25, 50] },
+  callout: { name: 'Speech bubble', pptx: 'wedgeRectCallout', points: [0, 0, 100, 0, 100, 75, 40, 75, 18, 100, 24, 75, 0, 75] },
+  plus: { name: 'Plus', pptx: 'mathPlus', points: [35, 0, 65, 0, 65, 35, 100, 35, 100, 65, 65, 65, 65, 100, 35, 100, 35, 65, 0, 65, 0, 35, 35, 35], square: true },
+  heart: { name: 'Heart', pptx: 'heart', points: heartPoints(), square: true },
+  line: { name: 'Line', pptx: 'line' },
+};
+
+const BY_PPTX = new Map<string, ShapeKind>(SHAPE_KINDS.map((k) => [SHAPES[k].pptx, k]));
+// Other PowerPoint presets that are close enough to one of ours.
+const PPTX_ALIASES: Record<string, ShapeKind> = {
+  round1Rect: 'rounded',
+  round2SameRect: 'rounded',
+  round2DiagRect: 'rounded',
+  snipRoundRect: 'rounded',
+  straightConnector1: 'line',
+  flowChartDecision: 'diamond',
+  flowChartProcess: 'rect',
+  flowChartTerminator: 'rounded',
+  flowChartConnector: 'ellipse',
+  homePlate: 'chevron',
+  notchedRightArrow: 'arrow',
+  stripedRightArrow: 'arrow',
+  plus: 'plus',
+  star4: 'star',
+  star6: 'star',
+  star8: 'star',
+  wedgeRoundRectCallout: 'callout',
+  wedgeEllipseCallout: 'callout',
+  isoTriangle: 'triangle',
+};
+
+/** Our shape for a PowerPoint preset geometry, or undefined if nothing is close. */
+export function shapeFromPptx(prst: string | undefined): ShapeKind | undefined {
+  if (!prst) return 'rect';
+  return BY_PPTX.get(prst) ?? PPTX_ALIASES[prst];
+}
+
+/** SVG polygon points for a polygon shape, scaled to a box; undefined for the CSS-drawn shapes. */
+export function polygonPoints(kind: ShapeKind, w: number, h: number): string | undefined {
+  const pts = SHAPES[kind].points;
+  if (!pts) return undefined;
+  const out: string[] = [];
+  for (let i = 0; i < pts.length; i += 2) out.push(`${(pts[i] / 100) * w},${(pts[i + 1] / 100) * h}`);
+  return out.join(' ');
+}

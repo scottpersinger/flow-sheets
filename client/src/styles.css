@@ -1916,3 +1916,444 @@ button.agent-tool-label:hover {
 .agent-tool.error .agent-tool-label {
   text-decoration: line-through;
 }
+
+/* ------------------------------------------------------------------ Presentations (slide decks) */
+.deck-tile {
+  background: #fffbea;
+}
+.deck-tile .plus {
+  color: #f4b400;
+}
+.deck-page .wb-title:focus {
+  outline-color: #f4b400;
+}
+.deck-toolbar .tb-caret {
+  font-size: 10px;
+  margin-left: 3px;
+  color: var(--muted);
+}
+.tb-select {
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tb-select:hover:not(:disabled) {
+  background: #dde3ea;
+}
+.tb-select:disabled {
+  color: #b3b6ba;
+}
+.tb-grow {
+  flex: 1;
+}
+.present-btn {
+  padding: 4px 14px;
+  margin-left: 8px;
+}
+
+.deck-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  margin: 0 8px 8px;
+  gap: 8px;
+}
+.deck-thumbs {
+  width: 200px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.deck-thumb {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  cursor: pointer;
+  position: relative;
+  padding: 2px;
+  border-radius: 6px;
+}
+.deck-thumb-num {
+  width: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  margin-top: 2px;
+}
+.deck-thumb-pic {
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  pointer-events: none;
+  background: #fff;
+}
+.deck-thumb:hover .deck-thumb-pic {
+  border-color: #9aa0a6;
+}
+.deck-thumb.current .deck-thumb-pic {
+  border-color: #f4b400;
+  box-shadow: 0 0 0 1px #f4b400;
+}
+.deck-thumb.drop-before::before,
+.deck-thumb.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 22px;
+  right: 4px;
+  height: 3px;
+  background: var(--blue);
+  border-radius: 2px;
+}
+.deck-thumb.drop-before::before {
+  top: -7px;
+}
+.deck-thumb.drop-after::after {
+  bottom: -7px;
+}
+
+.deck-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 8px;
+}
+.deck-canvas {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  background: #e3e6ea;
+  border-radius: var(--radius);
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+}
+.deck-canvas:focus {
+  outline: none;
+}
+.deck-canvas.dragging.move {
+  cursor: move;
+}
+.deck-canvas-slide {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+.deck-notes {
+  height: 90px;
+  flex-shrink: 0;
+}
+.deck-notes textarea {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: #fff;
+  font-size: 13px;
+}
+.deck-notes textarea:focus {
+  outline: 2px solid var(--blue);
+  border-color: transparent;
+}
+
+/* The slide itself: a 960x540 box scaled with a transform; the scaler reserves the scaled size. */
+.slide-scaler {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.slide {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  overflow: hidden;
+  color: var(--sl-text);
+  font-family: var(--sl-body-font);
+}
+.sl-el {
+  position: absolute;
+  box-sizing: border-box;
+}
+.deck-canvas .sl-el {
+  cursor: move;
+}
+.sl-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: visible;
+}
+.sl-p {
+  position: relative;
+  min-height: 1.25em;
+}
+.sl-p + .sl-p {
+  margin-top: var(--sl-para, 0.3em);
+}
+.sl-p.bullet::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  width: 28px;
+  text-align: center;
+  color: var(--sl-accent);
+}
+.sl-p.bullet[data-level='1']::before {
+  left: 28px;
+  content: '–';
+}
+.sl-p.bullet[data-level='2']::before {
+  left: 56px;
+  content: '◦';
+}
+.sl-p.bullet[data-level='3']::before {
+  left: 84px;
+  content: '–';
+}
+.sl-p.bullet[data-level='4']::before {
+  left: 112px;
+  content: '◦';
+}
+.sl-editing {
+  outline: none;
+  cursor: text;
+  user-select: text;
+}
+.sl-image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.sl-shape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 18px;
+  white-space: pre-wrap;
+}
+/* Padding only around the label: a 1-point rule must stay 1 point tall. */
+.sl-shape > span {
+  padding: 8px;
+}
+.sl-shape.sl-line {
+  padding: 0;
+}
+.sl-outline {
+  position: absolute;
+  border: 1.5px solid var(--blue);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.sl-handle {
+  position: absolute;
+  background: #fff;
+  border: 1px solid var(--blue);
+  border-radius: 2px;
+  box-sizing: border-box;
+  z-index: 2;
+}
+.sl-handle-n,
+.sl-handle-s {
+  cursor: ns-resize;
+}
+.sl-handle-e,
+.sl-handle-w {
+  cursor: ew-resize;
+}
+.sl-handle-ne,
+.sl-handle-sw {
+  cursor: nesw-resize;
+}
+.sl-handle-nw,
+.sl-handle-se {
+  cursor: nwse-resize;
+}
+
+/* Present mode */
+.present {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  z-index: 300;
+  cursor: default;
+}
+.present-counter {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+}
+.present-stage {
+  width: 100%;
+  display: grid;
+  place-items: center;
+}
+.present-notes {
+  width: 100%;
+  background: #1b1b1f;
+  border-top: 1px solid #3c3c42;
+  color: #e8eaed;
+  display: flex;
+  gap: 24px;
+  padding: 16px 24px;
+  box-sizing: border-box;
+  cursor: default;
+}
+.present-notes-text {
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: clamp(14px, 1.6vw, 22px);
+  line-height: 1.45;
+}
+.present-notes-empty {
+  color: #9aa0a6;
+}
+.present-next {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+.present-next-label {
+  font-size: 12px;
+  color: #9aa0a6;
+}
+.present-next .slide-scaler {
+  border: 1px solid #3c3c42;
+}
+.present-controls {
+  position: absolute;
+  right: 12px;
+  top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.present-notes-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.present-notes-btn:hover,
+.present-notes-btn.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.2);
+}
+.present-exit {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 28px;
+  cursor: pointer;
+  line-height: 1;
+}
+.present-exit:hover {
+  color: #fff;
+}
+
+/* Print: one slide per page */
+.deck-print {
+  background: #fff;
+}
+.deck-print-page {
+  width: 960px;
+  height: 540px;
+  page-break-after: always;
+  break-after: page;
+  overflow: hidden;
+}
+@media print {
+  @page {
+    size: 10in 5.625in;
+    margin: 0;
+  }
+  html,
+  body,
+  #root,
+  .app-shell,
+  .app-main {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+  .agent-panel,
+  .toast {
+    display: none !important;
+  }
+  .deck-page {
+    background: #fff;
+    overflow: visible;
+    height: auto;
+  }
+}
+
+/* Shapes */
+.sl-shape-svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.sl-shape > span,
+.sl-shape > .sl-editing {
+  position: relative;
+  z-index: 1;
+}
+.shape-picker {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 60;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px 2px rgba(60, 64, 67, 0.15), 0 1px 2px rgba(60, 64, 67, 0.3);
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(5, 36px);
+  gap: 4px;
+}
+.shape-picker button {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: #444746;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.shape-picker button:hover {
+  background: #dde3ea;
+  color: #041e49;
+}
+.menu-icon-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}

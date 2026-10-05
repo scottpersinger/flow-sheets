@@ -71,6 +71,30 @@ export function toolLabel(name: string, i: Input): string {
       return `Selected ${where(i)}`;
     case 'open_sheet':
       return 'Opened a spreadsheet';
+    case 'open_deck':
+      return 'Opened a presentation';
+    case 'read_deck':
+      return 'Looked over the presentation';
+    case 'add_slides': {
+      const n = Array.isArray(i.slides) ? i.slides.length : 0;
+      return `Added ${plural(n, 'slide')}`;
+    }
+    case 'update_slide':
+      return `Updated slide ${i.slide}`;
+    case 'edit_elements': {
+      const n = (Array.isArray(i.set) ? i.set.length : 0) + (Array.isArray(i.remove) ? i.remove.length : 0);
+      return `Changed ${plural(n, 'element')} on slide ${i.slide}`;
+    }
+    case 'delete_slides':
+      return Array.isArray(i.slides) && i.slides.length === 1 ? `Deleted slide ${i.slides[0]}` : `Deleted ${plural(Array.isArray(i.slides) ? i.slides.length : 0, 'slide')}`;
+    case 'move_slide':
+      return `Moved slide ${i.slide} to position ${i.to}`;
+    case 'set_deck_theme':
+      return `Changed the theme to ${i.theme}`;
+    case 'list_decks':
+      return typeof i.query === 'string' && i.query ? `Searched your presentations for “${i.query}”` : 'Listed your presentations';
+    case 'create_deck':
+      return `Created presentation “${i.title}”`;
     case 'request_research':
       return `Started research: ${String(i.title ?? '')}`;
     case 'request_app_change':

@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { checkCellImage, newWorkbook, type SheetMeta, type Workbook } from '../shared/types.ts';
+import type { Deck } from '../shared/deck.ts';
+import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import type { DB } from './db.ts';
 
 interface SheetRow {
   id: string;
   owner_id: string;
+  kind: DocKind;
   title: string;
   file: string;
   created_at: string;
@@ -25,6 +27,7 @@ const SELECT_SHEETS = `
 
 const toMeta = (r: SheetRow): SheetMeta => ({
   id: r.id,
+  kind: r.kind,
   title: r.title,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -76,10 +79,14 @@ export function validateWorkbook(wb: unknown): string | null {
   return null;
 }
 
+/**
+ * Spreadsheets and slide decks, stored as one JSON file each with their metadata in SQLite. The workbook
+ * methods (load, save, branch, ...) only see spreadsheets; the deck methods only see decks.
+ */
 export class SheetStore {
   private db: DB;
   private dir: string;
-  // Serialize writes per sheet so concurrent saves can't interleave on disk.
+  // Serialize writes per document so concurrent saves can't interleave on disk.
   private writeChains = new Map<string, Promise<void>>();
 
   constructor(db: DB, dir: string) {
@@ -95,31 +102,38 @@ export class SheetStore {
     return path.join(this.dir, file);
   }
 
-  list(ownerId: string): SheetMeta[] {
+  /** Documents of one kind (spreadsheets by default), most recently edited first. */
+  list(ownerId: string, kind: DocKind = 'sheet'): SheetMeta[] {
     const rows = this.db
-      .prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? ORDER BY s.updated_at DESC`)
-      .all(ownerId) as unknown as SheetRow[];
+      .prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? AND s.kind = ? ORDER BY s.updated_at DESC`)
+      .all(ownerId, kind) as unknown as SheetRow[];
     return rows.map(toMeta);
   }
 
-  private row(ownerId: string, id: string): SheetRow | undefined {
-    return this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ? AND s.owner_id = ?`).get(id, ownerId) as SheetRow | undefined;
+  private row(ownerId: string, id: string, kind?: DocKind): SheetRow | undefined {
+    const r = this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ? AND s.owner_id = ?`).get(id, ownerId) as SheetRow | undefined;
+    return r && (!kind || r.kind === kind) ? r : undefined;
   }
 
-  get(ownerId: string, id: string): SheetMeta | null {
-    const r = this.row(ownerId, id);
+  /** Metadata of a document of any kind. */
+  get(ownerId: string, id: string, kind?: DocKind): SheetMeta | null {
+    const r = this.row(ownerId, id, kind);
     return r ? toMeta(r) : null;
   }
 
-  async create(ownerId: string, title: string, workbook?: Workbook): Promise<SheetMeta> {
+  private async insert(ownerId: string, kind: DocKind, title: string, doc: Workbook | Deck): Promise<SheetMeta> {
     const id = randomUUID();
     const file = `${id}.json`;
-    await this.writeAtomic(file, workbook ?? newWorkbook(randomUUID()));
+    await this.writeAtomic(file, doc);
     const now = new Date().toISOString();
     this.db
-      .prepare('INSERT INTO sheets (id, owner_id, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, ownerId, title, file, now, now);
-    return { id, title, createdAt: now, updatedAt: now };
+      .prepare('INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, ownerId, kind, title, file, now, now);
+    return { id, kind, title, createdAt: now, updatedAt: now };
+  }
+
+  async create(ownerId: string, title: string, workbook?: Workbook): Promise<SheetMeta> {
+    return this.insert(ownerId, 'sheet', title, workbook ?? newWorkbook(randomUUID()));
   }
 
   /** Create a branch: a copy of the sheet that remembers its original and keeps a snapshot (base) of it. */
@@ -133,8 +147,8 @@ export class SheetStore {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT INTO sheets (id, owner_id, title, file, created_at, updated_at, parent_id, parent_title, branched_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at, parent_id, parent_title, branched_at)
+         VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(id, ownerId, title, file, now, now, sourceId, src.meta.title, now);
     return this.get(ownerId, id);
@@ -142,7 +156,7 @@ export class SheetStore {
 
   /** Everything needed to compare a branch: its base snapshot and the original's current state. */
   async compareData(ownerId: string, id: string): Promise<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null } | 'not-branch' | null> {
-    const r = this.row(ownerId, id);
+    const r = this.row(ownerId, id, 'sheet');
     if (!r) return null;
     if (!r.parent_id) return 'not-branch';
     const base = JSON.parse(await readFile(this.filePath(baseFileOf(id)), 'utf8')) as Workbook;
@@ -150,36 +164,61 @@ export class SheetStore {
     return { meta: toMeta(r), base, original: parent?.workbook ?? null, parent: parent?.meta ?? null };
   }
 
-  async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook } | null> {
-    const r = this.row(ownerId, id);
-    if (!r) return null;
-    await this.writeChains.get(id);
-    const workbook = JSON.parse(await readFile(this.filePath(r.file), 'utf8')) as Workbook;
-    return { meta: toMeta(r), workbook };
+  private async read<T>(r: SheetRow): Promise<T> {
+    await this.writeChains.get(r.id);
+    return JSON.parse(await readFile(this.filePath(r.file), 'utf8')) as T;
   }
 
-  async save(ownerId: string, id: string, workbook: Workbook): Promise<SheetMeta | null> {
-    const r = this.row(ownerId, id);
+  async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook } | null> {
+    const r = this.row(ownerId, id, 'sheet');
     if (!r) return null;
-    const prev = this.writeChains.get(id) ?? Promise.resolve();
-    const next = prev.then(() => this.writeAtomic(r.file, workbook));
-    this.writeChains.set(id, next.catch(() => {}));
+    return { meta: toMeta(r), workbook: await this.read<Workbook>(r) };
+  }
+
+  private async write(r: SheetRow, doc: Workbook | Deck): Promise<SheetMeta> {
+    const prev = this.writeChains.get(r.id) ?? Promise.resolve();
+    const next = prev.then(() => this.writeAtomic(r.file, doc));
+    this.writeChains.set(r.id, next.catch(() => {}));
     await next;
     const now = new Date().toISOString();
-    this.db.prepare('UPDATE sheets SET updated_at = ? WHERE id = ?').run(now, id);
+    this.db.prepare('UPDATE sheets SET updated_at = ? WHERE id = ?').run(now, r.id);
     return { ...toMeta(r), updatedAt: now };
   }
 
-  rename(ownerId: string, id: string, title: string): SheetMeta | null {
-    const r = this.row(ownerId, id);
+  async save(ownerId: string, id: string, workbook: Workbook): Promise<SheetMeta | null> {
+    const r = this.row(ownerId, id, 'sheet');
+    return r ? this.write(r, workbook) : null;
+  }
+
+  // --- Slide decks -------------------------------------------------------------
+
+  async createDeck(ownerId: string, title: string, deck: Deck): Promise<SheetMeta> {
+    return this.insert(ownerId, 'deck', title, deck);
+  }
+
+  async loadDeck(ownerId: string, id: string): Promise<{ meta: SheetMeta; deck: Deck } | null> {
+    const r = this.row(ownerId, id, 'deck');
+    if (!r) return null;
+    return { meta: toMeta(r), deck: await this.read<Deck>(r) };
+  }
+
+  async saveDeck(ownerId: string, id: string, deck: Deck): Promise<SheetMeta | null> {
+    const r = this.row(ownerId, id, 'deck');
+    return r ? this.write(r, deck) : null;
+  }
+
+  // --- Any kind ------------------------------------------------------------------
+
+  rename(ownerId: string, id: string, title: string, kind?: DocKind): SheetMeta | null {
+    const r = this.row(ownerId, id, kind);
     if (!r) return null;
     const now = new Date().toISOString();
     this.db.prepare('UPDATE sheets SET title = ?, updated_at = ? WHERE id = ?').run(title, now, id);
     return { ...toMeta(r), title, updatedAt: now };
   }
 
-  async delete(ownerId: string, id: string): Promise<boolean> {
-    const r = this.row(ownerId, id);
+  async delete(ownerId: string, id: string, kind?: DocKind): Promise<boolean> {
+    const r = this.row(ownerId, id, kind);
     if (!r) return false;
     this.db.prepare('DELETE FROM sheets WHERE id = ?').run(id);
     await this.writeChains.get(id);
@@ -189,10 +228,10 @@ export class SheetStore {
     return true;
   }
 
-  private async writeAtomic(file: string, workbook: Workbook): Promise<void> {
+  private async writeAtomic(file: string, doc: Workbook | Deck): Promise<void> {
     const target = this.filePath(file);
     const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmp, JSON.stringify(workbook));
+    await writeFile(tmp, JSON.stringify(doc));
     await rename(tmp, target);
   }
 }

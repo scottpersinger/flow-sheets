@@ -13,6 +13,16 @@ export type AgentContext =
       activeTab: string;
       /** Selected ranges in A1 notation, primary range last. */
       selection: string[];
+    }
+  | {
+      page: 'deck';
+      deckId: string;
+      title: string;
+      slideCount: number;
+      /** 1-based number of the slide being edited. */
+      currentSlide: number;
+      /** Ids of the selected elements on that slide. */
+      selectedElements: string[];
     };
 
 /** A tool call the browser must run (sheet tools and navigation), forwarded by the server. */
@@ -34,6 +44,11 @@ export interface AgentImage {
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
   /** Base64, no data: prefix. */
   data: string;
+  /**
+   * Where the browser stored the image (/api/images/<id>), so the assistant can put the picture itself into a
+   * cell or a slide with the image tools. Missing when the upload failed.
+   */
+  url?: string;
 }
 
 export const IMAGE_MEDIA_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -150,6 +165,15 @@ export const CLIENT_TOOLS = new Set([
   'delete_tab',
   'select_range',
   'open_sheet',
+  // Slide decks: act on the open presentation (client/src/agent/deckTools.ts).
+  'open_deck',
+  'read_deck',
+  'add_slides',
+  'update_slide',
+  'edit_elements',
+  'delete_slides',
+  'move_slide',
+  'set_deck_theme',
   // Fetches through the server (which holds the credentials) and writes into the live spreadsheet.
   'ingest_connector_data',
   // Runs in the browser so the user can confirm it there; the server then queues the job.

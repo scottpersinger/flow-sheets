@@ -183,6 +183,41 @@ describe('agent', () => {
     expect(JSON.parse(String(results[0].content)).values).toEqual([['2'], ['3'], ['6']]);
   });
 
+  it('creates a presentation with slides on the server and lists it', async () => {
+    replies.push(() => ({
+      content: [
+        toolUse('d1', 'create_deck', {
+          title: 'Q3 review',
+          theme: 'ocean',
+          slides: [
+            { title: 'Q3 review', subtitle: 'October 2026' },
+            { title: 'Highlights', body: ['Revenue up 12%', 'Churn down'] },
+          ],
+        }),
+      ],
+    }));
+    replies.push(() => ({ content: [toolUse('d2', 'list_decks', { query: 'q3' })] }));
+    replies.push(() => ({ content: [text('Done.')] }));
+    const events = await turn({ message: 'Make a deck', context: home });
+    expect(events.map((e) => e.type)).toEqual(['tool_start', 'tool_end', 'tool_start', 'tool_end', 'text', 'done']);
+
+    const created = JSON.parse(String((requests[1].messages[2].content as Anthropic.Beta.BetaToolResultBlockParam[])[0].content)) as { id: string; slide_count: number };
+    expect(created.slide_count).toBe(2);
+    const listed = JSON.parse(String((requests[2].messages[4].content as Anthropic.Beta.BetaToolResultBlockParam[])[0].content)) as { decks: { id: string; title: string }[] };
+    expect(listed.decks).toEqual([expect.objectContaining({ id: created.id, title: 'Q3 review' })]);
+
+    const res = await app.inject({ method: 'GET', url: `/api/decks/${created.id}`, headers: { cookie } });
+    const { deck } = res.json();
+    expect(deck.theme).toBe('ocean');
+    expect(deck.slides[0].layout).toBe('title');
+    expect(deck.slides[1].layout).toBe('title-body');
+
+    // The deck context is accepted and rendered for the model.
+    replies.push(() => ({ content: [text('On slide 2.')] }));
+    await turn({ message: 'Where am I?', context: { page: 'deck', deckId: created.id, title: 'Q3 review', slideCount: 2, currentSlide: 2, selectedElements: [] } });
+    expect(JSON.stringify(requests[3].messages.at(-1)!.content)).toContain('Current slide: 2');
+  });
+
   it('starts over on reset', async () => {
     replies.push(() => ({ content: [text('Hi')] }));
     await turn({ message: 'Hello', context: home });
@@ -206,6 +241,18 @@ describe('agent', () => {
     replies.push(() => ({ content: [text('ok')] }));
     await turn({ context: home, images: [{ mediaType: 'image/png', data: png }] });
     expect((requests[1].messages.at(-1)!.content as { type: string; text?: string }[]).at(-1)!.text).toBe('See the attached image.');
+
+    // A stored address travels to the model (so it can place the picture) but stays out of the transcript.
+    replies.push(() => ({ content: [text('Placed.')] }));
+    const url = '/api/images/12345678-1234-1234-1234-123456789abc';
+    await turn({ message: 'put this on slide 2', context: home, images: [{ mediaType: 'image/png', data: png, url }] });
+    const blocks = requests[2].messages.at(-1)!.content as { type: string; text?: string }[];
+    expect(blocks.map((b) => b.type)).toEqual(['text', 'image', 'text', 'text']);
+    expect(blocks[2].text).toContain(`Attached image 1 is stored at ${url}`);
+    const transcript = (await app.inject({ method: 'GET', url: '/api/agent', headers: { cookie } })).json().items as { kind: string; text?: string }[];
+    expect(transcript.filter((i) => i.kind === 'user').map((i) => i.text)).toEqual(['what is this?', 'See the attached image.', 'put this on slide 2']);
+    expect(JSON.stringify(transcript)).not.toContain('attached_images');
+    expect((await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home, images: [{ mediaType: 'image/png', data: png, url: 'https://evil.example/x.png' }] } })).statusCode).toBe(400);
     let res = await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home, images: [{ mediaType: 'image/svg+xml', data: png }] } });
     expect(res.statusCode).toBe(400);
     res = await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { context: home, images: Array(5).fill({ mediaType: 'image/png', data: png }) } });

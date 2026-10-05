@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../shared/agent/protocol.ts';
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
+import type { Deck } from '../../shared/deck.ts';
 import { CELL_IMAGE_TOO_LARGE, type SheetMeta, type Workbook } from '../../shared/types.ts';
 
 export interface User {
@@ -80,6 +81,18 @@ export const api = {
     request<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null }>('GET', `/api/sheets/${encodeURIComponent(id)}/compare`),
   renameSheet: (id: string, title: string) => request<{ sheet: SheetMeta }>('PATCH', `/api/sheets/${encodeURIComponent(id)}`, { title }),
   deleteSheet: (id: string) => request<{ ok: true }>('DELETE', `/api/sheets/${encodeURIComponent(id)}`),
+
+  listDecks: () => request<{ decks: SheetMeta[] }>('GET', '/api/decks'),
+  createDeck: (title: string, deck?: Deck) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck }),
+  getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck }>('GET', `/api/decks/${encodeURIComponent(id)}`),
+  saveDeck: (id: string, deck: Deck, keepalive = false) =>
+    request<{ meta: SheetMeta }>('PUT', `/api/decks/${encodeURIComponent(id)}`, { deck }, keepalive ? { keepalive: true } : undefined),
+  /** Import a PowerPoint file (.pptx) as a new presentation. */
+  importPptx: (file: File, title: string) => uploadExcel<{ deck: SheetMeta; warnings: string[] }>(`/api/decks/import?title=${encodeURIComponent(title)}`, file),
+  /** Convert a PowerPoint file (.pptx) to slides without creating a presentation. */
+  convertPptx: (file: File) => uploadExcel<{ deck: Deck; warnings: string[] }>('/api/import/pptx', file),
+  renameDeck: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/decks/${encodeURIComponent(id)}`, { title }),
+  deleteDeck: (id: string) => request<{ ok: true }>('DELETE', `/api/decks/${encodeURIComponent(id)}`),
 
   agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
   agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),

@@ -3,6 +3,7 @@
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
 import { CLIENT_TOOLS, IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
+import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
 import { AgentStore, type MessageParam, type Pending } from './store.ts';
@@ -86,8 +87,9 @@ export class AgentService {
     for (const img of images) {
       if (!img || typeof img.data !== 'string' || !IMAGE_MEDIA_TYPES.has(img.mediaType)) throw new AgentError(400, 'Images must be PNG, JPEG, GIF or WebP.');
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
+      if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || (req.context.page !== 'home' && req.context.page !== 'sheet')) throw new AgentError(400, 'Missing context.');
+    if (!req.context || !['home', 'sheet', 'deck'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (this.store.requestsToday(userId) >= this.dailyLimit) {
       throw new AgentError(429, "You've reached today's limit for the assistant. Try again tomorrow.");
     }
@@ -115,6 +117,9 @@ export class AgentService {
     if (text || images.length) {
       content.push({ type: 'text', text: renderContext(req.context) });
       for (const img of images) content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+      // The stored addresses let the model place the pictures themselves (set_cell_image, edit_elements, ...).
+      const stored = images.map((img, i) => (img.url ? `Attached image ${i + 1} is stored at ${img.url}; use that address with the image tools to put the picture itself in a cell or on a slide.` : null)).filter((s): s is string => !!s);
+      if (stored.length) content.push({ type: 'text', text: `<attached_images>\n${stored.join('\n')}\n</attached_images>` });
       content.push({ type: 'text', text: text || 'See the attached image.' });
     }
     if (!content.length) throw new AgentError(400, 'Nothing to send.');

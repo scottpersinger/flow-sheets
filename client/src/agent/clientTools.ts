@@ -8,17 +8,27 @@ import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '
 import { hyperlinkFormula, safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage, hasContent, isDataImage, type CellStyle, type Tab } from '../../../shared/types.ts';
 import { CellError } from '../../../shared/values.ts';
+import { deckOutline } from '../../../shared/deck.ts';
+import type { DeckController } from '../deck/controller.ts';
 import type { SheetController } from '../state/controller.ts';
 import * as ops from '../state/ops.ts';
 import type { WorkbookStore } from '../state/store.ts';
+import { DECK_TOOLS, deckConfirmationFor, runDeckTool } from './deckTools.ts';
+import { ToolError } from './toolError.ts';
+
+export { ToolError };
 
 export interface ClientToolEnv {
-  /** The open spreadsheet, or null on the home page. */
+  /** The open spreadsheet, or null on other pages. */
   ctl: SheetController | null;
+  /** The open presentation, or null on other pages. */
+  deck: DeckController | null;
   /** Undo group for this agent request. */
   group: string;
   /** Navigate to a spreadsheet and resolve once it has loaded. */
   openSheet(id: string): Promise<SheetController>;
+  /** Navigate to a presentation and resolve once it has loaded. */
+  openDeck(id: string): Promise<DeckController>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
   /** Queue a background research task; resolves with the job id. */
@@ -29,8 +39,6 @@ export interface ClientToolEnv {
   fetchConnectorData(connectionId: string, body: { dataset: string; params: Record<string, unknown>; handle?: string }): Promise<FetchResult>;
 }
 
-export class ToolError extends Error {}
-
 const MAX_WRITE_CELLS = 20_000;
 const CONFIRM_CLEAR_CELLS = 100;
 
@@ -40,7 +48,11 @@ type CellInput = string | number | boolean | null;
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
 function requireSheet(env: ClientToolEnv): SheetController {
-  if (!env.ctl) throw new ToolError('No spreadsheet is open. Use list_sheets to find one and open_sheet to open it.');
+  if (!env.ctl) {
+    throw new ToolError(
+      env.deck ? 'A presentation is open, not a spreadsheet. Use list_sheets to find one and open_sheet to open it.' : 'No spreadsheet is open. Use list_sheets to find one and open_sheet to open it.',
+    );
+  }
   return env.ctl;
 }
 
@@ -85,11 +97,12 @@ function nonEmptyCount(tab: Tab, rg: Range): number {
 }
 
 /** A question to ask the user before running a destructive call, or null if it can run straight away. */
-export function confirmationFor(call: ClientToolCall, ctl: SheetController | null): string | null {
+export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null): string | null {
   const i = call.input;
   if (call.name === 'request_app_change') {
     return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.`;
   }
+  if (DECK_TOOLS.has(call.name)) return deckConfirmationFor(call, deck);
   if (!ctl) return null;
   try {
     switch (call.name) {
@@ -143,6 +156,11 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     const ctl = await env.openSheet(String(i.sheet_id));
     return JSON.stringify({ opened: true, ...sheetOverview(source(ctl), { activeTabId: ctl.tab.id, selection: ctl.sel.ranges.map(rangeToString) }) });
   }
+  if (call.name === 'open_deck') {
+    const deck = await env.openDeck(String(i.deck_id));
+    return JSON.stringify({ opened: true, ...deckOutline(deck.deck, deck.current) });
+  }
+  if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
 
   const ctl = requireSheet(env);
   const run = (fn: Parameters<SheetController['runAgent']>[1]) => ctl.runAgent(env.group, fn);

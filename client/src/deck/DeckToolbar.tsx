@@ -1,0 +1,256 @@
+// Toolbar for the deck editor: slides, layout, theme, inserting elements, text styling and arrangement.
+import { useEffect, useState, type ReactNode } from 'react';
+import { LAYOUT_IDS, THEME_IDS, THEMES, type LayoutId, type TextElement, type ThemeId } from '../../../shared/deck.ts';
+import { SHAPE_KINDS, SHAPES } from '../../../shared/shapes.ts';
+import { MOD } from '../commands.ts';
+import { MenuList, type MenuItem } from '../components/Menu.tsx';
+import type { DeckController } from './controller.ts';
+import { ShapeIcon } from './ShapeIcon.tsx';
+
+export const LAYOUT_NAMES: Record<LayoutId, string> = {
+  title: 'Title slide',
+  section: 'Section header',
+  'title-body': 'Title and body',
+  'two-column': 'Two columns',
+  image: 'Title and image',
+  blank: 'Blank',
+};
+
+/** Menu items for inserting each shape, with its icon. */
+export function shapeMenuItems(ctl: DeckController): MenuItem[] {
+  return SHAPE_KINDS.map((s) => ({
+    label: (
+      <span className="menu-icon-label">
+        <ShapeIcon kind={s} size={16} /> {SHAPES[s].name}
+      </span>
+    ),
+    action: () => ctl.addShape(s),
+  }));
+}
+
+/** A grid of shape icons that opens from the toolbar. */
+function ShapePicker({ ctl }: { ctl: DeckController }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+  return (
+    <div className="tb-drop" onMouseDown={(e) => e.stopPropagation()}>
+      <Btn title="Shape" active={open} onClick={() => setOpen(!open)}>
+        <ShapeIcon kind="triangle" size={18} /> <span className="tb-caret">▾</span>
+      </Btn>
+      {open && (
+        <div className="shape-picker" role="menu" aria-label="Shapes">
+          {SHAPE_KINDS.map((s) => (
+            <button
+              key={s}
+              role="menuitem"
+              title={SHAPES[s].name}
+              aria-label={SHAPES[s].name}
+              onClick={() => {
+                ctl.addShape(s);
+                setOpen(false);
+              }}
+            >
+              <ShapeIcon kind={s} size={24} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PALETTE = [
+  ['#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff'],
+  ['#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff'],
+  ['#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc'],
+  ['#cc4125', '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6d9eeb', '#6fa8dc', '#8e7cc3', '#c27ba0'],
+  ['#a61c00', '#cc0000', '#e69138', '#f1c232', '#6aa84f', '#45818e', '#3c78d8', '#3d85c6', '#674ea7', '#a64d79'],
+];
+
+const SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72];
+
+function Btn({ title, active, onClick, children, disabled }: { title: string; active?: boolean; onClick: () => void; children: ReactNode; disabled?: boolean }) {
+  return (
+    <button className={`tb-btn${active ? ' active' : ''}`} title={title} aria-label={title} aria-pressed={active} disabled={disabled} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+/** A toolbar button that opens a menu. */
+function Drop({ title, label, items, disabled }: { title: string; label: ReactNode; items: MenuItem[]; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+  return (
+    <div className="tb-drop" onMouseDown={(e) => e.stopPropagation()}>
+      <Btn title={title} active={open} onClick={() => setOpen(!open)} disabled={disabled}>
+        {label} <span className="tb-caret">▾</span>
+      </Btn>
+      {open && <MenuList items={items} onDone={() => setOpen(false)} style={{ top: 32, left: 0 }} />}
+    </div>
+  );
+}
+
+function ColorPicker({ title, icon, value, onPick, disabled }: { title: string; icon: ReactNode; value?: string; onPick: (c: string | undefined) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+  return (
+    <div className="tb-drop" onMouseDown={(e) => e.stopPropagation()}>
+      <Btn title={title} onClick={() => setOpen(!open)} disabled={disabled}>
+        <span className="color-icon">
+          {icon}
+          <span className="color-bar" style={{ background: value ?? 'transparent', borderColor: value ?? '#999' }} />
+        </span>
+      </Btn>
+      {open && (
+        <div className="palette">
+          <button
+            className="palette-reset"
+            onClick={() => {
+              onPick(undefined);
+              setOpen(false);
+            }}
+          >
+            Theme default
+          </button>
+          {PALETTE.map((row, i) => (
+            <div key={i} className="palette-row">
+              {row.map((c) => (
+                <button
+                  key={c}
+                  className={`swatch${value === c ? ' active' : ''}`}
+                  style={{ background: c }}
+                  title={c}
+                  onClick={() => {
+                    onPick(c);
+                    setOpen(false);
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function DeckToolbar({ ctl, onPresent, onInsertImage }: { ctl: DeckController; onPresent(): void; onInsertImage(): void }) {
+  const selected = ctl.selected;
+  const texts = selected.filter((e): e is TextElement => e.type === 'text');
+  const text = texts[0];
+  const shapes = selected.filter((e) => e.type === 'shape');
+  const role = text?.role ?? 'body';
+  const bold = text ? (text.style?.bold ?? role === 'title') : false;
+  const italic = !!text?.style?.italic;
+  const align = text?.style?.align ?? 'left';
+  const bullets = !!text && text.paragraphs.some((p) => p.bullet);
+  const size = text?.style?.size ?? (text ? { title: 40, subtitle: 22, body: 18, caption: 14 }[role] : 18);
+
+  const layoutItems: MenuItem[] = LAYOUT_IDS.map((l) => ({ label: LAYOUT_NAMES[l], checked: ctl.slide.layout === l, action: () => ctl.setLayout(l) }));
+  const newSlideItems: MenuItem[] = LAYOUT_IDS.map((l) => ({ label: LAYOUT_NAMES[l], action: () => ctl.addSlide(l) }));
+  const themeItems: MenuItem[] = THEME_IDS.map((t: ThemeId) => ({ label: THEMES[t].name, checked: ctl.deck.theme === t, action: () => ctl.setTheme(t) }));
+
+  return (
+    <div className="toolbar deck-toolbar" role="toolbar" aria-label="Deck toolbar">
+      <Drop title="New slide" label="+ Slide" items={newSlideItems} />
+      <Drop title="Layout" label="Layout" items={layoutItems} />
+      <Drop title="Theme" label="Theme" items={themeItems} />
+      <span className="tb-sep" />
+      <Btn title="Text box" onClick={() => ctl.addText('body')}>
+        <span className="a-icon">T</span>
+      </Btn>
+      <Btn title="Image" onClick={onInsertImage}>
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="9" cy="10" r="1.6" fill="currentColor" />
+          <path d="M5 18l5-5 3 3 3-3 4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      </Btn>
+      <ShapePicker ctl={ctl} />
+      <span className="tb-sep" />
+      <Btn title={`Bold (${MOD}B)`} active={bold} disabled={!text} onClick={() => ctl.styleSelected({ bold: !bold })}>
+        <b>B</b>
+      </Btn>
+      <Btn title={`Italic (${MOD}I)`} active={italic} disabled={!text} onClick={() => ctl.styleSelected({ italic: italic ? undefined : true })}>
+        <i>I</i>
+      </Btn>
+      <select
+        className="tb-select"
+        title="Font size"
+        aria-label="Font size"
+        disabled={!text}
+        value={SIZES.includes(size) ? size : ''}
+        onMouseDown={(e) => e.stopPropagation()}
+        onChange={(e) => ctl.styleSelected({ size: Number(e.target.value) })}
+      >
+        {!SIZES.includes(size) && <option value="">{size}</option>}
+        {SIZES.map((s) => (
+          <option key={s} value={s}>
+            {s}
+          </option>
+        ))}
+      </select>
+      <ColorPicker title="Text color" icon={<span className="a-icon">A</span>} value={text?.style?.color} disabled={!text} onPick={(c) => ctl.styleSelected({ color: c })} />
+      <span className="tb-sep" />
+      <Btn title="Align left" active={align === 'left'} disabled={!text} onClick={() => ctl.styleSelected({ align: undefined })}>
+        ≡
+      </Btn>
+      <Btn title="Align center" active={align === 'center'} disabled={!text} onClick={() => ctl.styleSelected({ align: 'center' })}>
+        ☰
+      </Btn>
+      <Btn title="Align right" active={align === 'right'} disabled={!text} onClick={() => ctl.styleSelected({ align: 'right' })}>
+        ≣
+      </Btn>
+      <Btn title="Bulleted list" active={bullets} disabled={!text} onClick={() => ctl.toggleBullets()}>
+        •≡
+      </Btn>
+      <span className="tb-sep" />
+      <ColorPicker
+        title="Fill color"
+        icon={<span className="fill-icon">◆</span>}
+        value={shapes[0]?.type === 'shape' ? shapes[0].fill : undefined}
+        disabled={!shapes.length}
+        onPick={(c) =>
+          ctl.updateElements(
+            shapes.map((s) => s.id),
+            (e) => {
+              if (e.type !== 'shape') return e;
+              const next = { ...e };
+              if (c) next.fill = c;
+              else delete next.fill;
+              return next;
+            },
+          )
+        }
+      />
+      <ColorPicker title="Slide background" icon={<span className="fill-icon">▭</span>} value={ctl.slide.bg} onPick={(c) => ctl.setBackground(c)} />
+      <span className="tb-sep" />
+      <Btn title="Bring forward" disabled={!selected.length} onClick={() => ctl.reorder(ctl.selection, 'forward')}>
+        ▲
+      </Btn>
+      <Btn title="Send backward" disabled={!selected.length} onClick={() => ctl.reorder(ctl.selection, 'backward')}>
+        ▼
+      </Btn>
+      <span className="tb-grow" />
+      <button className="btn primary present-btn" onClick={onPresent} title="Present from the current slide">
+        ▶ Present
+      </button>
+    </div>
+  );
+}

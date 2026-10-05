@@ -5,9 +5,9 @@ import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
-import { Logo } from '../components/Logo.tsx';
+import { DeckIcon, Logo } from '../components/Logo.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
-import { checkExcelFile, pickExcelFile, titleFromFileName } from '../importFile.ts';
+import { checkImportFile, isPowerPointFile, pickImportFile, titleFromFileName } from '../importFile.ts';
 
 function formatWhen(iso: string): string {
   const d = new Date(iso);
@@ -21,7 +21,7 @@ export function HomePage() {
   const navigate = useNavigate();
   const [sheets, setSheets] = useState<SheetMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<'sheet' | 'deck' | null>(null);
   const [renaming, setRenaming] = useState<SheetMeta | null>(null);
   const [deleting, setDeleting] = useState<SheetMeta | null>(null);
   const [filter, setFilter] = useState('');
@@ -30,11 +30,16 @@ export function HomePage() {
   const [dragOver, setDragOver] = useState(false);
 
   const importFile = async (file: File) => {
-    const problem = checkExcelFile(file);
+    const problem = checkImportFile(file);
     if (problem) return setError(problem);
     setError(null);
     setImporting(file.name);
     try {
+      if (isPowerPointFile(file)) {
+        const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name));
+        navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
+        return;
+      }
       const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name));
       navigate(`/s/${sheet.id}`, { state: { importWarnings: warnings } });
     } catch (e) {
@@ -43,11 +48,13 @@ export function HomePage() {
     }
   };
 
+  // Spreadsheets and presentations in one list, most recently edited first.
   const load = () =>
-    api
-      .listSheets()
-      .then((r) => setSheets(r.sheets))
+    Promise.all([api.listSheets(), api.listDecks()])
+      .then(([s, d]) => setSheets([...s.sheets, ...d.decks].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))))
       .catch((e: Error) => setError(e.message));
+
+  const pathOf = (s: SheetMeta) => (s.kind === 'deck' ? `/d/${s.id}` : `/s/${s.id}`);
 
   // Reload after the assistant finishes a request, in case it created a spreadsheet.
   const { running: agentRunning } = useAgent();
@@ -106,7 +113,7 @@ export function HomePage() {
           <Logo />
           <span>Sheets</span>
         </div>
-        <input className="home-search" placeholder="Search spreadsheets" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <input className="home-search" placeholder="Search spreadsheets and presentations" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
           <Link to="/connectors" className="home-changes" title="Connect data sources such as Brex">
             Connectors
@@ -124,42 +131,48 @@ export function HomePage() {
 
       <section className="home-new">
         <div className="home-inner">
-          <h2>Start a new spreadsheet</h2>
+          <h2>Start something new</h2>
           <div className="tiles">
             <div>
-              <button className="new-sheet-tile" onClick={() => setCreating(true)} aria-label="Create a blank spreadsheet">
+              <button className="new-sheet-tile" onClick={() => setCreating('sheet')} aria-label="Create a blank spreadsheet">
                 <span className="plus">+</span>
               </button>
               <div className="tile-label">Blank spreadsheet</div>
+            </div>
+            <div>
+              <button className="new-sheet-tile deck-tile" onClick={() => setCreating('deck')} aria-label="Create a blank presentation">
+                <span className="plus">+</span>
+              </button>
+              <div className="tile-label">Blank presentation</div>
             </div>
             <div>
               <button
                 className="new-sheet-tile import-tile"
                 disabled={!!importing}
                 onClick={async () => {
-                  const file = await pickExcelFile();
+                  const file = await pickImportFile();
                   if (file) void importFile(file);
                 }}
-                aria-label="Import an Excel file"
+                aria-label="Import an Excel or PowerPoint file"
               >
                 <svg width="44" height="44" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
-              <div className="tile-label">Import Excel (.xlsx, .xls)</div>
+              <div className="tile-label">Import Excel or PowerPoint</div>
             </div>
           </div>
-          <div className="tile-hint">You can also drop an Excel file anywhere on this page.</div>
+          <div className="tile-hint">You can also drop an Excel (.xlsx, .xls) or PowerPoint (.pptx) file anywhere on this page.</div>
         </div>
       </section>
 
       <section className="home-inner">
-        <h2>Your spreadsheets</h2>
+        <h2>Your files</h2>
         {error && <div className="form-error">{error}</div>}
         {sheets === null ? (
           <div className="muted">Loading…</div>
         ) : visible.length === 0 ? (
-          <div className="empty-state">{sheets.length ? 'No spreadsheets match your search.' : 'No spreadsheets yet. Create one to get started.'}</div>
+          <div className="empty-state">{sheets.length ? 'Nothing matches your search.' : 'No spreadsheets or presentations yet. Create one to get started.'}</div>
         ) : (
           <table className="sheet-list">
             <thead>
@@ -172,12 +185,12 @@ export function HomePage() {
             </thead>
             <tbody>
               {visible.map(({ s, depth }) => (
-                <tr key={s.id} onClick={() => navigate(`/s/${s.id}`)}>
+                <tr key={s.id} onClick={() => navigate(pathOf(s))}>
                   <td>
-                    <Link to={`/s/${s.id}`} className="sheet-title" onClick={(e) => e.stopPropagation()}>
+                    <Link to={pathOf(s)} className="sheet-title" onClick={(e) => e.stopPropagation()}>
                       <span style={{ width: depth * 22 }} className="tree-indent" />
                       {depth > 0 ? <span className="tree-elbow">└</span> : null}
-                      <Logo size={18} /> {s.title}
+                      {s.kind === 'deck' ? <DeckIcon size={18} /> : <Logo size={18} />} {s.title}
                       {s.branch && <span className={`branch-tag${s.branch.detached ? ' detached' : ''}`}>{s.branch.detached ? `branch of deleted “${s.branch.parentTitle}”` : depth ? 'branch' : `branch of ${s.branch.parentTitle}`}</span>}
                     </Link>
                   </td>
@@ -196,10 +209,10 @@ export function HomePage() {
                     </button>
                     {menuFor === s.id && (
                       <div className="dropdown">
-                        <button onClick={() => navigate(`/s/${s.id}`)}>Open</button>
-                        <button onClick={() => (setMenuFor(null), window.open(`/s/${s.id}`, '_blank'))}>Open in new tab</button>
+                        <button onClick={() => navigate(pathOf(s))}>Open</button>
+                        <button onClick={() => (setMenuFor(null), window.open(pathOf(s), '_blank'))}>Open in new tab</button>
                         <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>
-                        <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>
+                        {s.kind !== 'deck' && <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>}
                         <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
                           Delete
                         </button>
@@ -221,8 +234,8 @@ export function HomePage() {
           </div>
         </div>
       )}
-      {dragOver && !importing && <div className="drop-hint">Drop an Excel file to import it</div>}
-      {creating && (
+      {dragOver && !importing && <div className="drop-hint">Drop an Excel or PowerPoint file to import it</div>}
+      {creating === 'sheet' && (
         <PromptModal
           title="New spreadsheet"
           label="Name"
@@ -232,7 +245,20 @@ export function HomePage() {
             const { sheet } = await api.createSheet(title);
             navigate(`/s/${sheet.id}`);
           }}
-          onClose={() => setCreating(false)}
+          onClose={() => setCreating(null)}
+        />
+      )}
+      {creating === 'deck' && (
+        <PromptModal
+          title="New presentation"
+          label="Name"
+          initial="Untitled presentation"
+          confirmText="Create"
+          onConfirm={async (title) => {
+            const { deck } = await api.createDeck(title);
+            navigate(`/d/${deck.id}`);
+          }}
+          onClose={() => setCreating(null)}
         />
       )}
       {branching && (
@@ -250,12 +276,12 @@ export function HomePage() {
       )}
       {renaming && (
         <PromptModal
-          title="Rename spreadsheet"
+          title={renaming.kind === 'deck' ? 'Rename presentation' : 'Rename spreadsheet'}
           label="Name"
           initial={renaming.title}
           confirmText="Rename"
           onConfirm={async (title) => {
-            await api.renameSheet(renaming.id, title);
+            await (renaming.kind === 'deck' ? api.renameDeck(renaming.id, title) : api.renameSheet(renaming.id, title));
             await load();
           }}
           onClose={() => setRenaming(null)}
@@ -263,7 +289,7 @@ export function HomePage() {
       )}
       {deleting && (
         <ConfirmModal
-          title="Delete spreadsheet?"
+          title={deleting.kind === 'deck' ? 'Delete presentation?' : 'Delete spreadsheet?'}
           message={
             <>
               “{deleting.title}” will be permanently deleted. This cannot be undone.
@@ -272,7 +298,7 @@ export function HomePage() {
           confirmText="Delete"
           danger
           onConfirm={async () => {
-            await api.deleteSheet(deleting.id);
+            await (deleting.kind === 'deck' ? api.deleteDeck(deleting.id) : api.deleteSheet(deleting.id));
             await load();
           }}
           onClose={() => setDeleting(null)}

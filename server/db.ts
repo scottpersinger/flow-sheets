@@ -136,6 +136,8 @@ function migrate(db: DB): void {
   if (!cols.has('parent_title')) db.exec('ALTER TABLE sheets ADD COLUMN parent_title TEXT');
   if (!cols.has('branched_at')) db.exec('ALTER TABLE sheets ADD COLUMN branched_at TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS sheets_parent ON sheets(parent_id)');
+  // Slide decks share the table and storage with spreadsheets; kind tells them apart.
+  if (!cols.has('kind')) db.exec("ALTER TABLE sheets ADD COLUMN kind TEXT NOT NULL DEFAULT 'sheet'");
 
   // Agent jobs: the record of a change (who asked, what was committed and merged) and revert links.
   const jobCols = new Set((db.prepare('PRAGMA table_info(agent_jobs)').all() as { name: string }[]).map((c) => c.name));

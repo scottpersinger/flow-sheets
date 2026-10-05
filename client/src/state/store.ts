@@ -96,6 +96,11 @@ export class WorkbookStore<M = unknown> {
     this.engine = new Engine(workbook);
   }
 
+  /** The document the AutoSaver saves. */
+  get document(): Workbook {
+    return this.workbook;
+  }
+
   subscribe = (fn: () => void): (() => void) => {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -226,13 +231,14 @@ export class WorkbookStore<M = unknown> {
 
 export type SaveStatus = 'saved' | 'dirty' | 'saving' | 'error';
 
-interface SaveSource {
-  readonly workbook: Workbook;
+/** A store whose document can be autosaved: a WorkbookStore or a DeckStore. */
+export interface SaveSource<D> {
+  readonly document: D;
   readonly version: number;
   subscribe(fn: () => void): () => void;
 }
 
-export class AutoSaver {
+export class AutoSaver<D = Workbook> {
   status: SaveStatus = 'saved';
   error: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -240,12 +246,12 @@ export class AutoSaver {
   private pending = false;
   private listeners = new Set<() => void>();
   private lastVersion: number;
-  private store: SaveSource;
-  private saveFn: (wb: Workbook) => Promise<void>;
+  private store: SaveSource<D>;
+  private saveFn: (doc: D) => Promise<void>;
   private unsub: () => void;
   private delay: number;
 
-  constructor(store: SaveSource, saveFn: (wb: Workbook) => Promise<void>, delay = 800) {
+  constructor(store: SaveSource<D>, saveFn: (doc: D) => Promise<void>, delay = 800) {
     this.store = store;
     this.saveFn = saveFn;
     this.delay = delay;
@@ -287,7 +293,7 @@ export class AutoSaver {
     if (!this.pending) return;
     this.pending = false;
     this.setStatus('saving');
-    this.inFlight = this.saveFn(this.store.workbook)
+    this.inFlight = this.saveFn(this.store.document)
       .then(() => {
         this.setStatus(this.pending ? 'dirty' : 'saved');
       })

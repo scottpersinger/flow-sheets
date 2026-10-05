@@ -60,6 +60,21 @@ How it works:
 - Every request carries the current context: the page, the spreadsheet, its tabs, the active tab and the selection. It's added in front of the user's message, so the system prompt stays cacheable.
 - Tool inputs are checked against Zod schemas (`server/agent/tools.ts`) before anything runs. The same schemas generate the JSON Schema sent to Claude.
 
+## Presentations
+
+**Blank presentation** on the home page creates a slide deck (`/d/<id>`). A slide is a fixed 960×540 canvas (PowerPoint's 16:9 size) holding text boxes, images and shapes (rectangles, ellipses, triangles, diamonds, polygons, stars, arrows, chevrons, speech bubbles, hearts and lines; the table in `shared/shapes.ts` also maps each one to its PowerPoint preset). Slides are made from **layouts** (title, section header, title and body, two columns, title and image, blank), and a deck has a **theme** (light, dark, ocean, forest, sunset, paper) that sets its colors and fonts.
+
+- Click a slide in the strip on the left to edit it; drag to reorder; right-click for slide commands. Double-click a text box or shape to edit its text; **Tab** indents a bullet. Drag elements to move them and use the handles to resize (corner handles keep an image's aspect ratio). Arrow keys nudge, **Delete** removes, ⌘D duplicates, ⌘C/⌘V copy and paste elements, and ⌘Z undoes.
+- **Insert → Image…**, dropping an image file on the slide, or pasting one adds an image element (stored like cell images).
+- **Present** (F5) shows the deck full screen; arrow keys and clicks move between slides, **N** shows the speaker notes and the next slide, and Esc leaves.
+- **File → Download as PowerPoint (.pptx)** exports the deck (text with bullets, images, shapes, backgrounds and notes) with pptxgenjs in the browser; **File → Print / Save as PDF…** lays out one slide per page.
+- **PowerPoint import**: drop a `.pptx` on the home page (or use the Import tile) to create a presentation from it, or **File → Import PowerPoint slides…** inside a deck to add its slides after the current one. The conversion runs on the server (`server/pptxImport.ts`) and keeps text boxes with bullets, per-paragraph sizes, weights and colors, fonts, line and paragraph spacing, alignment and insets, theme colors, translucent fills and outlines, pictures (PNG, JPEG, GIF, WebP), shapes (text on a filled shape becomes a text element on top of it), horizontal and vertical lines, solid slide backgrounds and speaker notes. Fonts that are on Google Fonts (Inter, Poppins, Montserrat, ...) are loaded when a deck uses them. Tables, charts, SmartArt, other picture formats, gradients and picture backgrounds are dropped and listed in a banner.
+- Speaker notes live under the slide.
+
+The assistant edits presentations too: `read_deck`, `add_slides` (layout plus plain content), `update_slide` (change the title, body, notes or layout of one slide), `edit_elements` (move, resize, restyle, add or remove elements), `delete_slides`, `move_slide` and `set_deck_theme` run in the browser against the open deck, and `list_decks`, `create_deck` (optionally with all its slides) and `open_deck` find, create and open decks. "Turn this spreadsheet into a short presentation" reads the sheet, creates the deck and opens it.
+
+Decks are stored like spreadsheets (`shared/deck.ts` is the format; the `sheets` table has a `kind` column) and are listed with them on the home page. Branches and compare are for spreadsheets only.
+
 ## Branches
 
 **File → Create branch…** (or **Create branch** in a spreadsheet's menu on the home page) makes a branch: a copy you can edit freely that stays connected to its original. Branches are listed under their original on the home page.

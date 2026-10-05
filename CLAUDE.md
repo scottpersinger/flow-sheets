@@ -6,8 +6,11 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
 - `client/src` — React app. Spreadsheet state lives in `client/src/state` (`WorkbookStore` + `Tx` transactions,
   `SheetController` for selection/editing, `ops.ts` for workbook operations such as insert/delete/sort/filter).
 - `server` — Fastify API (`app.ts`), auth, sheet storage (`sheets.ts`), and the assistant (`server/agent`).
-- `shared` — code used by both: workbook types (`types.ts`), cell references, the formula engine, and the
-  assistant protocol (`shared/agent`).
+- `shared` — code used by both: workbook types (`types.ts`), cell references, the formula engine, the slide deck
+  format with its layouts and themes (`deck.ts`), and the assistant protocol (`shared/agent`).
+- Presentations (slide decks) live in `client/src/deck` (`DeckStore` + `DeckController`, the `SlideView`
+  renderer, editor, toolbar, present mode) and `client/src/pages/DeckPage.tsx`. They are stored with
+  spreadsheets (`server/sheets.ts`, `kind` column) behind `/api/decks`.
 
 Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a change is finished.
 
@@ -35,7 +38,9 @@ touches these places:
    Resolve tabs and ranges with `tabOf` / `rangeOf`, make every change inside `run((tx) => ...)` so it is
    undoable as part of the agent's step, call `show(ctl, tab.id)` so the user sees the tab you changed, and
    return a small JSON string describing what happened. Throw `ToolError` with a helpful message for anything
-   Claude should fix (bad range, missing tab, and so on).
+   Claude should fix (bad range, missing tab, and so on). Tools that act on the open presentation go in
+   `client/src/agent/deckTools.ts` instead (add the name to `DECK_TOOLS` there) and use the `DeckController`
+   (`ctl.runAgent(group, (tx) => ...)`), with tests in `deckTools.test.ts`.
    If the action is destructive (deletes data the user cannot easily recover), add a question for it to
    `confirmationFor` in the same file.
 4. **Label** — add a `case` to `toolLabel` in `client/src/agent/describe.ts` (the one-line label in the chat,

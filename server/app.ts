@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
+import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
@@ -17,10 +18,12 @@ import { openDb } from './db.ts';
 import { ImageStore } from './images.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
+import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 
 const SESSION_COOKIE = 'sid';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 declare module 'fastify' {
@@ -86,7 +89,7 @@ export async function buildApp(opts: AppOptions) {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
   // Raw file uploads (xlsx import).
-  app.addContentTypeParser([XLSX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
+  app.addContentTypeParser([XLSX_MIME, PPTX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
     done(null, body),
   );
   // Raw cell image uploads. Images are stored as files and cells only reference them, so workbook saves
@@ -268,7 +271,7 @@ export async function buildApp(opts: AppOptions) {
     r.post('/api/sheets/:id/branch', async (req, reply) => {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
-      const source = sheets.get(req.user!.id, id);
+      const source = sheets.get(req.user!.id, id, 'sheet');
       if (!source) return reply.code(404).send({ error: 'Sheet not found' });
       const sheet = await sheets.branch(req.user!.id, id, title ?? `${source.title} (branch)`);
       return { sheet };
@@ -296,15 +299,95 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
       if (!title) return reply.code(400).send({ error: 'Title is required' });
-      const meta = sheets.rename(req.user!.id, id, title);
+      const meta = sheets.rename(req.user!.id, id, title, 'sheet');
       if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
       return { sheet: meta };
     });
 
     r.delete('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      if (!(await sheets.delete(req.user!.id, id))) return reply.code(404).send({ error: 'Sheet not found' });
+      if (!(await sheets.delete(req.user!.id, id, 'sheet'))) return reply.code(404).send({ error: 'Sheet not found' });
       return { ok: true };
+    });
+  });
+
+  // --- Slide decks ---------------------------------------------------------------
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    r.get('/api/decks', async (req) => ({ decks: sheets.list(req.user!.id, 'deck') }));
+
+    r.post('/api/decks', async (req, reply) => {
+      const body = (req.body ?? {}) as { title?: unknown; deck?: unknown };
+      const title = cleanTitle(body.title) ?? 'Untitled presentation';
+      const deck = body.deck === undefined ? newDeck() : body.deck;
+      const problem = validateDeck(deck);
+      if (problem) return reply.code(400).send({ error: problem });
+      return { deck: await sheets.createDeck(req.user!.id, title, deck as Deck) };
+    });
+
+    r.get('/api/decks/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const res = await sheets.loadDeck(req.user!.id, id);
+      if (!res) return reply.code(404).send({ error: 'Presentation not found' });
+      return { meta: res.meta, deck: res.deck };
+    });
+
+    r.put('/api/decks/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const deck = (req.body as { deck?: unknown } | undefined)?.deck;
+      const problem = validateDeck(deck);
+      if (problem) return reply.code(400).send({ error: problem });
+      const meta = await sheets.saveDeck(req.user!.id, id, deck as Deck);
+      if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
+      return { meta };
+    });
+
+    r.patch('/api/decks/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
+      if (!title) return reply.code(400).send({ error: 'Title is required' });
+      const meta = sheets.rename(req.user!.id, id, title, 'deck');
+      if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
+      return { meta };
+    });
+
+    r.delete('/api/decks/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (!(await sheets.delete(req.user!.id, id, 'deck'))) return reply.code(404).send({ error: 'Presentation not found' });
+      return { ok: true };
+    });
+
+    /** Convert an uploaded .pptx body; sends a 400 and returns null on failure. Pictures are stored for the user. */
+    const convertPptx = async (req: FastifyRequest, reply: FastifyReply) => {
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        reply.code(400).send({ error: 'Upload a PowerPoint file (.pptx) as the request body.' });
+        return null;
+      }
+      try {
+        return await importPptx(body, (type, data) => images.create(req.user!.id, type, data));
+      } catch (e) {
+        if (!(e instanceof ImportError)) req.log.warn({ err: e }, 'pptx import failed');
+        reply.code(400).send({ error: e instanceof ImportError ? e.message : 'This file could not be imported. Make sure it is a valid PowerPoint presentation (.pptx).' });
+        return null;
+      }
+    };
+
+    // Import as a brand-new presentation.
+    r.post('/api/decks/import', async (req, reply) => {
+      const result = await convertPptx(req, reply);
+      if (!result) return reply;
+      const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported presentation';
+      const deck = await sheets.createDeck(req.user!.id, title, result.deck);
+      return { deck, warnings: result.warnings };
+    });
+
+    // Convert only (nothing is stored but the pictures); the client adds the slides to an open presentation.
+    r.post('/api/import/pptx', async (req, reply) => {
+      const result = await convertPptx(req, reply);
+      if (!result) return reply;
+      return result;
     });
   });
 
@@ -495,7 +578,7 @@ export async function buildApp(opts: AppOptions) {
       const kind = body.kind === 'research' ? 'research' : 'change';
       let sheetId: string | undefined;
       if (kind === 'research' && typeof body.sheetId === 'string' && body.sheetId) {
-        if (!sheets.get(req.user!.id, body.sheetId)) return reply.code(404).send({ error: 'Sheet not found' });
+        if (!sheets.get(req.user!.id, body.sheetId, 'sheet')) return reply.code(404).send({ error: 'Sheet not found' });
         sheetId = body.sheetId;
       }
       const active = jobs.active();
