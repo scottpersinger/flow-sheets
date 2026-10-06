@@ -99,11 +99,24 @@ with a `WWW-Authenticate` challenge until a valid bearer token arrives, then act
 `get_profile` tool (marked `openai/profile`) lets ChatGPT show and link accounts. Setting `PLUGIN_USER_EMAIL`
 switches all of this off for development (every request acts as that account; the harness needs this).
 
+## Running inside the app (deployment)
+
+`server/app.ts` can serve the plugin itself: with `PLUGIN_ENABLED=1` the app's server answers `/mcp`,
+`/oauth/*`, `/plugin/*` and the OAuth well-known documents (`plugin/server/mount.ts`, a hook ahead of the app's
+routes), sharing the app's database, stores, accounts and Google sign-in. The OAuth issuer and image origin is
+`PLUGIN_PUBLIC_URL`, defaulting to `APP_URL`. `npm run build` builds the plugin app into `plugin/dist/web` along
+with the client, so on Railway it is one service and one volume. A browser already signed in to the app skips
+the plugin's sign-in page and goes straight to consent. For Google sign-in on the plugin, add
+`<PLUGIN_PUBLIC_URL>/oauth/google/callback` to the Google OAuth client. The standalone server
+(`plugin/server/index.ts`) remains for development and the harness.
+
+The app's own editors now send the revision they loaded with every save; the server refuses (409) when the
+file changed since, and the editor takes the newer version (`DocController.replaceWith`,
+`DeckController.replaceWith`) and says so. That is what keeps a plugin edit from being overwritten by a
+document open in the app.
+
 ## Not in this proof of concept
 
-- **Deployment.** It runs as a separate process sharing the app's data directory; on Railway that means a
-  second service on the same volume, or mounting `/mcp` into the app server.
-- **Merging concurrent edits.** Last writer wins per revision: a stale save reloads the server's version, so
-  up to ~1 s of typing can be lost if the model saves while the user types. The app's own editor (not in
-  ChatGPT) still saves without revision checks.
+- **Merging concurrent edits.** A stale save reloads the server's version, so up to ~1 s of typing can be lost
+  if the model saves while the user types; there is no live sync.
 - **Image upload inside the app** goes through a tool as base64; large images will be slow.

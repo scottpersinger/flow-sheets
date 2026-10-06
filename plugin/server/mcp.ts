@@ -118,7 +118,7 @@ export function appHtml(bundle: Bundle, assetOrigin: string | null): string {
   const head = '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Docs</title>';
   if (assetOrigin) {
     // Served from our own origin, which the resource's CSP (resourceDomains) allows.
-    return `<!doctype html>\n<html lang="en"><head>${head}<link rel="stylesheet" href="${assetOrigin}/app.css?v=${bundle.hash}"></head><body><div id="root"></div><script type="module" src="${assetOrigin}/app.js?v=${bundle.hash}"></script></body></html>`;
+    return `<!doctype html>\n<html lang="en"><head>${head}<link rel="stylesheet" href="${assetOrigin}/plugin/app.css?v=${bundle.hash}"></head><body><div id="root"></div><script type="module" src="${assetOrigin}/plugin/app.js?v=${bundle.hash}"></script></body></html>`;
   }
   // Inlined: the host's default CSP allows inline scripts and styles.
   const js = bundle.js.replace(/<\/script/gi, '<\\/script');

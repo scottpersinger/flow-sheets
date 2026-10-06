@@ -7,7 +7,7 @@
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --watch --watch-path=server --watch-path=shared server/index.ts",
     "dev:client": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --config plugin/vite.config.ts",
     "start": "NODE_ENV=production node server/supervise.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

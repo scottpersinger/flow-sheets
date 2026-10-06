@@ -58,8 +58,8 @@ describe('MCP server', () => {
 
   it('references hosted assets when a public origin is set', () => {
     const html = appHtml({ js: 'x', css: 'y', hash: 'h1' }, 'https://docs.example.com');
-    expect(html).toContain('src="https://docs.example.com/app.js?v=h1"');
-    expect(html).toContain('href="https://docs.example.com/app.css?v=h1"');
+    expect(html).toContain('src="https://docs.example.com/plugin/app.js?v=h1"');
+    expect(html).toContain('href="https://docs.example.com/plugin/app.css?v=h1"');
     expect(html).not.toContain('<style>');
   });
 

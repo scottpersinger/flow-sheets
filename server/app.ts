@@ -19,6 +19,7 @@ import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, VERIFY_TTL_MS, validateCrede
 import { openDb } from './db.ts';
 import { ImageStore } from './images.ts';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
+import { mountPlugin } from '../plugin/server/mount.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
@@ -62,6 +63,11 @@ export interface AppOptions {
   legacyHosts?: string[];
   /** Connector overrides (tests pass a fake fetch). */
   connectors?: Partial<Omit<ConnectorServiceOptions, 'keyFile'>>;
+  /**
+   * Serve the ChatGPT plugin (plugin/) from this server too: MCP at /mcp, OAuth at /oauth and the well-known
+   * documents, the built plugin app from webDir. publicUrl is the origin ChatGPT reaches this server on.
+   */
+  plugin?: { publicUrl: string; webDir: string };
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -122,6 +128,9 @@ export async function buildApp(opts: AppOptions) {
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
+  if (opts.plugin) {
+    await mountPlugin(app, { db, dataDir: opts.dataDir, sheets, images, auth, google, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, production: !!opts.staticDir });
+  }
   // Raw file uploads (xlsx import).
   app.addContentTypeParser([XLSX_MIME, PPTX_MIME, DOCX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
     done(null, body),

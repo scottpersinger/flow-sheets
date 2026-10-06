@@ -269,7 +269,7 @@ export class OAuthServer {
     }
   }
 
-  private setUser(pendingId: string, userId: string): void {
+  setUser(pendingId: string, userId: string): void {
     this.db.prepare('UPDATE oauth_pending SET user_id = ? WHERE id = ?').run(userId, pendingId);
   }
 

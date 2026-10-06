@@ -70,7 +70,7 @@ describe('documents', () => {
     const image = { type: 'image', attrs: { src: '/api/images/0f4e2d8a-1b2c-4d3e-9f80-123456789abc', alt: '', width: null, align: null } };
     await svc.sheets.saveDoc('u1', doc.id, { version: 1, content: { type: 'doc', attrs: { page: null, style: null }, content: [image] } });
     const pub = await svc.get('doc', doc.id);
-    expect(JSON.stringify(pub.data)).toContain('https://plugin.example.com/img/0f4e2d8a-1b2c-4d3e-9f80-123456789abc');
+    expect(JSON.stringify(pub.data)).toContain('https://plugin.example.com/plugin/img/0f4e2d8a-1b2c-4d3e-9f80-123456789abc');
     await svc.save('doc', doc.id, pub.data, pub.rev);
     const stored = await svc.sheets.loadDoc('u1', doc.id);
     expect(JSON.stringify(stored!.doc)).toContain('"/api/images/0f4e2d8a-1b2c-4d3e-9f80-123456789abc"');
@@ -127,7 +127,7 @@ describe('presentations', () => {
     d.slides[0].elements.push({ id: 'img1', type: 'image', x: 10, y: 10, w: 100, h: 100, src: '/api/images/0f4e2d8a-1b2c-4d3e-9f80-123456789abc' } as (typeof d.slides)[0]['elements'][0]);
     await svc.sheets.saveDeck('u1', deck.id, d);
     const pub = await svc.get('deck', deck.id);
-    expect(JSON.stringify(pub.data)).toContain('https://plugin.example.com/img/');
+    expect(JSON.stringify(pub.data)).toContain('https://plugin.example.com/plugin/img/');
     await svc.save('deck', deck.id, pub.data, pub.rev);
     const stored = await svc.sheets.loadDeck('u1', deck.id);
     expect(JSON.stringify(stored!.deck)).toContain('"/api/images/0f4e2d8a-1b2c-4d3e-9f80-123456789abc"');

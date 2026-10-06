@@ -22,10 +22,27 @@ export interface PluginServerOptions {
   production: boolean;
   /** Log request bodies on the MCP endpoint. */
   logBodies?: boolean;
+  /** When hosted inside the app: the account already signed in to the app in this browser, from its cookie. */
+  sessionUser?: (req: http.IncomingMessage) => string | null;
   mcp?: Partial<McpOptions>;
 }
 
+/** The plugin's request handler: which paths it owns, and how to serve them. */
+export interface PluginHandler {
+  handles(pathname: string): boolean;
+  handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void>;
+}
+
+/** Paths the plugin serves; anything else belongs to whoever hosts it. */
+export const PLUGIN_PATH = /^(\/mcp(\/|$)|\/oauth\/|\/plugin\/|\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration)(\/|$))/;
+
+/** A standalone server for the plugin (development, or a host of its own). */
 export function createPluginServer(opts: PluginServerOptions): http.Server {
+  const handler = createPluginHandler(opts);
+  return http.createServer((req, res) => void handler.handle(req, res));
+}
+
+export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
   const { hub, oauth, publicUrl, production } = opts;
 
   /** The built app. Re-read on every request in development so rebuilds show up. */
@@ -54,7 +71,7 @@ export function createPluginServer(opts: PluginServerOptions): http.Server {
     throw e;
   };
 
-  return http.createServer(async (req, res) => {
+  const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const p = url.pathname;
     if (p !== '/mcp') logRequest(req, res, undefined);
@@ -88,6 +105,12 @@ export function createPluginServer(opts: PluginServerOptions): http.Server {
           try {
             const out = await oauth.authorize(Object.fromEntries(url.searchParams));
             if (out.kind === 'redirect') return redirect(res, out.url);
+            // Already signed in to the app in this browser: straight to consent.
+            const known = opts.sessionUser?.(req) ?? null;
+            if (known) {
+              oauth.setUser(out.pendingId, known);
+              return redirect(res, `/oauth/consent?p=${encodeURIComponent(out.pendingId)}`);
+            }
             return html(res, 200, oauth.signInPage(out.pendingId));
           } catch (e) {
             if (e instanceof OAuthError) return html(res, e.status, oauth.errorPage(e.message));
@@ -170,8 +193,8 @@ export function createPluginServer(opts: PluginServerOptions): http.Server {
       }
 
       // --- Images and the app's assets ---
-      if (p.startsWith('/img/') && req.method === 'GET') {
-        const img = hub.imageFile(p.slice('/img/'.length));
+      if (p.startsWith('/plugin/img/') && req.method === 'GET') {
+        const img = hub.imageFile(p.slice('/plugin/img/'.length));
         if (!img || !existsSync(img.file)) {
           res.writeHead(404).end('Not found');
           return;
@@ -180,20 +203,21 @@ export function createPluginServer(opts: PluginServerOptions): http.Server {
         createReadStream(img.file).pipe(res);
         return;
       }
-      if ((p === '/app.js' || p === '/app.css') && req.method === 'GET') {
+      if ((p === '/plugin/app.js' || p === '/plugin/app.css') && req.method === 'GET') {
         const b = bundle();
-        const js = p === '/app.js';
+        const js = p === '/plugin/app.js';
         res.writeHead(200, { 'content-type': js ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8', 'cache-control': production ? 'public, max-age=3600' : 'no-cache', 'access-control-allow-origin': '*' }).end(js ? b.js : b.css);
         return;
       }
-      if (p === '/health') return json(res, 200, { ok: true, auth: oauth ? 'oauth' : 'dev' });
+      if (p === '/plugin/health') return json(res, 200, { ok: true, auth: oauth ? 'oauth' : 'dev' });
       res.writeHead(404).end('Not found');
     } catch (e) {
       console.error(e);
       if (!res.headersSent) json(res, 500, { error: (e as Error).message });
       else res.end();
     }
-  });
+  };
+  return { handles: (pathname) => PLUGIN_PATH.test(pathname), handle };
 }
 
 /** A form body (application/x-www-form-urlencoded) or a JSON body, as flat strings. */

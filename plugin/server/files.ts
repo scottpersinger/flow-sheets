@@ -63,6 +63,9 @@ export interface FileHubOptions {
   dataDir: string;
   /** Public origin of the plugin server; images are served from it. */
   publicUrl: string | null;
+  /** The app's own stores, when the plugin runs inside the app (so writes share one queue). */
+  sheets?: SheetStore;
+  images?: ImageStore;
 }
 
 /** Tools the model may run on a document, in the app's vocabulary. */
@@ -107,8 +110,8 @@ export class FileHub {
 
   constructor(opts: FileHubOptions) {
     this.db = opts.db;
-    this.sheets = new SheetStore(opts.db, path.join(opts.dataDir, 'sheets'));
-    this.images = new ImageStore(opts.db, path.join(opts.dataDir, 'images'));
+    this.sheets = opts.sheets ?? new SheetStore(opts.db, path.join(opts.dataDir, 'sheets'));
+    this.images = opts.images ?? new ImageStore(opts.db, path.join(opts.dataDir, 'images'));
     this.publicUrl = opts.publicUrl?.replace(/\/$/, '') ?? null;
   }
 
@@ -324,13 +327,13 @@ export class FileService {
     return this.images.get(this.userId, id);
   }
 
-  /** Stored "/api/images/<id>" addresses become "<publicUrl>/img/<id>" for the iframe. */
+  /** Stored "/api/images/<id>" addresses become "<publicUrl>/plugin/img/<id>" for the iframe. */
   publicSrc(src: string): string {
-    return this.publicUrl && src.startsWith('/api/images/') ? `${this.publicUrl}/img/${src.slice('/api/images/'.length)}` : src;
+    return this.publicUrl && src.startsWith('/api/images/') ? `${this.publicUrl}/plugin/img/${src.slice('/api/images/'.length)}` : src;
   }
 
   storedSrc(src: string): string {
-    const prefix = this.publicUrl ? `${this.publicUrl}/img/` : null;
+    const prefix = this.publicUrl ? `${this.publicUrl}/plugin/img/` : null;
     return prefix && src.startsWith(prefix) ? `/api/images/${src.slice(prefix.length)}` : src;
   }
 

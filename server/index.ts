@@ -10,11 +10,15 @@ const production = process.env.NODE_ENV === 'production';
 
 mkdirSync(dataDir, { recursive: true });
 
+// The ChatGPT plugin is served from this server when PLUGIN_ENABLED=1 (its OAuth issuer and image origin is
+// PLUGIN_PUBLIC_URL, defaulting to APP_URL); `npm run build` builds its app into plugin/dist/web.
+const pluginUrl = (process.env.PLUGIN_PUBLIC_URL || process.env.APP_URL)?.replace(/\/$/, '');
 const app = await buildApp({
   dataDir,
   staticDir: production ? path.join(root, 'dist', 'client') : undefined,
   secureCookies: process.env.SECURE_COOKIES === '1',
   logger: true,
+  plugin: process.env.PLUGIN_ENABLED === '1' && pluginUrl ? { publicUrl: pluginUrl, webDir: path.join(root, 'plugin', 'dist', 'web') } : undefined,
 });
 
 // In production (e.g. Railway) listen on all interfaces; locally stay on loopback.
