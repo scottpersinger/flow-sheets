@@ -5,6 +5,7 @@
 // (same storage as cell images) and simple shapes. Slides are usually built from a layout: a handful of
 // named arrangements (title, title + body, two columns, ...) that turn plain content into positioned
 // elements, so both the UI and the assistant can make slides without choosing coordinates.
+import { safeLinkUrl } from './links.ts';
 import { SHAPE_KINDS, type ShapeKind } from './shapes.ts';
 import { checkCellImage } from './types.ts';
 import { lineEnds } from './lines.ts';
@@ -39,8 +40,21 @@ export interface TextStyle {
   paraSpacing?: number;
 }
 
+/** A styled span inside a paragraph: a hyperlink, or a few words in another weight or color. */
+export interface TextRun {
+  text: string;
+  /** An http(s) or mailto URL; the run is drawn as a link. */
+  link?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+}
+
 export interface Paragraph {
   text: string;
+  /** Styled spans of the text (links, say); their texts join to `text`. Plain paragraphs have none. */
+  runs?: TextRun[];
   bullet?: boolean;
   /** Indent level for bullets, 0 to 4. */
   level?: number;
@@ -266,7 +280,31 @@ export interface SlideContent {
 
 const M = 60; // slide margin
 
-/** Turn body lines into paragraphs: "- text" or "* text" is a bullet; leading two spaces per level indent it. */
+const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g;
+
+/** The runs of a line written with Markdown links, "see [Fly.io](https://fly.io)"; undefined when it has none. */
+export function parseLinks(line: string): TextRun[] | undefined {
+  const runs: TextRun[] = [];
+  let last = 0;
+  for (const m of line.matchAll(LINK_RE)) {
+    if (m.index > last) runs.push({ text: line.slice(last, m.index) });
+    runs.push({ text: m[1], link: m[2] });
+    last = m.index + m[0].length;
+  }
+  if (!runs.length) return undefined;
+  if (last < line.length) runs.push({ text: line.slice(last) });
+  return runs;
+}
+
+/** A paragraph's text with its links written as Markdown, the inverse of parseLinks. */
+export function textWithLinks(p: Paragraph): string {
+  return p.runs?.length ? p.runs.map((r) => (r.link ? `[${r.text}](${r.link})` : r.text)).join('') : p.text;
+}
+
+/**
+ * Turn body lines into paragraphs: "- text" or "* text" is a bullet; leading two spaces per level indent it;
+ * "[label](url)" is a link.
+ */
 export function toParagraphs(lines: string[] | undefined, bulletsByDefault = false): Paragraph[] {
   const out: Paragraph[] = [];
   for (const raw of lines ?? []) {
@@ -274,8 +312,9 @@ export function toParagraphs(lines: string[] | undefined, bulletsByDefault = fal
       const m = /^(\s*)([-*•]\s+)?(.*)$/.exec(line)!;
       const level = Math.min(4, Math.floor(m[1].length / 2));
       const bullet = !!m[2] || (bulletsByDefault && line.trim() !== '');
-      const text = m[3];
-      out.push({ text, ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) });
+      const runs = parseLinks(m[3]);
+      const text = runs ? runs.map((r) => r.text).join('') : m[3];
+      out.push({ text, ...(runs ? { runs } : {}), ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) });
     }
   }
   return out;
@@ -283,7 +322,7 @@ export function toParagraphs(lines: string[] | undefined, bulletsByDefault = fal
 
 /** Paragraphs back to body lines (the inverse of toParagraphs). */
 export function fromParagraphs(ps: Paragraph[]): string[] {
-  return ps.map((p) => (p.bullet ? `${'  '.repeat(p.level ?? 0)}- ${p.text}` : p.text));
+  return ps.map((p) => (p.bullet ? `${'  '.repeat(p.level ?? 0)}- ${textWithLinks(p)}` : textWithLinks(p)));
 }
 
 function textEl(id: string, role: TextRole, paragraphs: Paragraph[], box: [number, number, number, number], style?: TextStyle): TextElement {
@@ -439,6 +478,7 @@ const MAX_SLIDES = 500;
 const MAX_ELEMENTS = 200;
 const MAX_PARAGRAPHS = 500;
 const MAX_TEXT = 20_000;
+const MAX_RUNS = 200;
 const COORD = 20_000;
 
 const isColor = (v: unknown) => typeof v === 'string' && v.length <= 64;
@@ -461,6 +501,15 @@ export function validateElement(e: unknown, where: string): string | null {
         if (p.size !== undefined && !num(p.size, 4, 400)) return `${where}: invalid paragraph font size`;
         if (p.color !== undefined && !isColor(p.color)) return `${where}: invalid paragraph color`;
         if (p.font !== undefined && (typeof p.font !== 'string' || p.font.length > 64)) return `${where}: invalid paragraph font`;
+        if (p.runs !== undefined) {
+          if (!Array.isArray(p.runs) || p.runs.length > MAX_RUNS) return `${where}: invalid runs`;
+          for (const r of p.runs) {
+            if (!r || typeof r.text !== 'string') return `${where}: invalid run`;
+            if (r.link !== undefined && (typeof r.link !== 'string' || !safeLinkUrl(r.link))) return `${where}: invalid link (use an http, https or mailto URL)`;
+            if (r.color !== undefined && !isColor(r.color)) return `${where}: invalid run color`;
+          }
+          if (p.runs.map((r) => r.text).join('') !== p.text) return `${where}: the runs do not add up to the paragraph text`;
+        }
         chars += p.text.length;
       }
       if (chars > MAX_TEXT) return `${where}: too much text in one element`;

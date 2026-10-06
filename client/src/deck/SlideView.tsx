@@ -13,6 +13,7 @@ import {
   type Slide,
   type SlideElement,
   type TextElement,
+  type TextRun,
   type Theme,
   type ThemeId,
 } from '../../../shared/deck.ts';
@@ -63,6 +64,8 @@ export function textStyleOf(el: TextElement, theme: Theme): CSSProperties {
     fontWeight: s.bold ?? role === 'title' ? 700 : 400,
     fontStyle: s.italic ? 'italic' : 'normal',
     color: s.color ?? (role === 'title' ? theme.heading : role === 'caption' || role === 'subtitle' ? theme.muted : theme.text),
+    // Links follow a color the box sets; otherwise they take the theme accent (styles.css, .sl-link).
+    ...(s.color ? { ['--sl-link' as string]: s.color } : {}),
     textAlign: s.align ?? 'left',
     justifyContent: s.valign === 'middle' ? 'center' : s.valign === 'bottom' ? 'flex-end' : 'flex-start',
   };
@@ -230,22 +233,100 @@ function paragraphStyle(p: Paragraph): CSSProperties {
   if (p.size !== undefined) s.fontSize = p.size;
   if (p.bold !== undefined) s.fontWeight = p.bold ? 700 : 400;
   if (p.italic !== undefined) s.fontStyle = p.italic ? 'italic' : 'normal';
-  if (p.color) s.color = p.color;
+  if (p.color) {
+    s.color = p.color;
+    (s as Record<string, string>)['--sl-link'] = p.color;
+  }
   if (p.font) s.fontFamily = `"${p.font.replace(/"/g, '')}", inherit`;
   return s;
 }
 
-export const Paragraphs = memo(function Paragraphs({ paragraphs }: { paragraphs: Paragraph[] }) {
+function runStyle(r: TextRun): CSSProperties {
+  const s: CSSProperties = {};
+  if (r.bold !== undefined) s.fontWeight = r.bold ? 700 : 400;
+  if (r.italic !== undefined) s.fontStyle = r.italic ? 'italic' : 'normal';
+  if (r.underline) s.textDecoration = 'underline';
+  if (r.color) s.color = r.color;
+  return s;
+}
+
+/**
+ * A run of a paragraph. Links open when the slide is shown (present mode, thumbnails are too small to matter);
+ * on the editor canvas a click selects the box as usual and cmd/ctrl-click opens the link.
+ */
+function Run({ run, index, live }: { run: TextRun; index: number; live: boolean }) {
+  const style = runStyle(run);
+  if (!run.link) {
+    return (
+      <span data-r={index} style={style}>
+        {run.text}
+      </span>
+    );
+  }
+  return (
+    <a
+      className="sl-link"
+      data-r={index}
+      href={run.link}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={style}
+      onMouseDown={(e) => {
+        if (!live && (e.metaKey || e.ctrlKey)) e.stopPropagation(); // open, don't start a drag
+      }}
+      onClick={(e) => {
+        if (live) e.stopPropagation(); // don't also advance the slide
+        else if (!(e.metaKey || e.ctrlKey)) e.preventDefault();
+      }}
+    >
+      {run.text}
+    </a>
+  );
+}
+
+export const Paragraphs = memo(function Paragraphs({ paragraphs, live = false }: { paragraphs: Paragraph[]; live?: boolean }) {
   return (
     <>
       {paragraphs.map((p, i) => (
         <div key={i} className={`sl-p${p.bullet ? ' bullet' : ''}`} data-bullet={p.bullet ? '1' : undefined} data-level={p.level || undefined} data-p={i} style={paragraphStyle(p)}>
-          {p.text || '​'}
+          {p.runs?.length ? p.runs.map((r, k) => <Run key={k} run={r} index={k} live={live} />) : p.text || '​'}
         </div>
       ))}
     </>
   );
 });
+
+/**
+ * The runs of an edited paragraph block, so links survive retyping: a span or anchor the editor made keeps the
+ * look of the original run it came from; anything else is plain text. Undefined when the block has no links.
+ */
+function editedRuns(block: HTMLElement, source: Paragraph | undefined): TextRun[] | undefined {
+  if (!block.querySelector('a[data-r]')) return undefined;
+  const runs: TextRun[] = [];
+  const walk = (node: Node) => {
+    if (node instanceof HTMLElement && node.dataset.r !== undefined) {
+      const text = (node.textContent ?? '').replace(/​/g, '');
+      const orig = source?.runs?.[Number(node.dataset.r)];
+      if (text) runs.push({ ...(orig ?? {}), text });
+      return;
+    }
+    if (node instanceof HTMLElement && node.tagName === 'BR') {
+      runs.push({ text: '\n' });
+      return;
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = (node.textContent ?? '').replace(/​/g, '');
+      const prev = runs[runs.length - 1];
+      if (!text) return;
+      if (prev && Object.keys(prev).length === 1) prev.text += text;
+      else runs.push({ text });
+      return;
+    }
+    for (const c of Array.from(node.childNodes)) walk(c);
+  };
+  walk(block);
+  return runs.length ? runs : undefined;
+}
 
 /**
  * Read paragraphs back from an edited contentEditable: each block is a paragraph. Blocks keep their bullet, and
@@ -261,11 +342,12 @@ function parseEditedText(root: HTMLElement, original: Paragraph[]): Paragraph[] 
   }
   let prev: Paragraph | undefined;
   for (const b of blocks) {
-    const text = (b.innerText ?? b.textContent ?? '').replace(/​/g, '').replace(/\n$/, '');
     const bullet = b.dataset.bullet !== undefined ? b.dataset.bullet === '1' : !!prev?.bullet;
     const level = b.dataset.level !== undefined ? Number(b.dataset.level) || 0 : (prev?.level ?? 0);
     const source = b.dataset.p !== undefined ? original[Number(b.dataset.p)] : prev;
-    const p: Paragraph = { ...overridesOf(source), text, ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) };
+    const runs = editedRuns(b, source);
+    const text = runs ? runs.map((r) => r.text).join('') : (b.innerText ?? b.textContent ?? '').replace(/​/g, '').replace(/\n$/, '');
+    const p: Paragraph = { ...overridesOf(source), text, ...(runs ? { runs } : {}), ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) };
     out.push(p);
     prev = p;
   }
@@ -386,7 +468,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
             }
             return (
               <div key={el.id} {...common} className="sl-el sl-text" style={style}>
-                <Paragraphs paragraphs={el.paragraphs} />
+                <Paragraphs paragraphs={el.paragraphs} live={!onElementMouseDown} />
               </div>
             );
           }

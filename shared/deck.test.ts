@@ -10,6 +10,24 @@ describe('deck model', () => {
     expect(fromParagraphs(ps)).toEqual(['Plain', '- Bullet', '  - Nested', '    - Deeper']);
     // Body text is bulleted by default; empty lines stay plain.
     expect(toParagraphs(['One', ''], true)).toEqual([{ text: 'One', bullet: true }, { text: '' }]);
+    // Markdown links become runs and are written back the same way.
+    const linked = toParagraphs(['- See [Fly.io](https://fly.io) or [mail us](mailto:ops@example.com)', 'Plain']);
+    expect(linked).toEqual([
+      {
+        text: 'See Fly.io or mail us',
+        runs: [{ text: 'See ' }, { text: 'Fly.io', link: 'https://fly.io' }, { text: ' or ' }, { text: 'mail us', link: 'mailto:ops@example.com' }],
+        bullet: true,
+      },
+      { text: 'Plain' },
+    ]);
+    expect(fromParagraphs(linked)).toEqual(['- See [Fly.io](https://fly.io) or [mail us](mailto:ops@example.com)', 'Plain']);
+  });
+
+  it('validates runs and their links', () => {
+    const deckWith = (p: object): Deck => ({ version: 1, theme: 'light', slides: [{ id: 's', elements: [{ id: 't', type: 'text', x: 0, y: 0, w: 100, h: 50, paragraphs: [p as never] }] }] });
+    expect(validateDeck(deckWith({ text: 'ab', runs: [{ text: 'a', link: 'https://a.test' }, { text: 'b' }] }))).toBeNull();
+    expect(validateDeck(deckWith({ text: 'ab', runs: [{ text: 'a', link: 'javascript:alert(1)' }, { text: 'b' }] }))).toMatch(/invalid link/);
+    expect(validateDeck(deckWith({ text: 'ab', runs: [{ text: 'a' }] }))).toMatch(/do not add up/);
   });
 
   it('builds slides from layouts and reads their content back', () => {

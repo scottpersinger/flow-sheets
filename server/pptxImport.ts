@@ -19,8 +19,10 @@ import {
   type SlideElement,
   type TextElement,
   type TextRole,
+  type TextRun,
   type TextStyle,
 } from '../shared/deck.ts';
+import { safeLinkUrl } from '../shared/links.ts';
 import { shapeFromPptx } from '../shared/shapes.ts';
 import { MAX_CELL_IMAGE_BYTES } from '../shared/types.ts';
 import { ImportError, IMPORT_LIMITS } from './xlsxImport.ts';
@@ -139,7 +141,9 @@ class Importer {
     if (!doc) return [];
     return children(root(doc, 'Relationships'), 'Relationship').map((r) => {
       const a = attrs(r);
-      return { id: a.Id, type: a.Type, target: resolvePath(dir, a.Target) };
+      // Hyperlinks and linked pictures point outside the file; everything else is a part next to this one.
+      const external = a.TargetMode === 'External' || /^[a-z][a-z0-9+.-]*:/i.test(a.Target ?? '');
+      return { id: a.Id, type: a.Type, target: external ? (a.Target ?? '') : resolvePath(dir, a.Target) };
     });
   }
 
@@ -239,7 +243,7 @@ class Importer {
     for (const node of kids(tree)) {
       const tag = tagOf(node);
       if (tag === 'p:sp') {
-        const made = await this.shape(node, inherit, group);
+        const made = await this.shape(node, rels, inherit, group);
         out.push(...made);
         this.remember(attrs(path(node, 'p:nvSpPr', 'p:cNvPr')).id, made[0]);
       } else if (tag === 'p:pic') {
@@ -458,7 +462,7 @@ class Importer {
   }
 
   /** A shape becomes a shape element, a text element, or both (a filled shape with text keeps its text styling). */
-  private async shape(sp: XNode, inherit: XNode[], group: GroupTransform | null): Promise<SlideElement[]> {
+  private async shape(sp: XNode, rels: Rel[], inherit: XNode[], group: GroupTransform | null): Promise<SlideElement[]> {
     const ph = path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph');
     const phAttrs = attrs(ph);
     const phType = ph ? (phAttrs.type ?? 'body') : undefined;
@@ -553,7 +557,8 @@ class Importer {
       else if (child(pPr, 'a:buChar') || child(pPr, 'a:buAutoNum') || child(pPr, 'a:buBlip')) bullet = text.trim() !== '';
       else bullet = bodyBullets && !!ph && text.trim() !== '';
       const level = Math.min(4, num(attrs(pPr).lvl) ?? 0);
-      ps.push({ text, ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) });
+      const runs = this.linkRuns(p, rels);
+      ps.push({ text, ...(runs ? { runs } : {}), ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) });
     }
     // Trailing empty paragraphs are noise.
     while (ps.length > 1 && ps[ps.length - 1].text.trim() === '') ps.pop();
@@ -578,7 +583,50 @@ class Importer {
       if (run.color && run.color !== base.color) ps[k].color = run.color;
       if (run.font && run.font !== base.font) ps[k].font = run.font;
     });
+    // Runs only keep what differs from their paragraph (PowerPoint repeats the box's look on every run).
+    for (const p of ps) {
+      for (const r of p.runs ?? []) {
+        if (r.color === (p.color ?? st.color)) delete r.color;
+        if (r.bold === (p.bold ?? base.bold)) delete r.bold;
+        if (r.italic === (p.italic ?? base.italic)) delete r.italic;
+      }
+    }
     return onShape ? [onShape, el] : [el];
+  }
+
+  /**
+   * The runs of a paragraph that holds a hyperlink, so the link (and the look of each run) survives; undefined
+   * for paragraphs without links, which stay plain text.
+   */
+  private linkRuns(p: XNode, rels: Rel[]): TextRun[] | undefined {
+    const nodes = kids(p).filter((n) => ['a:r', 'a:fld', 'a:br'].includes(tagOf(n)));
+    if (!nodes.some((n) => child(child(n, 'a:rPr'), 'a:hlinkClick'))) return undefined;
+    const runs: TextRun[] = [];
+    for (const n of nodes) {
+      if (tagOf(n) === 'a:br') {
+        runs.push({ text: '\n' });
+        continue;
+      }
+      const text = textOf(child(n, 'a:t'));
+      if (!text) continue;
+      const rPrNode = child(n, 'a:rPr');
+      const rPr = attrs(rPrNode);
+      const rid = attrs(child(rPrNode, 'a:hlinkClick'))['r:id'];
+      const link = rid ? safeLinkUrl(rels.find((r) => r.id === rid)?.target ?? '') : null;
+      const run: TextRun = { text };
+      if (link) run.link = link;
+      if (rPr.b !== undefined) run.bold = rPr.b === '1';
+      if (rPr.i !== undefined) run.italic = rPr.i === '1';
+      if (!link && rPr.u && rPr.u !== 'none') run.underline = true;
+      const color = this.solidColor(rPrNode);
+      if (color) run.color = color;
+      // Neighbouring runs that look the same (PowerPoint splits text at spelling marks and edits) join up.
+      const prev = runs[runs.length - 1];
+      const same = (a: TextRun, b: TextRun) => a.link === b.link && a.bold === b.bold && a.italic === b.italic && a.underline === b.underline && a.color === b.color;
+      if (prev && same(prev, run)) prev.text += text;
+      else runs.push(run);
+    }
+    return runs.length ? runs : undefined;
   }
 
   /** A font size in our units (points on the 960-wide canvas) from PowerPoint's hundredths of a point. */

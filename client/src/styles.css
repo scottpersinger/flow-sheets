@@ -2185,6 +2185,10 @@ button.agent-tool-label:hover {
 .sl-p + .sl-p {
   margin-top: var(--sl-para, 0.3em);
 }
+.sl-p .sl-link {
+  color: var(--sl-link, var(--sl-accent));
+  text-decoration: underline;
+}
 .sl-p.bullet::before {
   content: '•';
   position: absolute;

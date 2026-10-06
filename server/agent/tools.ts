@@ -25,7 +25,7 @@ const layout = z
 const slideContentFields = {
   title: z.string().max(500).optional(),
   subtitle: z.string().max(1000).optional().describe('For the title and section layouts.'),
-  body: z.array(z.string().max(2000)).max(100).optional().describe('Body paragraphs, one string each; they become bullets. Start a line with two spaces per indent level for sub-bullets.'),
+  body: z.array(z.string().max(2000)).max(100).optional().describe('Body paragraphs, one string each; they become bullets. Start a line with two spaces per indent level for sub-bullets. "[label](https://...)" makes a link.'),
   body2: z.array(z.string().max(2000)).max(100).optional().describe('Right column of the two-column layout.'),
   image: z.string().optional().describe('For the image layout: an http(s) URL of a PNG, JPEG, GIF or WebP image, or the /api/images/... address of an image attached to the chat.'),
   caption: z.string().max(1000).optional().describe('Caption under the image.'),
@@ -44,7 +44,7 @@ const elementSpec = z
     y: z.number().optional().describe('Top edge in points (the slide is 540 tall).'),
     w: z.number().min(0).optional(),
     h: z.number().min(0).optional(),
-    text: z.string().max(20_000).optional().describe('Text elements: the paragraphs, one per line; lines starting with "- " are bullets (two leading spaces per indent level). Shapes: a label centered in the shape.'),
+    text: z.string().max(20_000).optional().describe('Text elements: the paragraphs, one per line; lines starting with "- " are bullets (two leading spaces per indent level); "[label](https://...)" makes a link. Shapes: a label centered in the shape.'),
     role: z.enum(['title', 'subtitle', 'body', 'caption']).optional().describe('Text elements: picks the default size and font.'),
     size: z.number().min(4).max(400).optional().describe('Font size in points (text elements and shape labels; shape labels default to 18).'),
     bold: z.boolean().optional(),

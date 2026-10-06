@@ -22,7 +22,7 @@ const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships
  */
 async function googleStylePptx(): Promise<Buffer> {
   const rels = (items: [string, string, string][]) =>
-    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.map(([id, type, target]) => `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`).join('')}</Relationships>`;
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.map(([id, type, target]) => `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"${target.startsWith('http') ? ' TargetMode="External"' : ''}/>`).join('')}</Relationships>`;
   const lvl = (inner: string) => `<a:lvl1pPr>${inner}</a:lvl1pPr>`;
   const sp = (id: string, inner: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="s${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>${inner}</p:sp>`;
   const ph = (id: string, phAttrs: string, inner: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="s${id}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:ph ${phAttrs}/></p:nvPr></p:nvSpPr>${inner}</p:sp>`;
@@ -107,6 +107,8 @@ describe('pptx export and import', () => {
     // a hyperlink inside it does not recolor the whole box.
     const fly = texts.find((t) => t.paragraphs[0].text === 'Fly.io machines')!;
     expect(fly.style).toEqual({ size: 19, font: 'Arial', italic: true, align: 'center', valign: 'middle' });
+    // The link itself survives as a run in the link color; the rest of the paragraph is plain.
+    expect(fly.paragraphs[0].runs).toEqual([{ text: 'Fly.io', link: 'https://fly.io', color: '#0097a7' }, { text: ' machines' }]);
     // A paragraph that is only a link keeps the link color.
     const rollbar = texts.find((t) => t.paragraphs[0].text === 'Rollbar ')!;
     expect(rollbar.style?.color).toBeUndefined();
@@ -156,6 +158,7 @@ describe('pptx export and import', () => {
         paragraphs: [
           { text: '2-3x', size: 47, bold: false },
           { text: 'Average program cost reduction', bold: true },
+          { text: 'See the report', runs: [{ text: 'See the ' }, { text: 'report', link: 'https://example.com/report' }] },
         ],
         style: { size: 17, align: 'center', color: '#ffffff', font: 'Poppins', lineHeight: 1.5 },
       },
@@ -222,6 +225,7 @@ describe('pptx export and import', () => {
     expect(figure.style).toMatchObject({ size: 47, align: 'center', color: '#ffffff', font: 'Poppins', lineHeight: 1.5 });
     expect(figure.paragraphs[0].size).toBeUndefined(); // the first paragraph is the box's own style
     expect(figure.paragraphs[1]).toMatchObject({ text: 'Average program cost reduction', size: 17, bold: true });
+    expect(figure.paragraphs[2].runs).toEqual([{ text: 'See the ' }, { text: 'report', link: 'https://example.com/report' }]);
 
     // Preset geometries map both ways through the shape table.
     expect(s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'star')).toMatchObject({ fill: '#ffcc00', w: 100, h: 100 });

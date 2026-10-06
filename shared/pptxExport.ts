@@ -2,7 +2,7 @@
 // exactly PowerPoint's 16:9 layout (10 × 5.625 inches), so positions map 1:1. Runs in the browser (File →
 // Download as PowerPoint) and in Node (tests); the caller loads images, since that differs between the two.
 import type PptxGenJS from 'pptxgenjs';
-import { ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideElement, type TextElement } from './deck.ts';
+import { ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideElement, type TextElement, type TextRun } from './deck.ts';
 
 /** PowerPoint's arrowhead types for ours (its "arrow" is the open one, "stealth" the barbed filled one). */
 const PPTX_ARROW: Record<Exclude<ArrowStyle, 'none'>, 'arrow' | 'diamond' | 'oval' | 'stealth' | 'triangle'> = { arrow: 'stealth', open: 'arrow', triangle: 'triangle', circle: 'oval', diamond: 'diamond' };
@@ -97,18 +97,30 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
   async function addElement(s: PptxGenJS.Slide, el: SlideElement): Promise<void> {
     const box = { x: inch(el.x), y: inch(el.y), w: inch(el.w), h: inch(el.h) };
     if (el.type === 'text') {
-      const runs: PptxGenJS.TextProps[] = el.paragraphs.map((p) => ({
-        text: p.text,
-        options: {
-          breakLine: true,
+      const runs: PptxGenJS.TextProps[] = el.paragraphs.flatMap((p) => {
+        const para: PptxGenJS.TextPropsOptions = {
           ...(p.bullet ? { bullet: { indent: 18 }, indentLevel: p.level ?? 0 } : {}),
           ...(p.size !== undefined ? { fontSize: pt(p.size) } : {}),
           ...(p.bold !== undefined ? { bold: p.bold } : {}),
           ...(p.italic !== undefined ? { italic: p.italic } : {}),
           ...(hexColor(p.color) ? { color: hexColor(p.color) } : {}),
           ...(p.font ? { fontFace: p.font } : {}),
-        },
-      }));
+        };
+        const pieces = p.runs?.length ? p.runs : [{ text: p.text }];
+        // The paragraph's own options go on every run: pptxgenjs reads them from the run that starts a paragraph.
+        return pieces.map((r: TextRun, i) => ({
+          text: r.text,
+          options: {
+            ...para,
+            breakLine: i === pieces.length - 1,
+            ...(r.bold !== undefined ? { bold: r.bold } : {}),
+            ...(r.italic !== undefined ? { italic: r.italic } : {}),
+            ...(r.underline ? { underline: { style: 'sng' as const } } : {}),
+            ...(hexColor(r.color) ? { color: hexColor(r.color) } : {}),
+            ...(r.link ? { hyperlink: { url: r.link } } : {}),
+          },
+        }));
+      });
       s.addText(runs.length ? runs : [{ text: '' }], textOptions(el, theme));
       return;
     }
