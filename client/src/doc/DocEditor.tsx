@@ -214,27 +214,22 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
     ctl.focus();
   };
 
-  if (!paged) {
-    return (
-      <div className="doc-pages-outer" ref={outerRef}>
-        <div className="doc-sheet">
-          <div className={`doc-editor${empty ? ' doc-empty' : ''}`} ref={ref} onMouseDown={onMarginClick} />
-        </div>
-      </div>
-    );
-  }
+  // One tree for both modes: the editor element must stay the same DOM node across View → Pages / Pageless,
+  // since the ProseMirror view is mounted in it once.
   return (
-    <div className="doc-pages-outer" ref={outerRef} style={{ height: columnH * scale + 24 }}>
-      <div className="doc-pages" style={{ width: m.pageW, height: columnH, transform: `scale(${scale})`, transformOrigin: 'top center' }}>
-        {Array.from({ length: pageCount }, (_, k) => (
-          <div key={k} className="doc-page-frame" style={{ top: k * m.stride, height: m.pageH }} aria-hidden="true">
-            <PageChrome setup={setup} page={k + 1} pages={pageCount} />
-          </div>
-        ))}
+    <div className="doc-pages-outer" ref={outerRef} style={paged ? { height: columnH * scale + 24 } : undefined}>
+      <div className={paged ? 'doc-pages' : 'doc-sheet'} style={paged ? { width: m.pageW, height: columnH, transform: `scale(${scale})`, transformOrigin: 'top center' } : undefined}>
+        {paged
+          ? Array.from({ length: pageCount }, (_, k) => (
+              <div key={k} className="doc-page-frame" style={{ top: k * m.stride, height: m.pageH }} aria-hidden="true">
+                <PageChrome setup={setup} page={k + 1} pages={pageCount} />
+              </div>
+            ))
+          : []}
         <div
-          className={`doc-editor doc-editor-paged${empty ? ' doc-empty' : ''}`}
+          className={`doc-editor${paged ? ' doc-editor-paged' : ''}${empty ? ' doc-empty' : ''}`}
           ref={ref}
-          style={{ padding: `${m.mt}px ${m.mr}px ${m.mb}px ${m.ml}px`, minHeight: columnH }}
+          style={paged ? { padding: `${m.mt}px ${m.mr}px ${m.mb}px ${m.ml}px`, minHeight: columnH } : undefined}
           onMouseDown={onMarginClick}
         />
       </div>
