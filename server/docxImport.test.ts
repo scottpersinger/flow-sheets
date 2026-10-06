@@ -68,6 +68,20 @@ describe('docx import', () => {
     );
   });
 
+  it('keeps page breaks and reads the page size, orientation and margins', async () => {
+    const body = [
+      p(`${r('first page')}<w:r><w:br w:type="page"/></w:r>`),
+      p(r('second page')),
+      '<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440"/></w:sectPr>',
+    ].join('');
+    const { doc } = await importDocx(await buildDocx(body), sink);
+    const node = docNode(doc);
+    expect(docToMarkdown(node)).toBe('first page\n\n\\newpage\n\nsecond page');
+    expect(node.attrs.page).toEqual({ size: 'a4', orientation: 'landscape', margins: { top: 0.5, right: 1, bottom: 0.5, left: 1 } });
+    const plain = await importDocx(await buildDocx(p(r('x'))), sink);
+    expect(docNode(plain.doc).attrs.page).toBeNull();
+  });
+
   it('rejects files that are not Word documents and handles empty ones', async () => {
     await expect(importDocx(Buffer.from('garbage'), sink)).rejects.toThrow(/not a valid Word document/);
     expect(await isDocx(Buffer.from('garbage'))).toBe(false);

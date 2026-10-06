@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { ARROW_STYLE_IDS, buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
-import { ALIGNMENTS, BLOCK_TYPES, docNode } from '../../shared/doc.ts';
+import { ALIGNMENTS, BLOCK_TYPES, docNode, MAX_HEADER_CHARS, MAX_MARGIN, MIN_MARGIN, PAGE_NUMBER_POSITIONS, PAGE_SIZE_IDS } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
 import { docOutline } from '../../shared/agent/docRead.ts';
 import { SHAPE_KINDS } from '../../shared/shapes.ts';
@@ -317,6 +317,25 @@ const schemas = {
       align: z.enum(ALIGNMENTS).optional().describe('left (default), center or right.'),
     })
     .describe('Add an image block to the open document. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)'),
+  set_page_setup: z
+    .object({
+      mode: z.enum(['pages', 'pageless']).optional().describe('pages: fixed pages with margins and visible boundaries; pageless: one continuous column.'),
+      size: z.enum(PAGE_SIZE_IDS).optional().describe('Paper size: letter, legal or a4.'),
+      orientation: z.enum(['portrait', 'landscape']).optional(),
+      margins: z
+        .object({
+          top: z.number().min(MIN_MARGIN).max(MAX_MARGIN).optional(),
+          right: z.number().min(MIN_MARGIN).max(MAX_MARGIN).optional(),
+          bottom: z.number().min(MIN_MARGIN).max(MAX_MARGIN).optional(),
+          left: z.number().min(MIN_MARGIN).max(MAX_MARGIN).optional(),
+        })
+        .optional()
+        .describe('Margins in inches; only the ones given change.'),
+      page_numbers: z.enum(PAGE_NUMBER_POSITIONS).optional().describe('Where page numbers are printed, or none.'),
+      header: z.string().max(MAX_HEADER_CHARS).optional().describe('Text in the top margin of every page; {page} and {pages} are replaced. "" removes it.'),
+      footer: z.string().max(MAX_HEADER_CHARS).optional().describe('Text in the bottom margin of every page; {page} and {pages} are replaced. "" removes it.'),
+    })
+    .describe('Change the page setup of the open document: pages or pageless, paper size, orientation, margins, page numbers, header and footer. Only the settings given change. A page break is "\\newpage" on its own line in Markdown.'),
 
   request_app_change: z
     .object({

@@ -12,8 +12,98 @@ import { checkCellImage } from './types.ts';
 
 export interface Doc {
   version: 1;
-  /** ProseMirror JSON of the document node (`{ type: 'doc', content: [...] }`). */
+  /** ProseMirror JSON of the document node (`{ type: 'doc', attrs: { page }, content: [...] }`). */
   content: DocJSON;
+}
+
+// --- Pages -------------------------------------------------------------------------------------
+
+export const PAGE_SIZE_IDS = ['letter', 'legal', 'a4'] as const;
+export type PageSizeId = (typeof PAGE_SIZE_IDS)[number];
+/** Paper sizes in inches (portrait). */
+export const PAGE_SIZES: Record<PageSizeId, { name: string; w: number; h: number }> = {
+  letter: { name: 'Letter (8.5 × 11 in)', w: 8.5, h: 11 },
+  legal: { name: 'Legal (8.5 × 14 in)', w: 8.5, h: 14 },
+  a4: { name: 'A4 (210 × 297 mm)', w: 8.27, h: 11.69 },
+};
+export const PAGE_NUMBER_POSITIONS = ['none', 'bottom-center', 'bottom-right', 'top-right'] as const;
+export type PageNumberPosition = (typeof PAGE_NUMBER_POSITIONS)[number];
+
+/** How a document is paginated and printed; stored as the `page` attribute of the document node. */
+export interface PageSetup {
+  /** Pages: a fixed page size with margins and visible page boundaries. Pageless: one continuous column. */
+  mode: 'pages' | 'pageless';
+  size: PageSizeId;
+  orientation: 'portrait' | 'landscape';
+  /** Inches. */
+  margins: { top: number; right: number; bottom: number; left: number };
+  pageNumbers: PageNumberPosition;
+  /** Plain text drawn in the top and bottom margins of every page; {page} and {pages} are replaced. */
+  header: string;
+  footer: string;
+}
+
+export const DEFAULT_PAGE_SETUP: PageSetup = {
+  mode: 'pages',
+  size: 'letter',
+  orientation: 'portrait',
+  margins: { top: 1, right: 1, bottom: 1, left: 1 },
+  pageNumbers: 'none',
+  header: '',
+  footer: '',
+};
+
+export const PX_PER_INCH = 96;
+/** Grey gap drawn between pages on screen, in pixels. */
+export const PAGE_GAP = 24;
+export const MIN_MARGIN = 0.25;
+export const MAX_MARGIN = 3;
+export const MAX_HEADER_CHARS = 200;
+
+/** Pixel geometry of a page setup: the page, its margins and the content box inside them. */
+export function pageMetrics(p: PageSetup) {
+  const size = PAGE_SIZES[p.size];
+  const [wIn, hIn] = p.orientation === 'landscape' ? [size.h, size.w] : [size.w, size.h];
+  const pageW = Math.round(wIn * PX_PER_INCH);
+  const pageH = Math.round(hIn * PX_PER_INCH);
+  const mt = Math.round(p.margins.top * PX_PER_INCH);
+  const mr = Math.round(p.margins.right * PX_PER_INCH);
+  const mb = Math.round(p.margins.bottom * PX_PER_INCH);
+  const ml = Math.round(p.margins.left * PX_PER_INCH);
+  return { pageW, pageH, mt, mr, mb, ml, contentW: pageW - ml - mr, contentH: pageH - mt - mb, stride: pageH + PAGE_GAP, widthIn: wIn, heightIn: hIn };
+}
+
+/** The page setup of a document node (defaults for anything it does not say). */
+export function pageSetupOf(node: PMNode): PageSetup {
+  const p = (node.attrs.page ?? {}) as Partial<PageSetup>;
+  return { ...DEFAULT_PAGE_SETUP, ...p, margins: { ...DEFAULT_PAGE_SETUP.margins, ...(p.margins ?? {}) } };
+}
+
+/** Why a page setup is invalid, or null. */
+export function checkPageSetup(p: unknown): string | null {
+  if (p === null || p === undefined) return null;
+  if (typeof p !== 'object') return 'Invalid page setup';
+  const s = p as Partial<PageSetup>;
+  if (s.mode !== undefined && s.mode !== 'pages' && s.mode !== 'pageless') return 'Invalid page mode';
+  if (s.size !== undefined && !PAGE_SIZE_IDS.includes(s.size)) return 'Invalid page size';
+  if (s.orientation !== undefined && s.orientation !== 'portrait' && s.orientation !== 'landscape') return 'Invalid page orientation';
+  if (s.margins !== undefined) {
+    if (!s.margins || typeof s.margins !== 'object') return 'Invalid margins';
+    for (const k of ['top', 'right', 'bottom', 'left'] as const) {
+      const v = s.margins[k];
+      if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < MIN_MARGIN || v > MAX_MARGIN)) return `Invalid ${k} margin (${MIN_MARGIN} to ${MAX_MARGIN} inches)`;
+    }
+  }
+  if (s.pageNumbers !== undefined && !PAGE_NUMBER_POSITIONS.includes(s.pageNumbers)) return 'Invalid page number position';
+  for (const k of ['header', 'footer'] as const) {
+    if (s[k] !== undefined && (typeof s[k] !== 'string' || s[k].length > MAX_HEADER_CHARS)) return `Invalid ${k}`;
+  }
+  return null;
+}
+
+/** Header or footer text with {page} and {pages} filled in. */
+export function pageText(template: string, page: number, pages: number): string {
+  return template.replace(/\{page\}/gi, String(page)).replace(/\{pages\}/gi, String(pages));
 }
 
 export interface DocJSON {
@@ -90,7 +180,7 @@ const alignFromDOM = (dom: HTMLElement | string): Record<string, unknown> | fals
 };
 
 const nodes: Record<string, NodeSpec> = {
-  doc: { content: 'block+' },
+  doc: { content: 'block+', attrs: { page: { default: null } } },
   paragraph: {
     content: 'inline*',
     group: 'block',
@@ -135,6 +225,14 @@ const nodes: Record<string, NodeSpec> = {
     toDOM: () => ['pre', ['code', 0]],
   },
   horizontal_rule: { group: 'block', parseDOM: [{ tag: 'hr' }], toDOM: () => ['hr'] },
+  /** An explicit page break: what follows starts on a new page (in Pages mode and in print). */
+  page_break: {
+    group: 'block',
+    atom: true,
+    selectable: true,
+    parseDOM: [{ tag: 'div.doc-page-break' }, { tag: 'div', getAttrs: (dom) => (typeof dom !== 'string' && /page/.test(dom.style.breakBefore + dom.style.pageBreakBefore + dom.style.breakAfter + dom.style.pageBreakAfter) ? null : false) }],
+    toDOM: () => ['div', { class: 'doc-page-break', 'data-label': 'Page break' }],
+  },
   image: {
     group: 'block',
     draggable: true,
@@ -276,6 +374,8 @@ export function validateDoc(d: unknown): string | null {
     return `Invalid document: ${e instanceof Error ? e.message : String(e)}`;
   }
   if (node.childCount > MAX_BLOCKS) return 'Too many blocks';
+  const pageProblem = checkPageSetup(node.attrs.page);
+  if (pageProblem) return pageProblem;
   if (node.content.size > MAX_DOC_CHARS) return 'Document is too large';
   let problem: string | null = null;
   node.descendants((n) => {
@@ -304,7 +404,7 @@ export function docText(node: PMNode): string {
 }
 
 /** The kind of a top-level block as the assistant sees it. */
-export function blockType(node: PMNode): BlockType | 'image' | 'horizontal_rule' {
+export function blockType(node: PMNode): BlockType | 'image' | 'horizontal_rule' | 'page_break' {
   switch (node.type.name) {
     case 'heading':
       return `heading${node.attrs.level as HeadingLevel}`;
@@ -312,6 +412,7 @@ export function blockType(node: PMNode): BlockType | 'image' | 'horizontal_rule'
     case 'subtitle':
     case 'image':
     case 'horizontal_rule':
+    case 'page_break':
     case 'bullet_list':
     case 'ordered_list':
     case 'blockquote':

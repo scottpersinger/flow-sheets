@@ -8,9 +8,10 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirr
 import { EditorState, NodeSelection, TextSelection, type Command, type Plugin, type Transaction } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { useSyncExternalStore } from 'react';
-import { docSchema, type Alignment, type BlockType, type Doc, type HeadingLevel, type MarkName } from '../../../shared/doc.ts';
+import { docSchema, pageSetupOf, type Alignment, type BlockType, type Doc, type HeadingLevel, type MarkName, type PageSetup } from '../../../shared/doc.ts';
 import { AutoSaver } from '../state/store.ts';
 import { autoLinkOnEnter, autoLinkRule } from './autolink.ts';
+import { paginationOf, paginationPlugin, type Pagination } from './pagination.ts';
 import { CLOSE_HISTORY_META, DocStore } from './store.ts';
 
 const s = docSchema;
@@ -23,6 +24,8 @@ export class DocController {
   readonly saver: AutoSaver<Doc>;
   /** The page's link dialog, opened by Mod-K and the toolbar. */
   onLinkPrompt: (() => void) | null = null;
+  /** Zoom of the page view: a percentage, or fit the page to the window width. */
+  zoom: number | 'fit' = 'fit';
   version = 0;
   private view: EditorView | null = null;
   private listeners = new Set<() => void>();
@@ -65,6 +68,16 @@ export class DocController {
 
   focus(): void {
     this.view?.focus();
+  }
+
+  /** The editor's root element while mounted (for printing). */
+  editorDom(): HTMLElement | null {
+    return this.view?.dom ?? null;
+  }
+
+  setZoom(zoom: number | 'fit'): void {
+    this.zoom = zoom;
+    this.emit();
   }
 
   dispatch = (tr: Transaction, group?: string): void => {
@@ -174,12 +187,46 @@ export class DocController {
         Enter: splitListItem(n.list_item),
         Tab: sinkListItem(n.list_item),
         'Shift-Tab': liftListItem(n.list_item),
-        'Mod-Enter': chainCommands(exitCode, hardBreak),
+        'Mod-Enter': () => this.insertPageBreak(),
         'Shift-Enter': chainCommands(exitCode, hardBreak),
         Backspace: undoInputRule,
       }),
       keymap(baseKeymap),
+      paginationPlugin(),
     ];
+  }
+
+  // --- Pages ----------------------------------------------------------------------
+
+  pageSetup(): PageSetup {
+    return pageSetupOf(this.doc);
+  }
+
+  /** Change part of the page setup (undoable). */
+  setPageSetup(patch: Partial<Omit<PageSetup, 'margins'>> & { margins?: Partial<PageSetup['margins']> }): boolean {
+    const cur = this.pageSetup();
+    const next: PageSetup = { ...cur, ...patch, margins: { ...cur.margins, ...(patch.margins ?? {}) } };
+    if (JSON.stringify(next) === JSON.stringify(cur)) return false;
+    return this.run((tr) => tr.setDocAttribute('page', next));
+  }
+
+  insertPageBreak(): boolean {
+    const ok = this.insertBlock(n.page_break.create());
+    this.focus();
+    return ok;
+  }
+
+  /** Where the page boundaries fall (empty in Pageless mode or before the first measurement). */
+  pagination(): Pagination {
+    const p = paginationOf(this.state);
+    return { spacers: p.spacers, pageCount: p.pageCount, blockPages: p.blockPages };
+  }
+
+  /** 1-based page a top-level block starts on, or null when pages are not shown. */
+  pageOfBlock(index: number): number | null {
+    if (this.pageSetup().mode !== 'pages') return null;
+    const page = this.pagination().blockPages[index];
+    return page === undefined ? null : page + 1;
   }
 
   // --- Marks ----------------------------------------------------------------------

@@ -136,13 +136,32 @@ describe('agent document tools', () => {
       words: 9,
       images: 1,
       cursor_block: 1,
-      defaults: { font_family: 'Google Sans', body_size_pt: 12, block_sizes_pt: { title: 30, heading1: 22.5 }, page_width_px: 760 },
+      defaults: { font_family: 'Google Sans', body_size_pt: 12, block_sizes_pt: { title: 30, heading1: 22.5 }, page_width_px: 624 },
       fonts_in_use: [{ family: 'Georgia', characters: 6 }],
       sizes_in_use: [{ size_pt: 14, characters: 6 }],
       colors_in_use: [],
     });
     expect(info.available_fonts).toContain('Georgia');
     expect(info.characters_in_default_font_and_size).toBeGreaterThan(20);
+  });
+
+  it('changes the page setup and reports it', async () => {
+    const { doc, call } = setup('Text.\n\n\\newpage\n\nMore.');
+    let info = await call('get_doc_info');
+    expect(info.page_setup).toMatchObject({ mode: 'pages', size: 'letter', orientation: 'portrait', margins_in: { top: 1, left: 1 }, page_numbers: 'none' });
+    expect(info.blocks_by_type).toEqual({ paragraph: 2, page_break: 1 });
+    const res = await call('set_page_setup', { size: 'a4', orientation: 'landscape', margins: { top: 0.5 }, page_numbers: 'bottom-center', footer: 'Page {page} of {pages}' });
+    expect(res.changed).toBe(true);
+    expect(res.page_setup).toMatchObject({ size: 'a4', orientation: 'landscape', margins_in: { top: 0.5, right: 1 }, page_numbers: 'bottom-center', footer: 'Page {page} of {pages}' });
+    expect(doc.pageSetup().size).toBe('a4');
+    doc.undo();
+    expect(doc.pageSetup().size).toBe('letter');
+    await expect(call('set_page_setup', { margins: { top: 9 } })).rejects.toThrow(/margin/);
+    await expect(call('set_page_setup', {})).rejects.toThrow(/at least one/);
+    await call('set_page_setup', { mode: 'pageless' });
+    info = await call('get_doc_info');
+    expect(info.page_setup.mode).toBe('pageless');
+    expect(doc.pageOfBlock(0)).toBeNull();
   });
 
   it('inserts images and checks their addresses', async () => {

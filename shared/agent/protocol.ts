@@ -197,6 +197,7 @@ export const CLIENT_TOOLS = new Set([
   'format_text',
   'format_blocks',
   'insert_image',
+  'set_page_setup',
   // Fetches through the server (which holds the credentials) and writes into the live spreadsheet.
   'ingest_connector_data',
   // Runs in the browser so the user can confirm it there; the server then queues the job.

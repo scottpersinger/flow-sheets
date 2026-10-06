@@ -6,7 +6,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model';
-import { cleanFontFamily, docFromNode, docSchema, isColor, MAX_BLOCKS, MAX_FONT_SIZE, MIN_FONT_SIZE, validateDoc, type Alignment, type Doc } from '../shared/doc.ts';
+import { cleanFontFamily, docFromNode, docSchema, isColor, MAX_BLOCKS, MAX_FONT_SIZE, MAX_MARGIN, MIN_FONT_SIZE, MIN_MARGIN, PAGE_SIZES, validateDoc, type Alignment, type Doc, type PageSetup, type PageSizeId } from '../shared/doc.ts';
 import { safeLinkUrl } from '../shared/links.ts';
 import { MAX_CELL_IMAGE_BYTES } from '../shared/types.ts';
 import { ImportError, IMPORT_LIMITS } from './xlsxImport.ts';
@@ -136,6 +136,10 @@ class Importer {
   private abstractNums = new Map<string, Map<number, string>>();
   private imageCache = new Map<string, Promise<string | null>>();
   private blockCount = 0;
+
+  private pageSetup(sectPr: XNode | undefined): Partial<PageSetup> | null {
+    return pageSetupFromSectPr(sectPr);
+  }
 
   constructor(zip: JSZip, sink: ImageSink) {
     this.zip = zip;
@@ -347,7 +351,8 @@ class Importer {
               if (text) inline.push(docSchema.text(text, marks));
             } else if (t === 'w:tab') inline.push(docSchema.text('\t', marks));
             else if (t === 'w:br' || t === 'w:cr') {
-              if (attrs(part)['w:type'] !== 'page') inline.push(n.hard_break.create());
+              if (attrs(part)['w:type'] === 'page') images.push(n.page_break.create());
+              else inline.push(n.hard_break.create());
             } else if (t === 'w:drawing' || t === 'w:pict') {
               const img = await this.picture(part, rels);
               if (img) images.push(img);
@@ -529,12 +534,45 @@ class Importer {
     const rels = await this.rels('word/document.xml');
     if (rels.some((r) => /\/(header|footer)$/.test(r.type))) this.note('Headers and footers were dropped.');
     const blocks = await this.blocks(body, rels);
-    const node = n.doc.create(null, blocks.length ? blocks : n.paragraph.create());
+    const node = n.doc.create({ page: this.pageSetup(child(body, 'w:sectPr')) }, blocks.length ? blocks : n.paragraph.create());
     const doc = docFromNode(node);
     const problem = validateDoc(doc);
     if (problem) throw new ImportError(`The imported document is not valid: ${problem}`);
     return doc;
   }
+}
+
+const TWIPS_PER_INCH = 1440;
+
+/** Page size, orientation and margins from the body's section properties; null when they are the defaults. */
+function pageSetupFromSectPr(sectPr: XNode | undefined): Partial<PageSetup> | null {
+  if (!sectPr) return null;
+  const out: Partial<PageSetup> = {};
+  const sz = attrs(child(sectPr, 'w:pgSz'));
+  const w = num(sz['w:w']);
+  const h = num(sz['w:h']);
+  if (w && h) {
+    const landscape = sz['w:orient'] === 'landscape' || w > h;
+    const [pw, ph] = landscape ? [h, w] : [w, h];
+    let best: PageSizeId = 'letter';
+    let bestDiff = Infinity;
+    for (const [id, size] of Object.entries(PAGE_SIZES) as [PageSizeId, { w: number; h: number }][]) {
+      const diff = Math.abs(size.w - pw / TWIPS_PER_INCH) + Math.abs(size.h - ph / TWIPS_PER_INCH);
+      if (diff < bestDiff) (best = id), (bestDiff = diff);
+    }
+    out.size = best;
+    out.orientation = landscape ? 'landscape' : 'portrait';
+  }
+  const mar = attrs(child(sectPr, 'w:pgMar'));
+  const margin = (v: string | undefined) => {
+    const n = num(v);
+    return n === undefined ? undefined : Math.min(MAX_MARGIN, Math.max(MIN_MARGIN, Math.round((n / TWIPS_PER_INCH) * 20) / 20));
+  };
+  const margins = { top: margin(mar['w:top']), right: margin(mar['w:right']), bottom: margin(mar['w:bottom']), left: margin(mar['w:left']) };
+  if (Object.values(margins).some((v) => v !== undefined)) {
+    out.margins = { top: margins.top ?? 1, right: margins.right ?? 1, bottom: margins.bottom ?? 1, left: margins.left ?? 1 };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 async function openArchive(buf: Buffer): Promise<JSZip> {

@@ -76,6 +76,8 @@ describe('document markdown', () => {
     const md = '# Annual report {.title}\n\n## Fiscal 2026 {.subtitle}\n\nBody in <span style="font-family: Georgia, serif">Georgia</span> at <span style="font-size: 14pt">fourteen</span> points.';
     const nodes = markdownToNodes(md);
     expect(nodes.map((n) => n.type.name)).toEqual(['title', 'subtitle', 'paragraph']);
+    expect(markdownToNodes('one\n\n\\newpage\n\ntwo').map((n) => n.type.name)).toEqual(['paragraph', 'page_break', 'paragraph']);
+    expect(roundTrip('one\n\n\\newpage\n\ntwo')).toBe('one\n\n\\newpage\n\ntwo');
     expect(nodes[2].child(1).marks[0].attrs).toEqual({ family: 'Georgia' });
     expect(nodes[2].child(3).marks[0].attrs).toEqual({ size: 14 });
     expect(roundTrip(md)).toBe(md);

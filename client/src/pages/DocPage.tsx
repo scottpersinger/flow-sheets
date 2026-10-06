@@ -1,7 +1,7 @@
 import { DOMSerializer } from 'prosemirror-model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { docNode, docSchema, type BlockType } from '../../../shared/doc.ts';
+import { docNode, docSchema, PAGE_SIZES, type BlockType } from '../../../shared/doc.ts';
 import { docToMarkdown } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
@@ -15,7 +15,8 @@ import { DocIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { DocController, useDocController } from '../doc/controller.ts';
-import { DocEditor } from '../doc/DocEditor.tsx';
+import { DocEditor, DocPrint } from '../doc/DocEditor.tsx';
+import { PageSetupDialog } from '../doc/PageSetupDialog.tsx';
 import { DocToolbar } from '../doc/DocToolbar.tsx';
 import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
@@ -85,7 +86,9 @@ export function DocPage() {
   return <DocWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
 }
 
-type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial: string } | null;
+type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial: string } | { kind: 'pageSetup' } | null;
+
+const ZOOMS = [50, 75, 100, 125, 150] as const;
 
 function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocController }) {
   useDocController(ctl);
@@ -104,6 +107,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   const [title, setTitle] = useState(initialMeta.title);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [printing, setPrinting] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [, setSaveTick] = useState(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,6 +189,18 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
     };
   }, [ctl, openLinkDialog]);
 
+  // Print: in Pages mode lay the pages out exactly as on screen, print, then go back to the editor.
+  useEffect(() => {
+    if (!printing) return;
+    const done = () => setPrinting(false);
+    window.addEventListener('afterprint', done);
+    const t = setTimeout(() => window.print(), 80);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('afterprint', done);
+    };
+  }, [printing]);
+
   // Close menus on outside click.
   useEffect(() => {
     if (!openMenu) return;
@@ -218,7 +234,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
         'sep',
         { label: 'Download as Markdown (.md)', action: () => downloadFile(`${meta.title}.md`, 'text/markdown', docToMarkdown(ctl.doc)) },
         { label: 'Download as web page (.html)', action: () => downloadFile(`${meta.title}.html`, 'text/html', docToHtml(ctl, meta.title)) },
-        { label: 'Print / Save as PDF…', shortcut: `${MOD}P`, action: () => setTimeout(() => window.print(), 50) },
+        { label: 'Print / Save as PDF…', shortcut: `${MOD}P`, action: () => setPrinting(true) },
         'sep',
         { label: 'Delete document', danger: true, action: () => setDialog({ kind: 'delete' }) },
         'sep',
@@ -236,12 +252,29 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
       ],
     },
     {
+      key: 'view',
+      label: 'View',
+      items: () => [
+        { label: 'Pages', checked: ctl.pageSetup().mode === 'pages', action: () => ctl.setPageSetup({ mode: 'pages' }) },
+        { label: 'Pageless', checked: ctl.pageSetup().mode === 'pageless', action: () => ctl.setPageSetup({ mode: 'pageless' }) },
+        'sep',
+        {
+          label: 'Zoom',
+          submenu: [
+            { label: 'Fit width', checked: ctl.zoom === 'fit', action: () => ctl.setZoom('fit') },
+            ...ZOOMS.map((z) => ({ label: `${z}%`, checked: ctl.zoom === z, action: () => ctl.setZoom(z) })),
+          ],
+        },
+      ],
+    },
+    {
       key: 'insert',
       label: 'Insert',
       items: () => [
         { label: 'Image…', action: () => void insertImage() },
         { label: 'Link…', shortcut: `${MOD}K`, action: openLinkDialog },
         { label: 'Horizontal rule', action: () => ctl.insertHorizontalRule() },
+        { label: 'Page break', shortcut: `${MOD}⏎`, action: () => ctl.insertPageBreak() },
       ],
     },
     {
@@ -292,6 +325,8 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
         },
         'sep',
         { label: 'Clear formatting', action: () => ctl.clearFormatting() },
+        'sep',
+        { label: `Page setup… (${PAGE_SIZES[ctl.pageSetup().size].name.split(' ')[0]})`, action: () => setDialog({ kind: 'pageSetup' }) },
       ],
     },
   ];
@@ -304,7 +339,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   }[ctl.saver.status];
 
   return (
-    <div className="workbench doc-page">
+    <div className={`workbench doc-page${printing && ctl.pageSetup().mode === 'pages' ? ' doc-printing-pages' : ''}`}>
       <header className="wb-header">
         <Link to="/" className="wb-logo" title="Back to home" onClick={() => void ctl.saver.flush()}>
           <DocIcon size={32} />
@@ -380,11 +415,11 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
           if (e.dataTransfer.types.includes('Files')) e.preventDefault();
         }}
       >
-        <div className="doc-sheet">
-          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
-        </div>
+        <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
       </div>
+      {printing && ctl.pageSetup().mode === 'pages' && <DocPrint ctl={ctl} />}
 
+      {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'link' && (
         <PromptModal

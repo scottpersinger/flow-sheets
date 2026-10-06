@@ -1,11 +1,14 @@
 // The WYSIWYG editing surface: a ProseMirror view bound to the DocController's state. Every edit the user
 // makes becomes a transaction the controller records (so it undoes), and the view is updated from the store.
+// In Pages mode the editor is one continuous column drawn over page frames; the pagination plugin inserts
+// spacers so content lands on the pages, and this component draws the frames, numbers, headers and footers.
 import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
 import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
 import { EditorView, type NodeView } from 'prosemirror-view';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { PAGE_GAP, pageMetrics, pageText, type PageSetup } from '../../../shared/doc.ts';
 import { CELL_IMAGE_TYPES } from '../../../shared/types.ts';
 import type { DocController } from './controller.ts';
 
@@ -80,10 +83,11 @@ class ImageView implements NodeView {
     this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
     const startX = e.clientX;
     const startW = this.img.getBoundingClientRect().width;
-    const max = this.view.dom.clientWidth;
-    let w = Math.round(startW);
+    const scale = this.view.dom.offsetWidth ? this.view.dom.getBoundingClientRect().width / this.view.dom.offsetWidth : 1;
+    const max = this.view.dom.clientWidth - 2 * Number.parseFloat(getComputedStyle(this.view.dom).paddingLeft || '0');
+    let w = Math.round(startW / scale);
     const move = (ev: MouseEvent) => {
-      w = Math.max(40, Math.min(max, Math.round(startW + ev.clientX - startX)));
+      w = Math.max(40, Math.min(max, Math.round((startW + ev.clientX - startX) / scale)));
       this.img.style.width = `${w}px`;
     };
     const up = () => {
@@ -105,10 +109,37 @@ function imageFiles(data: DataTransfer | null): File[] {
   return Array.from(data?.files ?? []).filter((f) => CELL_IMAGE_TYPES.includes(f.type));
 }
 
+/** Page number, header and footer drawn in the margins of one page. */
+function PageChrome({ setup, page, pages }: { setup: PageSetup; page: number; pages: number }) {
+  const m = pageMetrics(setup);
+  const number = setup.pageNumbers === 'none' ? null : String(page);
+  const header = pageText(setup.header, page, pages);
+  const footer = pageText(setup.footer, page, pages);
+  return (
+    <>
+      {(header || setup.pageNumbers === 'top-right') && (
+        <div className="doc-page-margin doc-page-header" style={{ top: Math.max(4, m.mt / 2 - 9), left: m.ml, right: m.mr }}>
+          <span>{header}</span>
+          {setup.pageNumbers === 'top-right' && <span className="doc-page-number">{number}</span>}
+        </div>
+      )}
+      {(footer || setup.pageNumbers === 'bottom-center' || setup.pageNumbers === 'bottom-right') && (
+        <div className="doc-page-margin doc-page-footer" style={{ bottom: Math.max(4, m.mb / 2 - 9), left: m.ml, right: m.mr }}>
+          <span>{footer}</span>
+          {setup.pageNumbers === 'bottom-center' && <span className="doc-page-number centered">{number}</span>}
+          {setup.pageNumbers === 'bottom-right' && <span className="doc-page-number">{number}</span>}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFiles(files: File[]): void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
   const filesRef = useRef(onImageFiles);
   filesRef.current = onImageFiles;
+  const [available, setAvailable] = useState(0);
 
   useEffect(() => {
     const view = new EditorView(ref.current!, {
@@ -147,6 +178,7 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
       },
     });
     ctl.attachView(view);
+    if (import.meta.env.DEV) (window as unknown as { __docView?: EditorView }).__docView = view; // for poking at pagination in dev tools
     view.focus();
     return () => {
       ctl.attachView(null);
@@ -154,19 +186,104 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
     };
   }, [ctl]);
 
+  // The width the page column may use, for fitting the page to the window.
+  useLayoutEffect(() => {
+    const el = outerRef.current;
+    if (!el) return;
+    const update = () => setAvailable(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const doc = ctl.doc;
   const empty = doc.childCount === 1 && doc.firstChild!.isTextblock && doc.firstChild!.content.size === 0;
+  const setup = ctl.pageSetup();
+  const paged = setup.mode === 'pages';
+  const m = pageMetrics(setup);
+  const { pageCount } = ctl.pagination();
+  const scale = paged ? (ctl.zoom === 'fit' ? Math.min(1, Math.max(0.25, (available - 32) / m.pageW)) : ctl.zoom / 100) : 1;
+  const columnH = pageCount * m.stride - PAGE_GAP;
+
+  const onMarginClick = (e: React.MouseEvent) => {
+    // Clicking the page below the text puts the cursor at the end.
+    if (e.target !== e.currentTarget) return;
+    e.preventDefault();
+    ctl.run((tr) => tr.setSelection(TextSelection.atEnd(tr.doc)));
+    ctl.focus();
+  };
+
+  if (!paged) {
+    return (
+      <div className="doc-pages-outer" ref={outerRef}>
+        <div className="doc-sheet">
+          <div className={`doc-editor${empty ? ' doc-empty' : ''}`} ref={ref} onMouseDown={onMarginClick} />
+        </div>
+      </div>
+    );
+  }
   return (
-    <div
-      className={`doc-editor${empty ? ' doc-empty' : ''}`}
-      ref={ref}
-      onMouseDown={(e) => {
-        // Clicking the page below the text puts the cursor at the end.
-        if (e.target !== e.currentTarget) return;
-        e.preventDefault();
-        ctl.run((tr) => tr.setSelection(TextSelection.atEnd(tr.doc)));
-        ctl.focus();
-      }}
-    />
+    <div className="doc-pages-outer" ref={outerRef} style={{ height: columnH * scale + 24 }}>
+      <div className="doc-pages" style={{ width: m.pageW, height: columnH, transform: `scale(${scale})`, transformOrigin: 'top center' }}>
+        {Array.from({ length: pageCount }, (_, k) => (
+          <div key={k} className="doc-page-frame" style={{ top: k * m.stride, height: m.pageH }} aria-hidden="true">
+            <PageChrome setup={setup} page={k + 1} pages={pageCount} />
+          </div>
+        ))}
+        <div
+          className={`doc-editor doc-editor-paged${empty ? ' doc-empty' : ''}`}
+          ref={ref}
+          style={{ padding: `${m.mt}px ${m.mr}px ${m.mb}px ${m.ml}px`, minHeight: columnH }}
+          onMouseDown={onMarginClick}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Print layout for Pages mode: one box per page, each holding a copy of the editor column shifted up so the
+ * page's slice shows, clipped to the page. The copies include the pagination spacers, so what prints is what
+ * the screen shows.
+ */
+export function DocPrint({ ctl }: { ctl: DocController }) {
+  const setup = ctl.pageSetup();
+  const m = pageMetrics(setup);
+  const { pageCount } = ctl.pagination();
+  const clips = useRef<(HTMLDivElement | null)[]>([]);
+
+  useLayoutEffect(() => {
+    const source = ctl.editorDom();
+    if (!source) return;
+    clips.current.forEach((clip, k) => {
+      if (!clip) return;
+      const column = document.createElement('div');
+      column.className = 'doc-editor doc-editor-paged';
+      column.style.padding = `${m.mt}px ${m.mr}px ${m.mb}px ${m.ml}px`;
+      column.style.transform = `translateY(${-k * m.stride}px)`;
+      const copy = source.cloneNode(true) as HTMLElement;
+      copy.removeAttribute('contenteditable');
+      copy.classList.remove('ProseMirror-focused');
+      column.append(copy);
+      clip.replaceChildren(column);
+    });
+  }, [ctl, pageCount, m.mt, m.mr, m.mb, m.ml, m.stride]);
+
+  return (
+    <div className="doc-print">
+      <style>{`@page { size: ${m.widthIn}in ${m.heightIn}in; margin: 0; }`}</style>
+      {Array.from({ length: pageCount }, (_, k) => (
+        <div key={k} className="doc-print-page" style={{ width: m.pageW, height: m.pageH }}>
+          <div
+            className="doc-print-clip"
+            ref={(el) => {
+              clips.current[k] = el;
+            }}
+          />
+          <PageChrome setup={setup} page={k + 1} pages={pageCount} />
+        </div>
+      ))}
+    </div>
   );
 }

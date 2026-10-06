@@ -4,14 +4,14 @@ import { Fragment, type Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection, type Transaction } from 'prosemirror-state';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
-import { ALIGNMENTS, BLOCK_TYPES, blockType, cleanFontFamily, DOC_DEFAULTS, DOC_PAGE_WIDTH, docSchema, FONT_FAMILIES, isColor, MAX_FONT_SIZE, MIN_FONT_SIZE, type Alignment, type BlockType, type MarkName } from '../../../shared/doc.ts';
+import { ALIGNMENTS, BLOCK_TYPES, blockType, checkPageSetup, cleanFontFamily, DOC_DEFAULTS, DOC_PAGE_WIDTH, docSchema, FONT_FAMILIES, isColor, MAX_FONT_SIZE, MIN_FONT_SIZE, pageMetrics, type Alignment, type BlockType, type MarkName, type PageSetup } from '../../../shared/doc.ts';
 import { markdownToNodes } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DocController } from '../doc/controller.ts';
 import { ToolError } from './toolError.ts';
 
-export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image']);
+export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image', 'set_page_setup']);
 
 export interface DocToolEnv {
   doc: DocController | null;
@@ -220,6 +220,7 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
           to: typeof i.to === 'number' ? i.to : undefined,
           cursorBlock: ctl.cursorBlock(),
           selectedText: ctl.selectedText(),
+          ...(ctl.pageSetup().mode === 'pages' && ctl.pagination().blockPages.length ? { pages: ctl.pagination().blockPages.map((p) => p + 1) } : {}),
         }),
       );
 
@@ -253,9 +254,27 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
       const chars = text.replace(/\s/g, '').length;
       const words = text.split(/\s+/).filter(Boolean).length;
       const byChars = <K,>(m: Map<K, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => ({ value: k, characters: c }));
+      const setup = ctl.pageSetup();
+      const metrics = pageMetrics(setup);
       return JSON.stringify({
         block_count: doc.childCount,
         blocks_by_type: blocks,
+        page_setup: {
+          mode: setup.mode,
+          ...(setup.mode === 'pages'
+            ? {
+                size: setup.size,
+                orientation: setup.orientation,
+                margins_in: setup.margins,
+                page_numbers: setup.pageNumbers,
+                header: setup.header,
+                footer: setup.footer,
+                page_count: ctl.pagination().pageCount,
+                content_width_px: metrics.contentW,
+                content_height_px: metrics.contentH,
+              }
+            : { note: 'One continuous column; no pages. set_page_setup with mode "pages" turns pages on.' }),
+        },
         words,
         characters: chars,
         images,
@@ -270,7 +289,7 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
           block_sizes_pt: DOC_DEFAULTS.blockSizes,
           line_height: DOC_DEFAULTS.lineHeight,
           text_color: DOC_DEFAULTS.textColor,
-          page_width_px: DOC_PAGE_WIDTH,
+          page_width_px: setup.mode === 'pages' ? metrics.contentW : DOC_PAGE_WIDTH,
         },
         fonts_in_use: byChars(fonts).map((f) => ({ family: f.value, characters: f.characters })),
         sizes_in_use: byChars(sizes).map((s) => ({ size_pt: s.value, characters: s.characters })),
@@ -394,6 +413,27 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
         tr.setSelection(NodeSelection.create(tr.doc, pos));
       });
       return JSON.stringify({ inserted_block: index + 1, block_count: ctl.doc.childCount });
+    }
+
+    case 'set_page_setup': {
+      const patch: Record<string, unknown> = {};
+      for (const [from, to] of [
+        ['mode', 'mode'],
+        ['size', 'size'],
+        ['orientation', 'orientation'],
+        ['margins', 'margins'],
+        ['page_numbers', 'pageNumbers'],
+        ['header', 'header'],
+        ['footer', 'footer'],
+      ] as const) {
+        if (i[from] !== undefined) patch[to] = i[from];
+      }
+      if (!Object.keys(patch).length) throw new ToolError('Pass at least one page setting to change.');
+      const problem = checkPageSetup(patch);
+      if (problem) throw new ToolError(`${problem}.`);
+      const changed = ctl.setPageSetup(patch as Partial<PageSetup>);
+      const setup = ctl.pageSetup();
+      return JSON.stringify({ changed, page_setup: { mode: setup.mode, size: setup.size, orientation: setup.orientation, margins_in: setup.margins, page_numbers: setup.pageNumbers, header: setup.header, footer: setup.footer } });
     }
 
     default:

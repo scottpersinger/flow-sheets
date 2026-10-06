@@ -14,6 +14,8 @@ export interface DocOutlineOptions {
   /** 1-based number of the block holding the user's cursor. */
   cursorBlock?: number;
   selectedText?: string;
+  /** 1-based page each block starts on (Pages mode in the browser only). */
+  pages?: (number | null)[];
 }
 
 export function docOutline(doc: PMNode, opts: DocOutlineOptions = {}) {
@@ -23,10 +25,12 @@ export function docOutline(doc: PMNode, opts: DocOutlineOptions = {}) {
   const blocks = [];
   for (let k = from - 1; k < to; k++) {
     const node = doc.child(k);
+    const page = opts.pages?.[k];
     blocks.push({
       n: k + 1,
       type: blockType(node),
       ...(node.attrs.align ? { align: node.attrs.align as string } : {}),
+      ...(page ? { page } : {}),
       markdown: blockToMarkdown(node),
     });
   }

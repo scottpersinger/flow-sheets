@@ -22,6 +22,8 @@ const QUOTE_RE = /^ {0,3}>\s?(.*)$/;
 const ITEM_RE = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 const EMPTY_ITEM_RE = /^(\s*)([-*+]|\d{1,9}[.)])\s*$/;
 const IMAGE_RE = /^ {0,3}!\[([^\]]*)\]\(\s*(\S+?)(?:\s+"[^"]*")?\s*\)\s*$/;
+/** A page break, as Pandoc writes it. */
+const PAGE_BREAK_RE = /^ {0,3}\\newpage\s*$/;
 
 function blank(s: string): boolean {
   return !s.trim();
@@ -39,7 +41,7 @@ function indentOf(s: string): number {
 
 /** Does this line start a block other than a paragraph? (A paragraph ends before such a line.) */
 function startsBlock(s: string): boolean {
-  return HEADING_RE.test(s) || RULE_RE.test(s) || FENCE_RE.test(s) || QUOTE_RE.test(s) || ITEM_RE.test(s) || IMAGE_RE.test(s);
+  return HEADING_RE.test(s) || RULE_RE.test(s) || FENCE_RE.test(s) || QUOTE_RE.test(s) || ITEM_RE.test(s) || IMAGE_RE.test(s) || PAGE_BREAK_RE.test(s);
 }
 
 class BlockParser {
@@ -84,6 +86,11 @@ class BlockParser {
       }
       if (RULE_RE.test(line) && !ITEM_RE.test(line)) {
         out.push(this.schema.nodes.horizontal_rule.create());
+        i++;
+        continue;
+      }
+      if (PAGE_BREAK_RE.test(line)) {
+        out.push(this.schema.nodes.page_break.create());
         i++;
         continue;
       }
@@ -512,6 +519,8 @@ export function blockToMarkdown(node: PMNode): string {
     }
     case 'horizontal_rule':
       return '---';
+    case 'page_break':
+      return '\\newpage';
     case 'image':
       return `![${String(node.attrs.alt ?? '').replace(/[[\]]/g, '')}](${String(node.attrs.src)})`;
     case 'bullet_list':

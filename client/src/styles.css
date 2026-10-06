@@ -2729,3 +2729,171 @@ button.agent-tool-label:hover {
 .doc-size-select {
   width: 58px;
 }
+
+/* Pages */
+.doc-pages-outer {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 100%;
+}
+.doc-pages-outer > .doc-sheet {
+  flex: 1;
+}
+.doc-pages {
+  position: relative;
+  flex-shrink: 0;
+}
+.doc-page-frame {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+.doc-editor-paged {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+}
+.doc-page-margin {
+  position: absolute;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--muted);
+  white-space: pre;
+  pointer-events: none;
+}
+.doc-page-margin > span:first-child {
+  flex: 1;
+}
+.doc-page-number.centered {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+.doc-page-spacer {
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+.doc-content .doc-page-break {
+  position: relative;
+  height: 14px;
+  margin: 4px 0;
+  border-top: 1px dashed #b0b6bd;
+  cursor: default;
+}
+.doc-content .doc-page-break::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  padding: 0 6px;
+  font-size: 10px;
+  color: #9aa0a6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.doc-content .doc-page-break.ProseMirror-selectednode {
+  border-top-color: var(--blue);
+}
+.page-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 360px;
+}
+.page-setup-row {
+  display: flex;
+  gap: 18px;
+}
+.page-setup-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.page-setup-field > span:first-child {
+  width: 110px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.page-setup-field input[type='text'],
+.page-setup-field select {
+  flex: 1;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 8px;
+  font: inherit;
+}
+.page-setup-margins {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+.page-setup-margins label {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--muted);
+}
+.page-setup-margins input {
+  width: 60px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 6px;
+  font: inherit;
+}
+.page-setup-hint {
+  font-size: 12px;
+}
+.page-setup .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+/* Print: Pages mode prints its own page boxes; the editor is hidden. */
+.doc-print {
+  display: none;
+}
+@media print {
+  .doc-printing-pages .wb-header,
+  .doc-printing-pages .toolbar,
+  .doc-printing-pages .doc-body,
+  .doc-printing-pages .import-banner {
+    display: none !important;
+  }
+  .doc-print {
+    display: block;
+  }
+  .doc-print-page {
+    position: relative;
+    overflow: hidden;
+    background: #fff;
+    break-after: page;
+  }
+  .doc-print-page:last-child {
+    break-after: auto;
+  }
+  .doc-print-clip {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+  .doc-print .doc-page-break {
+    visibility: hidden;
+  }
+  .doc-print .doc-page-margin {
+    color: #5f6368;
+  }
+}
