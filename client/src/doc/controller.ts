@@ -10,6 +10,7 @@ import type { EditorView } from 'prosemirror-view';
 import { useSyncExternalStore } from 'react';
 import { docSchema, type Alignment, type BlockType, type Doc, type HeadingLevel, type MarkName } from '../../../shared/doc.ts';
 import { AutoSaver } from '../state/store.ts';
+import { autoLinkOnEnter, autoLinkRule } from './autolink.ts';
 import { CLOSE_HISTORY_META, DocStore } from './store.ts';
 
 const s = docSchema;
@@ -145,8 +146,11 @@ export class DocController {
           textblockTypeInputRule(/^(#{1,3})\s$/, n.heading, (m) => ({ level: m[1].length })),
           textblockTypeInputRule(/^```$/, n.code_block),
           rule,
+          autoLinkRule,
         ],
       }),
+      // Links a just-typed URL before the Enter below splits the block (a separate plugin so it sees fresh state).
+      keymap({ Enter: autoLinkOnEnter }),
       keymap({
         'Mod-z': () => (this.undo(), true),
         'Shift-Mod-z': () => (this.redo(), true),
