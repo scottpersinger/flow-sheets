@@ -101,6 +101,8 @@ export function toolLabel(name: string, i: Input): string {
       return `Checked how slide ${i.slide} looks`;
     case 'open_doc':
       return 'Opened a document';
+    case 'get_doc_info':
+      return 'Checked the document’s fonts and stats';
     case 'read_doc':
       return typeof i.from === 'number' ? `Read blocks ${i.from}–${i.to ?? i.from} of the document` : 'Read the document';
     case 'insert_content':

@@ -4,14 +4,14 @@ import { Fragment, type Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection, type Transaction } from 'prosemirror-state';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
-import { ALIGNMENTS, BLOCK_TYPES, cleanFontFamily, docSchema, isColor, MAX_FONT_SIZE, MIN_FONT_SIZE, type Alignment, type BlockType, type MarkName } from '../../../shared/doc.ts';
+import { ALIGNMENTS, BLOCK_TYPES, blockType, cleanFontFamily, DOC_DEFAULTS, DOC_PAGE_WIDTH, docSchema, FONT_FAMILIES, isColor, MAX_FONT_SIZE, MIN_FONT_SIZE, type Alignment, type BlockType, type MarkName } from '../../../shared/doc.ts';
 import { markdownToNodes } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DocController } from '../doc/controller.ts';
 import { ToolError } from './toolError.ts';
 
-export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image']);
+export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image']);
 
 export interface DocToolEnv {
   doc: DocController | null;
@@ -222,6 +222,63 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
           selectedText: ctl.selectedText(),
         }),
       );
+
+    case 'get_doc_info': {
+      const doc = ctl.doc;
+      const blocks: Record<string, number> = {};
+      doc.forEach((b) => {
+        const t = blockType(b);
+        blocks[t] = (blocks[t] ?? 0) + 1;
+      });
+      const fonts = new Map<string, number>();
+      const sizes = new Map<number, number>();
+      const colors = new Set<string>();
+      let images = 0;
+      let links = 0;
+      let unstyled = 0;
+      doc.descendants((node) => {
+        if (node.type === n.image) images++;
+        if (!node.isText) return true;
+        const len = node.text?.length ?? 0;
+        const font = node.marks.find((mk) => mk.type.name === 'font');
+        const size = node.marks.find((mk) => mk.type.name === 'size');
+        if (font) fonts.set(String(font.attrs.family), (fonts.get(String(font.attrs.family)) ?? 0) + len);
+        if (size) sizes.set(Number(size.attrs.size), (sizes.get(Number(size.attrs.size)) ?? 0) + len);
+        if (!font && !size) unstyled += len;
+        if (node.marks.some((mk) => mk.type.name === 'link')) links++;
+        for (const mk of node.marks) if (mk.type.name === 'color' || mk.type.name === 'highlight') colors.add(String(mk.attrs.color));
+        return true;
+      });
+      const text = doc.textBetween(0, doc.content.size, '\n', (leaf) => (leaf.type === n.hard_break ? '\n' : ''));
+      const chars = text.replace(/\s/g, '').length;
+      const words = text.split(/\s+/).filter(Boolean).length;
+      const byChars = <K,>(m: Map<K, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => ({ value: k, characters: c }));
+      return JSON.stringify({
+        block_count: doc.childCount,
+        blocks_by_type: blocks,
+        words,
+        characters: chars,
+        images,
+        linked_runs: links,
+        cursor_block: ctl.cursorBlock(),
+        ...(ctl.selectedText() ? { selected_text: ctl.selectedText().slice(0, 200) } : {}),
+        defaults: {
+          note: 'Text without a font or size mark uses these. There is no per-document default setting; format_text sets a font or size on specific text.',
+          font_family: DOC_DEFAULTS.fontFamily,
+          font_fallbacks: DOC_DEFAULTS.fontFallbacks,
+          body_size_pt: DOC_DEFAULTS.fontSize,
+          block_sizes_pt: DOC_DEFAULTS.blockSizes,
+          line_height: DOC_DEFAULTS.lineHeight,
+          text_color: DOC_DEFAULTS.textColor,
+          page_width_px: DOC_PAGE_WIDTH,
+        },
+        fonts_in_use: byChars(fonts).map((f) => ({ family: f.value, characters: f.characters })),
+        sizes_in_use: byChars(sizes).map((s) => ({ size_pt: s.value, characters: s.characters })),
+        characters_in_default_font_and_size: unstyled,
+        colors_in_use: [...colors],
+        available_fonts: [...FONT_FAMILIES].sort(),
+      });
+    }
 
     case 'insert_content': {
       const nodes = parseMarkdown(i.markdown);

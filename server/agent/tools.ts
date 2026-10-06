@@ -259,6 +259,11 @@ const schemas = {
     .describe(
       'The open document as numbered blocks (paragraphs, headings, lists, quotes, code blocks, images, rules), each as Markdown, plus where the cursor is and the selected text. Call this before changing a document; block numbers change after inserts and deletes.',
     ),
+  get_doc_info: z
+    .object({})
+    .describe(
+      'Facts about the open document that read_doc does not show: its default font, body size and the size of each block style (what text without a font or size mark uses), the fonts, sizes and colors in use, the fonts available to format_text, word and character counts, block counts by type, and the cursor position.',
+    ),
   insert_content: z
     .object({
       markdown: docMarkdown.describe('The content to insert, as Markdown.'),

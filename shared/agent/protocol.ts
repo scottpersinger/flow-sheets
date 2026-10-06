@@ -189,6 +189,7 @@ export const CLIENT_TOOLS = new Set([
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',
+  'get_doc_info',
   'insert_content',
   'replace_blocks',
   'delete_blocks',

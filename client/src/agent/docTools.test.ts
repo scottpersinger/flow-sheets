@@ -127,6 +127,24 @@ describe('agent document tools', () => {
     expect(doc.doc.child(0).type.name).toBe('paragraph');
   });
 
+  it('reports the document defaults, fonts in use and counts', async () => {
+    const { call } = setup('# Report {.title}\n\nPlain words here and <span style="font-family: Georgia, serif"><span style="font-size: 14pt">styled</span></span> ones.\n\n- a\n- b\n\n![pic](/api/images/00000000-0000-0000-0000-000000000001)');
+    const info = await call('get_doc_info');
+    expect(info).toMatchObject({
+      block_count: 4,
+      blocks_by_type: { title: 1, paragraph: 1, bullet_list: 1, image: 1 },
+      words: 9,
+      images: 1,
+      cursor_block: 1,
+      defaults: { font_family: 'Google Sans', body_size_pt: 12, block_sizes_pt: { title: 30, heading1: 22.5 }, page_width_px: 760 },
+      fonts_in_use: [{ family: 'Georgia', characters: 6 }],
+      sizes_in_use: [{ size_pt: 14, characters: 6 }],
+      colors_in_use: [],
+    });
+    expect(info.available_fonts).toContain('Georgia');
+    expect(info.characters_in_default_font_and_size).toBeGreaterThan(20);
+  });
+
   it('inserts images and checks their addresses', async () => {
     const { doc, call, md } = setup('Text.');
     const res = await call('insert_image', { src: '/api/images/00000000-0000-0000-0000-000000000001', alt: 'Chart', width: 300, align: 'center', after: 0 });

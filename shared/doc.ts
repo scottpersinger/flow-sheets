@@ -38,6 +38,22 @@ export const MAX_BLOCKS = 5000;
 export const MAX_DOC_CHARS = 2_000_000;
 /** Widest an image can be, in CSS pixels, matching the page width in the editor. */
 export const DOC_PAGE_WIDTH = 760;
+/**
+ * How a document looks when nothing says otherwise (the editor's stylesheet uses the same values). Text without
+ * a font or size mark is drawn in the default family at the size of its block style; sizes are in points.
+ */
+export const DOC_DEFAULTS = {
+  fontFamily: 'Google Sans',
+  fontFallbacks: ['Roboto', 'Segoe UI', 'Arial', 'sans-serif'],
+  /** Body text size in points (16px). */
+  fontSize: 12,
+  lineHeight: 1.65,
+  textColor: '#1f1f1f',
+  /** Size of each block style in points. */
+  blockSizes: { paragraph: 12, title: 30, subtitle: 15, heading1: 22.5, heading2: 17.25, heading3: 13.5, blockquote: 12, code_block: 10.5, bullet_list: 12, ordered_list: 12 } as Record<BlockType, number>,
+  /** Headings are semibold; the title is regular weight. */
+  boldHeadings: true,
+} as const;
 /** Font sizes offered by the toolbar, in points (the body text is 12pt). */
 export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 30, 36, 48, 60, 72] as const;
 export const MIN_FONT_SIZE = 6;
