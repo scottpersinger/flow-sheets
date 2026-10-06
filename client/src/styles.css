@@ -2704,8 +2704,27 @@ button.agent-tool-label:hover {
   color: var(--muted);
   margin: 0 0 20px;
 }
-.doc-font-select {
-  width: 128px;
+.doc-font-label {
+  display: inline-block;
+  width: 110px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.doc-font-drop .tb-caret {
+  font-size: 10px;
+  margin-left: 3px;
+  color: var(--muted);
+}
+.doc-font-drop .menu {
+  max-height: 420px;
+  overflow-y: auto;
+  min-width: 200px;
+}
+.doc-font-drop .menu-label {
+  font-size: 15px;
 }
 .doc-size-select {
   width: 58px;

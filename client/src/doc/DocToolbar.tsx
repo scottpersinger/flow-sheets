@@ -1,10 +1,12 @@
 // Formatting toolbar for the document editor: block style, text styles, colors, links, alignment, lists,
 // indentation, images and rules. Buttons keep the editor focused (mousedown is prevented) so the selection
 // they act on stays put.
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { FONT_FAMILIES, FONT_SIZES, fontFamilyCss, type BlockType } from '../../../shared/doc.ts';
 import { MOD } from '../commands.ts';
 import { ColorPicker } from '../components/ColorPicker.tsx';
+import { MenuList, type MenuItem } from '../components/Menu.tsx';
+import { ensureFonts } from '../deck/fonts.ts';
 import type { DocController } from './controller.ts';
 
 const BLOCK_OPTIONS: { value: BlockType; label: string }[] = [
@@ -31,6 +33,37 @@ const icon = (d: string) => (
     <path d={d} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+
+/** Font families in alphabetical order, each shown in its own face. */
+const SORTED_FONTS = [...FONT_FAMILIES].sort((a, b) => a.localeCompare(b));
+
+function FontPicker({ ctl, font, disabled }: { ctl: DocController; font: string; disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    ensureFonts(SORTED_FONTS); // so the menu can draw each name in its font
+    const close = () => setOpen(false);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+  const items: MenuItem[] = [
+    { label: 'Default font', checked: !font, action: () => ctl.setMark('font', null) },
+    'sep',
+    ...(font && !(FONT_FAMILIES as readonly string[]).includes(font) ? [{ label: <span style={{ fontFamily: fontFamilyCss(font) }}>{font}</span>, checked: true, action: () => {} }] : []),
+    ...SORTED_FONTS.map((f) => ({ label: <span style={{ fontFamily: fontFamilyCss(f) }}>{f}</span>, checked: font === f, action: () => ctl.setMark('font', { family: f }) })),
+  ];
+  return (
+    <div className="tb-drop doc-font-drop" onMouseDown={(e) => e.stopPropagation()}>
+      <Btn title="Font" active={open} disabled={disabled} onClick={() => setOpen(!open)}>
+        <span className="doc-font-label" style={font ? { fontFamily: fontFamilyCss(font) } : undefined}>
+          {font || 'Default font'}
+        </span>
+        <span className="tb-caret">▾</span>
+      </Btn>
+      {open && <MenuList items={items} onDone={() => setOpen(false)} style={{ top: 32, left: 0 }} />}
+    </div>
+  );
+}
 
 export const ICONS = {
   undo: 'M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-2',
@@ -84,24 +117,7 @@ export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController;
           </option>
         ))}
       </select>
-      <select
-        className="tb-select doc-font-select"
-        title="Font"
-        aria-label="Font"
-        disabled={isNode}
-        value={font}
-        style={font ? { fontFamily: fontFamilyCss(font) } : undefined}
-        onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => ctl.setMark('font', e.target.value ? { family: e.target.value } : null)}
-      >
-        <option value="">Default font</option>
-        {font && !(FONT_FAMILIES as readonly string[]).includes(font) && <option value={font}>{font}</option>}
-        {FONT_FAMILIES.map((f) => (
-          <option key={f} value={f} style={{ fontFamily: fontFamilyCss(f) }}>
-            {f}
-          </option>
-        ))}
-      </select>
+      <FontPicker ctl={ctl} font={font} disabled={isNode} />
       <select
         className="tb-select doc-size-select"
         title="Font size (points)"
