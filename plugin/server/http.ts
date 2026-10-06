@@ -134,6 +134,11 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           return redirect(res, r.next);
         }
         if (p === '/oauth/consent' && req.method === 'GET') return html(res, 200, oauth.consentPage(url.searchParams.get('p') ?? ''));
+        if (p === '/oauth/switch' && req.method === 'GET') {
+          const pendingId = url.searchParams.get('p') ?? '';
+          oauth.clearUser(pendingId);
+          return html(res, 200, oauth.signInPage(pendingId));
+        }
         if (p === '/oauth/decision' && req.method === 'POST') {
           const form = await readForm(req);
           try {

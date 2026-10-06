@@ -273,6 +273,11 @@ export class OAuthServer {
     this.db.prepare('UPDATE oauth_pending SET user_id = ? WHERE id = ?').run(userId, pendingId);
   }
 
+  /** "Not you?": forget the account picked up from the app session and ask for a sign-in instead. */
+  clearUser(pendingId: string): void {
+    this.db.prepare('UPDATE oauth_pending SET user_id = NULL WHERE id = ?').run(pendingId);
+  }
+
   /** The user allowed or denied: where to send the browser (back to the client). */
   decide(pendingId: string | undefined, allow: boolean): string {
     const p = this.pending(pendingId);
@@ -416,7 +421,7 @@ ${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Contin
     return page(
       `Allow ${p.client_name}?`,
       `<h1>Allow ${escapeHtml(p.client_name)}?</h1>
-<p class="muted">Signed in as <strong>${escapeHtml(who?.email ?? '')}</strong>.</p>
+<p class="muted">Signed in as <strong>${escapeHtml(who?.email ?? '')}</strong>. <a href="/oauth/switch?p=${id}">Not you?</a></p>
 <p>${escapeHtml(p.client_name)} will be able to:</p>
 <ul>${scopes}</ul>
 <form method="post" action="/oauth/decision" class="row">

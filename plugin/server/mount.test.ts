@@ -57,5 +57,11 @@ describe('plugin mounted in the app', () => {
     expect(signedIn.headers.location).toMatch(/^\/oauth\/consent\?p=/);
     const consent = await app.inject({ method: 'GET', url: signedIn.headers.location as string });
     expect(consent.body).toContain('linked@x.com');
+    // "Not you?" drops the session's account and asks for a sign-in; consent then needs one again.
+    const pendingId = new URL(signedIn.headers.location as string, 'https://docs.test').searchParams.get('p')!;
+    const switched = await app.inject({ method: 'GET', url: `/oauth/switch?p=${pendingId}` });
+    expect(switched.body).toContain('Sign in to');
+    const consentAgain = await app.inject({ method: 'GET', url: `/oauth/consent?p=${pendingId}` });
+    expect(consentAgain.body).toContain('expired');
   });
 });
