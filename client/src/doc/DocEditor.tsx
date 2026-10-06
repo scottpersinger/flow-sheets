@@ -8,6 +8,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
 import { EditorView, type NodeView } from 'prosemirror-view';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ICONS } from './DocToolbar.tsx';
 import { docStyleCss, docStyleOf, PAGE_GAP, pageMetrics, pageText, type PageSetup } from '../../../shared/doc.ts';
 import { CELL_IMAGE_TYPES } from '../../../shared/types.ts';
 import type { DocController } from './controller.ts';
@@ -134,6 +135,44 @@ function PageChrome({ setup, page, pages }: { setup: PageSetup; page: number; pa
   );
 }
 
+/** A small card under the link at the cursor: open it in a new tab, edit it, or remove it. */
+function LinkBubble({ ctl }: { ctl: DocController }) {
+  const [, setTick] = useState(0);
+  // Follow the link when the page scrolls or the window resizes.
+  useEffect(() => {
+    const bump = () => setTick((t) => t + 1);
+    window.addEventListener('scroll', bump, true);
+    window.addEventListener('resize', bump);
+    return () => {
+      window.removeEventListener('scroll', bump, true);
+      window.removeEventListener('resize', bump);
+    };
+  }, []);
+  const link = ctl.linkAtCursor();
+  if (!link) return null;
+  const at = ctl.coordsAt(link.from);
+  if (!at) return null;
+  const width = 360;
+  const left = Math.max(8, Math.min(at.left, window.innerWidth - width - 8));
+  const label = link.href.replace(/^mailto:/, '').replace(/^https?:\/\//, '');
+  return (
+    <div className="doc-link-bubble" style={{ left, top: at.bottom + 6, maxWidth: width }} onMouseDown={(e) => e.preventDefault()} role="dialog" aria-label="Link">
+      <a href={link.href} target="_blank" rel="noopener noreferrer" title={`Open ${link.href} in a new tab`}>
+        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+          <path d={ICONS.link} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span>{label}</span>
+      </a>
+      <button className="link" title="Change the link" onClick={() => ctl.onLinkPrompt?.()}>
+        Edit
+      </button>
+      <button className="link" title="Remove the link, keeping the text" onClick={() => ctl.setLink(null)}>
+        Remove
+      </button>
+    </div>
+  );
+}
+
 export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFiles(files: File[]): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
@@ -233,6 +272,7 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
           onMouseDown={onMarginClick}
         />
       </div>
+      <LinkBubble ctl={ctl} />
     </div>
   );
 }

@@ -2898,3 +2898,39 @@ button.agent-tool-label:hover {
     color: #5f6368;
   }
 }
+
+.doc-link-bubble {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px 2px rgba(60, 64, 67, 0.15), 0 1px 2px rgba(60, 64, 67, 0.3);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.doc-link-bubble a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--blue-dark);
+  text-decoration: none;
+  min-width: 0;
+}
+.doc-link-bubble a span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.doc-link-bubble a:hover span {
+  text-decoration: underline;
+}
+.doc-link-bubble button.link {
+  color: var(--muted);
+}
+.doc-link-bubble button.link:hover {
+  color: var(--text);
+}

@@ -75,6 +75,17 @@ export class DocController {
     return this.view?.dom ?? null;
   }
 
+  /** Screen coordinates of a document position (for popovers), or null without a view. */
+  coordsAt(pos: number): { left: number; top: number; bottom: number } | null {
+    if (!this.view || pos < 0 || pos > this.doc.content.size) return null;
+    try {
+      const c = this.view.coordsAtPos(pos);
+      return { left: c.left, top: c.top, bottom: c.bottom };
+    } catch {
+      return null;
+    }
+  }
+
   setZoom(zoom: number | 'fit'): void {
     this.zoom = zoom;
     this.emit();
