@@ -111,7 +111,7 @@ function imageFiles(data: DataTransfer | null): File[] {
 }
 
 /** Page number, header and footer drawn in the margins of one page. */
-function PageChrome({ setup, page, pages }: { setup: PageSetup; page: number; pages: number }) {
+export function PageChrome({ setup, page, pages }: { setup: PageSetup; page: number; pages: number }) {
   const m = pageMetrics(setup);
   const number = setup.pageNumbers === 'none' ? null : String(page);
   const header = pageText(setup.header, page, pages);

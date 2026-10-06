@@ -15,6 +15,7 @@ export const MIN_CENTER_WIDTH = 400;
 export const KEY_STEP = 16;
 
 export const SLIDE_TRAY: PanelSpec = { key: 'ui.slideTrayWidth', def: 200, min: 120, max: 400 };
+export const DOC_TRAY: PanelSpec = { key: 'ui.docTrayWidth', def: 180, min: 100, max: 360 };
 export const ASSISTANT_PANEL: PanelSpec = { key: 'ui.assistantPanelWidth', def: 380, min: 280, max: 800 };
 
 /**

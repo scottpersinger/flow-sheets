@@ -16,6 +16,9 @@ import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { DocController, useDocController } from '../doc/controller.ts';
 import { DocEditor, DocPrint } from '../doc/DocEditor.tsx';
+import { PageThumbnails } from '../doc/PageThumbnails.tsx';
+import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
+import { DOC_TRAY } from '../panelSize.ts';
 import { PageSetupDialog } from '../doc/PageSetupDialog.tsx';
 import { DocStyleDialog } from '../doc/DocStyleDialog.tsx';
 import { DocToolbar } from '../doc/DocToolbar.tsx';
@@ -93,6 +96,15 @@ type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial:
 const LINE_SPACINGS: [string, number | null][] = [['Default', null], ['Single', 1.15], ['1.5', 1.5], ['Double', 2]];
 
 const ZOOMS = [50, 75, 100, 125, 150] as const;
+const THUMBS_KEY = 'ui.docThumbs';
+
+function loadShowThumbs(): boolean {
+  try {
+    return localStorage.getItem(THUMBS_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
 
 function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocController }) {
   useDocController(ctl);
@@ -113,6 +125,19 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   const [toast, setToast] = useState<string | null>(null);
   const [printing, setPrinting] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [showThumbs, setShowThumbsState] = useState(loadShowThumbs);
+  const setShowThumbs = (v: boolean) => {
+    setShowThumbsState(v);
+    try {
+      localStorage.setItem(THUMBS_KEY, v ? '1' : '0');
+    } catch {
+      // Not remembered, that's all.
+    }
+  };
+  // The thumbnail rail shares the body with the page area (less the 8px gap between them).
+  const rowRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const tray = usePanelWidth(DOC_TRAY, () => (rowRef.current ? { available: rowRef.current.clientWidth - 8 } : {}), rowRef);
   const [, setSaveTick] = useState(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -261,6 +286,8 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
       items: () => [
         { label: 'Pages', checked: ctl.pageSetup().mode === 'pages', action: () => ctl.setPageSetup({ mode: 'pages' }) },
         { label: 'Pageless', checked: ctl.pageSetup().mode === 'pageless', action: () => ctl.setPageSetup({ mode: 'pageless' }) },
+        'sep',
+        { label: 'Page thumbnails', checked: showThumbs, action: () => setShowThumbs(!showThumbs) },
         'sep',
         {
           label: 'Zoom',
@@ -418,13 +445,32 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
           </button>
         </div>
       )}
-      <div
-        className="doc-body"
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
-        }}
-      >
-        <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
+      <div className="doc-body-row" ref={rowRef}>
+        {showThumbs && (
+          <>
+            <div className="doc-thumbs-col" style={{ width: tray.width }}>
+              <button className="doc-thumbs-toggle" title="Hide page thumbnails" aria-label="Hide page thumbnails" onClick={() => setShowThumbs(false)}>
+                ‹
+              </button>
+              <PageThumbnails ctl={ctl} width={tray.width} scrollRef={bodyRef} />
+            </div>
+            <ResizeHandle panel={tray} side="left" label="Resize page thumbnails" className="deck-thumbs-resize" />
+          </>
+        )}
+        {!showThumbs && (
+          <button className="doc-thumbs-toggle collapsed" title="Show page thumbnails" aria-label="Show page thumbnails" onClick={() => setShowThumbs(true)}>
+            ›
+          </button>
+        )}
+        <div
+          className="doc-body"
+          ref={bodyRef}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+          }}
+        >
+          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
+        </div>
       </div>
       {printing && ctl.pageSetup().mode === 'pages' && <DocPrint ctl={ctl} />}
 

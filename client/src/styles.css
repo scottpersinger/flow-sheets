@@ -2489,14 +2489,115 @@ button.agent-tool-label:hover {
 .doc-block-select {
   width: 120px;
 }
+.doc-body-row {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  margin: 0 8px 8px;
+  gap: 8px;
+  position: relative;
+}
 .doc-body {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   background: #e3e6ea;
   border-radius: var(--radius);
-  margin: 0 8px 8px;
   padding: 24px 16px 80px;
+}
+.doc-thumbs-col {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  min-height: 0;
+}
+.doc-thumbs {
+  flex: 1;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.doc-thumbs-empty {
+  font-size: 12px;
+  padding: 16px 12px;
+}
+.doc-thumb {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.doc-thumb-num {
+  width: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  margin-top: 2px;
+}
+.doc-thumb-pic {
+  border: 2px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  pointer-events: none;
+  background: #fff;
+  position: relative;
+}
+.doc-thumb:hover .doc-thumb-pic {
+  border-color: #9aa0a6;
+}
+.doc-thumb.current .doc-thumb-pic {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue);
+}
+.doc-thumb-page {
+  position: relative;
+  transform-origin: top left;
+  background: #fff;
+  overflow: hidden;
+}
+.doc-thumb-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.doc-thumb-clip .doc-editor-paged {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.doc-thumbs-toggle {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.doc-thumbs-toggle:hover {
+  color: var(--text);
+  border-color: #9aa0a6;
+}
+.doc-thumbs-toggle.collapsed {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: auto;
 }
 .doc-sheet {
   max-width: 920px;
