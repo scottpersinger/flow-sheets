@@ -15,6 +15,7 @@ import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { DeckController, useDeckController } from '../deck/controller.ts';
 import { DeckEditor } from '../deck/DeckEditor.tsx';
 import { useDeckFonts } from '../deck/fonts.ts';
+import { useFavicon } from '../favicon.ts';
 import { DeckToolbar, LAYOUT_NAMES, shapeMenuItems } from '../deck/DeckToolbar.tsx';
 import { downloadPptx } from '../deck/pptx.ts';
 import { PresentMode } from '../deck/PresentMode.tsx';
@@ -96,6 +97,7 @@ type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'deleteSlide'; i
 function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DeckController }) {
   useDeckController(ctl);
   useDeckFonts(ctl.deck);
+  useFavicon('deck');
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();

@@ -28,6 +28,7 @@ import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { TabBar } from '../components/TabBar.tsx';
 import { Toolbar } from '../components/Toolbar.tsx';
 import { Grid } from '../grid/Grid.tsx';
+import { useFavicon } from '../favicon.ts';
 import { checkExcelFile, pickExcelFile } from '../importFile.ts';
 import { SheetController } from '../state/controller.ts';
 import { useController } from '../state/useController.ts';
@@ -120,6 +121,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
   };
   const [meta, setMeta] = useState(initialMeta);
   useRegisterSheet(ctl, meta);
+  useFavicon('sheet');
   const [title, setTitle] = useState(initialMeta.title);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toast, setToast] = useState<string | null>(null);

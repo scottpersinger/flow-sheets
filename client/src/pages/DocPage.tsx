@@ -24,6 +24,7 @@ import { DocStyleDialog } from '../doc/DocStyleDialog.tsx';
 import { DocToolbar } from '../doc/DocToolbar.tsx';
 import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
+import { useFavicon } from '../favicon.ts';
 
 function downloadFile(name: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -109,6 +110,7 @@ function loadShowThumbs(): boolean {
 function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocController }) {
   useDocController(ctl);
   useDocFonts(ctl.doc);
+  useFavicon('doc');
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();

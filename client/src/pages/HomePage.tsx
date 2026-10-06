@@ -7,6 +7,7 @@ import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { DeckIcon, DocIcon, Logo } from '../components/Logo.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
+import { useFavicon } from '../favicon.ts';
 import { checkImportFile, isPowerPointFile, isWordFile, pickImportFile, titleFromFileName } from '../importFile.ts';
 
 function formatWhen(iso: string): string {
@@ -19,6 +20,7 @@ function formatWhen(iso: string): string {
 export function HomePage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  useFavicon('home');
   const [sheets, setSheets] = useState<SheetMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState<'sheet' | 'deck' | 'doc' | null>(null);
