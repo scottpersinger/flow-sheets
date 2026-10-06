@@ -4,6 +4,7 @@ import { LAYOUT_IDS, THEME_IDS, THEMES, type ArrowStyle, type LayoutId, type Lin
 import { ARROW_STYLES, DASH_STYLES, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPE_KINDS, SHAPES } from '../../../shared/shapes.ts';
 import { MOD } from '../commands.ts';
+import { ColorPicker } from '../components/ColorPicker.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import type { DeckController } from './controller.ts';
 import { ShapeIcon } from './ShapeIcon.tsx';
@@ -95,14 +96,6 @@ function LinePicker({ ctl }: { ctl: DeckController }) {
 const ARROW_NAMES: Record<ArrowStyle, string> = { none: 'None', arrow: 'Arrow', open: 'Open arrow', triangle: 'Triangle', circle: 'Circle', diamond: 'Diamond' };
 const WEIGHTS = [1, 2, 3, 4, 6, 8, 12];
 
-const PALETTE = [
-  ['#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff'],
-  ['#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff'],
-  ['#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc'],
-  ['#cc4125', '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6d9eeb', '#6fa8dc', '#8e7cc3', '#c27ba0'],
-  ['#a61c00', '#cc0000', '#e69138', '#f1c232', '#6aa84f', '#45818e', '#3c78d8', '#3d85c6', '#674ea7', '#a64d79'],
-];
-
 const SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72];
 
 function Btn({ title, active, onClick, children, disabled }: { title: string; active?: boolean; onClick: () => void; children: ReactNode; disabled?: boolean }) {
@@ -128,55 +121,6 @@ function Drop({ title, label, items, disabled }: { title: string; label: ReactNo
         {label} <span className="tb-caret">▾</span>
       </Btn>
       {open && <MenuList items={items} onDone={() => setOpen(false)} style={{ top: 32, left: 0 }} />}
-    </div>
-  );
-}
-
-function ColorPicker({ title, icon, value, onPick, disabled }: { title: string; icon: ReactNode; value?: string; onPick: (c: string | undefined) => void; disabled?: boolean }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [open]);
-  return (
-    <div className="tb-drop" onMouseDown={(e) => e.stopPropagation()}>
-      <Btn title={title} onClick={() => setOpen(!open)} disabled={disabled}>
-        <span className="color-icon">
-          {icon}
-          <span className="color-bar" style={{ background: value ?? 'transparent', borderColor: value ?? '#999' }} />
-        </span>
-      </Btn>
-      {open && (
-        <div className="palette">
-          <button
-            className="palette-reset"
-            onClick={() => {
-              onPick(undefined);
-              setOpen(false);
-            }}
-          >
-            Theme default
-          </button>
-          {PALETTE.map((row, i) => (
-            <div key={i} className="palette-row">
-              {row.map((c) => (
-                <button
-                  key={c}
-                  className={`swatch${value === c ? ' active' : ''}`}
-                  style={{ background: c }}
-                  title={c}
-                  onClick={() => {
-                    onPick(c);
-                    setOpen(false);
-                  }}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

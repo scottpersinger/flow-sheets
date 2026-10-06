@@ -23,6 +23,16 @@ export type AgentContext =
       currentSlide: number;
       /** Ids of the selected elements on that slide. */
       selectedElements: string[];
+    }
+  | {
+      page: 'doc';
+      docId: string;
+      title: string;
+      blockCount: number;
+      /** 1-based number of the block holding the cursor. */
+      cursorBlock: number;
+      /** The selected text, if any (shortened). */
+      selectedText?: string;
     };
 
 /** A tool call the browser must run (sheet tools and navigation), forwarded by the server. */
@@ -176,6 +186,16 @@ export const CLIENT_TOOLS = new Set([
   'set_deck_theme',
   // Drawn by the browser with the app's own slide renderer; the picture is attached to the resumed turn.
   'render_slide',
+  // Text documents: act on the open document (client/src/agent/docTools.ts).
+  'open_doc',
+  'read_doc',
+  'insert_content',
+  'replace_blocks',
+  'delete_blocks',
+  'replace_text',
+  'format_text',
+  'format_blocks',
+  'insert_image',
   // Fetches through the server (which holds the credentials) and writes into the live spreadsheet.
   'ingest_connector_data',
   // Runs in the browser so the user can confirm it there; the server then queues the job.

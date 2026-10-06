@@ -351,6 +351,58 @@ describe('legacy hosts', () => {
   });
 });
 
+describe('documents', () => {
+  it('creates, saves, lists, renames and deletes documents, kept apart from spreadsheets and decks', async () => {
+    const { cookie } = await signUp(app, box, 'doc@x.com');
+    const { cookie: other } = await signUp(app, box, 'doc2@x.com');
+    let res;
+
+    res = await app.inject({ method: 'POST', url: '/api/docs', headers: { cookie }, payload: { title: 'Notes' } });
+    expect(res.statusCode).toBe(200);
+    const { doc: meta } = res.json();
+    expect(meta).toMatchObject({ title: 'Notes', kind: 'doc' });
+    expect(readdirSync(path.join(dir, 'sheets'))).toContain(`${meta.id}.json`);
+
+    res = await app.inject({ method: 'GET', url: `/api/docs/${meta.id}`, headers: { cookie } });
+    const { doc } = res.json();
+    expect(doc.content.content).toHaveLength(1);
+
+    doc.content.content = [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Hello', marks: [{ type: 'bold' }] }] }, { type: 'paragraph' }];
+    res = await app.inject({ method: 'PUT', url: `/api/docs/${meta.id}`, headers: { cookie }, payload: { doc } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/docs/${meta.id}`, headers: { cookie } });
+    expect(res.json().doc.content.content[0].content[0].text).toBe('Hello');
+
+    // Invalid documents are rejected; the document is not a spreadsheet or a deck and vice versa.
+    res = await app.inject({ method: 'PUT', url: `/api/docs/${meta.id}`, headers: { cookie }, payload: { doc: { version: 1, content: { type: 'doc', content: [{ type: 'bogus' }] } } } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'PUT', url: `/api/docs/${meta.id}`, headers: { cookie }, payload: { doc: { version: 1, content: { type: 'doc', content: [{ type: 'image', attrs: { src: 'javascript:1' } }] } } } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'POST', url: '/api/docs', headers: { cookie }, payload: { title: 'Bad', doc: { version: 2 } } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'GET', url: `/api/decks/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'POST', url: '/api/decks', headers: { cookie }, payload: { title: 'A deck' } });
+    res = await app.inject({ method: 'GET', url: `/api/docs/${res.json().deck.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+
+    res = await app.inject({ method: 'GET', url: '/api/docs', headers: { cookie } });
+    expect(res.json().docs.map((d: { title: string }) => d.title)).toEqual(['Notes']);
+    res = await app.inject({ method: 'GET', url: '/api/decks', headers: { cookie } });
+    expect(res.json().decks.map((d: { title: string }) => d.title)).toEqual(['A deck']);
+    res = await app.inject({ method: 'GET', url: `/api/docs/${meta.id}`, headers: { cookie: other } });
+    expect(res.statusCode).toBe(404);
+
+    res = await app.inject({ method: 'PATCH', url: `/api/docs/${meta.id}`, headers: { cookie }, payload: { title: 'Notes 2026' } });
+    expect(res.json().meta.title).toBe('Notes 2026');
+    res = await app.inject({ method: 'DELETE', url: `/api/docs/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${meta.id}.json`);
+  });
+});
+
 describe('presentations', () => {
   it('creates, saves, lists, renames and deletes decks, kept apart from spreadsheets', async () => {
     const { cookie } = await signUp(app, box, 'deck@x.com');

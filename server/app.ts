@@ -6,6 +6,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
+import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
@@ -421,6 +422,54 @@ export async function buildApp(opts: AppOptions) {
     r.delete('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       if (!(await sheets.delete(req.user!.id, id, 'sheet'))) return reply.code(404).send({ error: 'Sheet not found' });
+      return { ok: true };
+    });
+  });
+
+  // --- Text documents ------------------------------------------------------------
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    r.get('/api/docs', async (req) => ({ docs: sheets.list(req.user!.id, 'doc') }));
+
+    r.post('/api/docs', async (req, reply) => {
+      const body = (req.body ?? {}) as { title?: unknown; doc?: unknown };
+      const title = cleanTitle(body.title) ?? 'Untitled document';
+      const doc = body.doc === undefined ? newDoc() : body.doc;
+      const problem = validateDoc(doc);
+      if (problem) return reply.code(400).send({ error: problem });
+      return { doc: await sheets.createDoc(req.user!.id, title, doc as Doc) };
+    });
+
+    r.get('/api/docs/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const res = await sheets.loadDoc(req.user!.id, id);
+      if (!res) return reply.code(404).send({ error: 'Document not found' });
+      return { meta: res.meta, doc: res.doc };
+    });
+
+    r.put('/api/docs/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const doc = (req.body as { doc?: unknown } | undefined)?.doc;
+      const problem = validateDoc(doc);
+      if (problem) return reply.code(400).send({ error: problem });
+      const meta = await sheets.saveDoc(req.user!.id, id, doc as Doc);
+      if (!meta) return reply.code(404).send({ error: 'Document not found' });
+      return { meta };
+    });
+
+    r.patch('/api/docs/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
+      if (!title) return reply.code(400).send({ error: 'Title is required' });
+      const meta = sheets.rename(req.user!.id, id, title, 'doc');
+      if (!meta) return reply.code(404).send({ error: 'Document not found' });
+      return { meta };
+    });
+
+    r.delete('/api/docs/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (!(await sheets.delete(req.user!.id, id, 'doc'))) return reply.code(404).send({ error: 'Document not found' });
       return { ok: true };
     });
   });

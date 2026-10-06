@@ -11,9 +11,11 @@ function setup(wb: Workbook = newWorkbook('t1')) {
   const env: ClientToolEnv = {
     ctl,
     deck: null,
+    doc: null,
     group: 'agent-1',
     openSheet: async () => ctl,
     openDeck: async () => Promise.reject(new Error('No deck in this test.')),
+    openDoc: async () => Promise.reject(new Error('No doc in this test.')),
     requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }),
     uploadImage: async (file) => {
       uploads.push(file);
@@ -215,7 +217,7 @@ describe('agent sheet tools', () => {
   });
 
   it('fails clearly when no spreadsheet is open', async () => {
-    const env: ClientToolEnv = { ctl: null, deck: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), openDeck: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }), uploadImage: async () => '', fetchConnectorData: async () => Promise.reject(new Error('x')) };
+    const env: ClientToolEnv = { ctl: null, deck: null, doc: null, group: 'g', openSheet: async () => Promise.reject(new Error('x')), openDeck: async () => Promise.reject(new Error('x')), openDoc: async () => Promise.reject(new Error('x')), requestAppChange: async () => ({ id: 'job-1' }), requestResearch: async (_t, _task, includeSheet) => ({ id: 'job-2', sheetIncluded: includeSheet }), uploadImage: async () => '', fetchConnectorData: async () => Promise.reject(new Error('x')) };
     await expect(runClientTool({ id: 'x', name: 'read_range', input: { range: 'A1' } }, env)).rejects.toThrow(/No spreadsheet is open/);
   });
 

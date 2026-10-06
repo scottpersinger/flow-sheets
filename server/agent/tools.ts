@@ -5,6 +5,9 @@ import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { ARROW_STYLE_IDS, buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
+import { ALIGNMENTS, BLOCK_TYPES, docNode } from '../../shared/doc.ts';
+import { markdownToDoc } from '../../shared/docMarkdown.ts';
+import { docOutline } from '../../shared/agent/docRead.ts';
 import { SHAPE_KINDS } from '../../shared/shapes.ts';
 import { Engine } from '../../shared/formula/engine.ts';
 import type { ConnectorService } from '../connectors/service.ts';
@@ -19,6 +22,14 @@ const cellValue = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 // --- Slide decks ---
 const slideNumber = z.number().int().min(1).describe('1-based slide number, as listed by read_deck.');
+// --- Text documents ---
+const blockNumber = z.number().int().min(1).describe('1-based block number, as listed by read_doc.');
+const docMarkdown = z
+  .string()
+  .max(200_000)
+  .describe(
+    'Markdown: # headings (1-3 levels; "# text {.title}" and "## text {.subtitle}" make the document title and subtitle), paragraphs separated by blank lines, - and 1. lists (indent 2 spaces to nest), > quotes, ``` code fences, --- rules, ![alt](src) on its own line for an image, **bold**, *italic*, ~~strike~~, `code`, [text](url), <u>underline</u>, <mark>highlight</mark>, <span style="color: #c00">color</span>, <span style="font-family: Georgia; font-size: 14pt">font</span>. A line break inside a paragraph is kept.',
+  );
 const layout = z
   .enum(LAYOUT_IDS)
   .describe('title (title + subtitle, centered), section (a divider), title-body (title + bullets), two-column (title + two bullet columns), image (title + image + optional caption), blank.');
@@ -238,6 +249,70 @@ const schemas = {
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),
 
+  // --- Open text document (run in the browser) ---
+  open_doc: z.object({ doc_id: z.string() }).describe('Open a text document in the app (the user navigates to it; any open spreadsheet or presentation closes). Returns its blocks. Document tools then act on it.'),
+  read_doc: z
+    .object({
+      from: blockNumber.optional().describe('First block to list. Defaults to 1.'),
+      to: blockNumber.optional().describe('Last block to list. Defaults to the 300th block from "from".'),
+    })
+    .describe(
+      'The open document as numbered blocks (paragraphs, headings, lists, quotes, code blocks, images, rules), each as Markdown, plus where the cursor is and the selected text. Call this before changing a document; block numbers change after inserts and deletes.',
+    ),
+  insert_content: z
+    .object({
+      markdown: docMarkdown.describe('The content to insert, as Markdown.'),
+      after: z.number().int().min(0).optional().describe('Insert after this block number; 0 inserts at the top. Defaults to the end of the document.'),
+    })
+    .describe('Insert new blocks into the open document, written as Markdown. Returns the numbers of the new blocks.'),
+  replace_blocks: z
+    .object({ from: blockNumber, to: blockNumber.optional().describe('Defaults to "from" (one block).'), markdown: docMarkdown.describe('The replacement, as Markdown; may be any number of blocks.') })
+    .describe('Replace blocks from..to of the open document with new content written as Markdown. Use this to rewrite a paragraph or a whole section. Replacing 10 or more blocks asks the user to confirm.'),
+  delete_blocks: z
+    .object({ from: blockNumber, to: blockNumber.optional().describe('Defaults to "from" (one block).') })
+    .describe('Delete blocks from..to of the open document. The user is asked to confirm.'),
+  replace_text: z
+    .object({
+      find: z.string().min(1).max(2000).describe('Exact text to find (case-sensitive). Every occurrence is replaced.'),
+      replace: z.string().max(5000).describe('The new text (plain; it takes the formatting of what it replaces).'),
+      block: blockNumber.optional().describe('Only replace inside this block. Defaults to the whole document.'),
+    })
+    .describe('Replace text in the open document without retyping its block. Use for small wording changes; returns how many occurrences changed and in which blocks.'),
+  format_text: z
+    .object({
+      find: z.string().min(1).max(2000).optional().describe('Exact text to format (case-sensitive); every occurrence in the blocks is formatted. Omit to format whole blocks (then from is required).'),
+      from: blockNumber.optional().describe('First block to look in (or format). Defaults to the whole document when find is given.'),
+      to: blockNumber.optional().describe('Last block. Defaults to "from".'),
+      bold: z.boolean().optional(),
+      italic: z.boolean().optional(),
+      underline: z.boolean().optional(),
+      strike: z.boolean().optional().describe('Strikethrough.'),
+      code: z.boolean().optional().describe('Inline code.'),
+      color: z.string().max(40).optional().describe('Text color as a CSS color (e.g. #c00000); "" removes it.'),
+      highlight: z.string().max(40).optional().describe('Background color as a CSS color (e.g. #fff2a8); "" removes it.'),
+      font: z.string().max(60).optional().describe('Font family, e.g. "Georgia" or "Open Sans"; "" goes back to the document font.'),
+      size: z.number().min(0).max(200).optional().describe('Font size in points (body text is 12); 0 goes back to the default size.'),
+      link: z.string().max(2000).optional().describe('Link the text to this http(s) or mailto URL; "" removes the link.'),
+    })
+    .describe('Change the formatting of text in the open document without retyping it: bold, italic, underline, strikethrough, code, color, highlight, font, size or link. true adds, false removes.'),
+  format_blocks: z
+    .object({
+      from: blockNumber,
+      to: blockNumber.optional().describe('Defaults to "from" (one block).'),
+      type: z.enum(BLOCK_TYPES).optional().describe('Turn the blocks into this kind: paragraph, title, subtitle, heading1-3, bullet_list, ordered_list (consecutive blocks become one list), blockquote or code_block.'),
+      align: z.enum(ALIGNMENTS).optional().describe('Text alignment of the blocks (and of images).'),
+    })
+    .describe('Change the kind or alignment of blocks in the open document, keeping their text and inline formatting.'),
+  insert_image: z
+    .object({
+      src: z.string().describe('Image address: an https URL, a stored /api/images/... address (from <attached_images> or render_slide), or a data: URL.'),
+      after: z.number().int().min(0).optional().describe('Insert after this block number; 0 inserts at the top. Defaults to the end.'),
+      alt: z.string().max(500).optional().describe('Description of the picture.'),
+      width: z.number().int().min(20).max(10000).optional().describe('Display width in pixels. Defaults to the natural size, capped at the page width (760).'),
+      align: z.enum(ALIGNMENTS).optional().describe('left (default), center or right.'),
+    })
+    .describe('Add an image block to the open document. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)'),
+
   request_app_change: z
     .object({
       title: z.string().min(3).max(120).describe('Short name for the change, e.g. "Add a tool to set filter criteria".'),
@@ -291,6 +366,18 @@ const schemas = {
       slides: z.array(slideSpec).max(50).optional().describe('Initial slides, each built from a layout and plain content. Without them the deck has one title slide.'),
     })
     .describe('Create a new presentation, optionally with its slides. Open it with open_deck so the user sees it.'),
+  list_docs: z
+    .object({ query: z.string().optional().describe('Only documents whose title contains this text (case-insensitive).') })
+    .describe("List the user's text documents, most recently edited first (at most 50)."),
+  create_doc: z
+    .object({
+      title: z.string().min(1).max(200),
+      markdown: docMarkdown.optional().describe('Initial content. Without it the document is empty.'),
+    })
+    .describe('Create a new text document, optionally with its content written as Markdown. Open it with open_doc so the user sees it.'),
+  read_other_doc: z
+    .object({ doc_id: z.string(), from: blockNumber.optional(), to: blockNumber.optional() })
+    .describe('Read another document in the account without opening it, as numbered Markdown blocks. Not for the open document; use read_doc for that.'),
 
   // --- Connectors: external data sources such as Brex ---
   list_connections: z
@@ -434,6 +521,31 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       };
       const meta = await env.sheets.createDeck(env.userId, String(input.title).trim(), deck);
       return JSON.stringify({ id: meta.id, title: meta.title, slide_count: deck.slides.length, note: 'Call open_deck to show it to the user.' });
+    }
+    case 'list_docs': {
+      const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const all = env.sheets.list(env.userId, 'doc').filter((s) => !q || s.title.toLowerCase().includes(q));
+      return JSON.stringify({
+        total: all.length,
+        docs: all.slice(0, 50).map((s) => ({
+          id: s.id,
+          title: s.title,
+          updated_at: s.updatedAt,
+          ...(env.context.page === 'doc' && env.context.docId === s.id ? { open_now: true } : {}),
+        })),
+      });
+    }
+    case 'create_doc': {
+      const doc = markdownToDoc(typeof input.markdown === 'string' ? input.markdown : '');
+      const meta = await env.sheets.createDoc(env.userId, String(input.title).trim(), doc);
+      return JSON.stringify({ id: meta.id, title: meta.title, block_count: doc.content.content?.length ?? 0, note: 'Call open_doc to show it to the user.' });
+    }
+    case 'read_other_doc': {
+      const id = input.doc_id as string;
+      if (env.context.page === 'doc' && env.context.docId === id) throw new ToolFailure('That document is open right now; use read_doc so you see unsaved edits.');
+      const res = await env.sheets.loadDoc(env.userId, id);
+      if (!res) throw new ToolFailure(`No document with id "${id}". Use list_docs to find ids.`);
+      return JSON.stringify({ title: res.meta.title, ...docOutline(docNode(res.doc), { from: input.from as number | undefined, to: input.to as number | undefined }) });
     }
     case 'list_connections': {
       const svc = connectorService(env);

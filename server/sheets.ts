@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Deck } from '../shared/deck.ts';
+import type { Doc } from '../shared/doc.ts';
 import { migrateDeck } from '../shared/lines.ts';
 import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import type { DB } from './db.ts';
@@ -81,8 +82,8 @@ export function validateWorkbook(wb: unknown): string | null {
 }
 
 /**
- * Spreadsheets and slide decks, stored as one JSON file each with their metadata in SQLite. The workbook
- * methods (load, save, branch, ...) only see spreadsheets; the deck methods only see decks.
+ * Spreadsheets, slide decks and text documents, stored as one JSON file each with their metadata in SQLite.
+ * The workbook methods (load, save, branch, ...) only see spreadsheets; the deck and doc methods likewise.
  */
 export class SheetStore {
   private db: DB;
@@ -122,7 +123,7 @@ export class SheetStore {
     return r ? toMeta(r) : null;
   }
 
-  private async insert(ownerId: string, kind: DocKind, title: string, doc: Workbook | Deck): Promise<SheetMeta> {
+  private async insert(ownerId: string, kind: DocKind, title: string, doc: Workbook | Deck | Doc): Promise<SheetMeta> {
     const id = randomUUID();
     const file = `${id}.json`;
     await this.writeAtomic(file, doc);
@@ -176,7 +177,7 @@ export class SheetStore {
     return { meta: toMeta(r), workbook: await this.read<Workbook>(r) };
   }
 
-  private async write(r: SheetRow, doc: Workbook | Deck): Promise<SheetMeta> {
+  private async write(r: SheetRow, doc: Workbook | Deck | Doc): Promise<SheetMeta> {
     const prev = this.writeChains.get(r.id) ?? Promise.resolve();
     const next = prev.then(() => this.writeAtomic(r.file, doc));
     this.writeChains.set(r.id, next.catch(() => {}));
@@ -208,6 +209,23 @@ export class SheetStore {
     return r ? this.write(r, deck) : null;
   }
 
+  // --- Text documents ------------------------------------------------------------
+
+  async createDoc(ownerId: string, title: string, doc: Doc): Promise<SheetMeta> {
+    return this.insert(ownerId, 'doc', title, doc);
+  }
+
+  async loadDoc(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: Doc } | null> {
+    const r = this.row(ownerId, id, 'doc');
+    if (!r) return null;
+    return { meta: toMeta(r), doc: await this.read<Doc>(r) };
+  }
+
+  async saveDoc(ownerId: string, id: string, doc: Doc): Promise<SheetMeta | null> {
+    const r = this.row(ownerId, id, 'doc');
+    return r ? this.write(r, doc) : null;
+  }
+
   // --- Any kind ------------------------------------------------------------------
 
   rename(ownerId: string, id: string, title: string, kind?: DocKind): SheetMeta | null {
@@ -229,7 +247,7 @@ export class SheetStore {
     return true;
   }
 
-  private async writeAtomic(file: string, doc: Workbook | Deck): Promise<void> {
+  private async writeAtomic(file: string, doc: Workbook | Deck | Doc): Promise<void> {
     const target = this.filePath(file);
     const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tmp, JSON.stringify(doc));

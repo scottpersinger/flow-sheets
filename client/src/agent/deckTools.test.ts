@@ -9,9 +9,11 @@ function setup() {
   const env: ClientToolEnv = {
     ctl: null,
     deck,
+    doc: null,
     group: 'agent-1',
     openSheet: async () => Promise.reject(new Error('No sheet in this test.')),
     openDeck: async () => deck,
+    openDoc: async () => Promise.reject(new Error('No doc in this test.')),
     requestAppChange: async () => ({ id: 'job-1' }),
     requestResearch: async () => ({ id: 'job-2', sheetIncluded: false }),
     uploadImage: async () => '/api/images/00000000-0000-0000-0000-000000000001',

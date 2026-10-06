@@ -1,6 +1,6 @@
 # Sheets
 
-A web spreadsheet app, similar to Google Sheets. Users register and sign in with email and password (verified by an emailed link) or with Google, and can create, open, rename and delete spreadsheets. Each spreadsheet has multiple tabs and supports formulas, formatting, sorting and filtering.
+A web spreadsheet app, similar to Google Sheets, that also makes slide decks and text documents. Users register and sign in with email and password (verified by an emailed link) or with Google, and can create, open, rename and delete spreadsheets. Each spreadsheet has multiple tabs and supports formulas, formatting, sorting and filtering.
 
 A built-in assistant (the live agent) answers chat and edits spreadsheets. When it lacks a capability, a coding agent changes the app's own code, restarts it and publishes the change as a merged pull request. See [Self-improvement](#self-improvement).
 
@@ -47,6 +47,7 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 | `server/` | Fastify API: auth (scrypt password hashes, hashed session tokens in httpOnly cookies) and sheet CRUD. |
 | `client/src/state/` | `WorkbookStore` (patch-based undo/redo, incremental recalculation), `AutoSaver`, spreadsheet operations (`ops.ts`) and `SheetController` (selection, editing, clipboard and commands). |
 | `client/src/grid/` | Canvas grid: virtualized rendering, frozen panes, hit testing, and the mouse and keyboard interaction. |
+| `client/src/deck/`, `client/src/doc/` | The presentation and document editors (stores with undo/redo, controllers, views and toolbars). |
 
 ## Assistant
 
@@ -78,6 +79,19 @@ How it works:
 The assistant edits presentations too: `read_deck`, `add_slides` (layout plus plain content), `update_slide` (change the title, body, notes or layout of one slide), `edit_elements` (move, resize, restyle, add or remove elements), `delete_slides`, `move_slide` and `set_deck_theme` run in the browser against the open deck, and `list_decks`, `create_deck` (optionally with all its slides) and `open_deck` find, create and open decks. "Turn this spreadsheet into a short presentation" reads the sheet, creates the deck and opens it.
 
 Decks are stored like spreadsheets (`shared/deck.ts` is the format; the `sheets` table has a `kind` column) and are listed with them on the home page. Branches and compare are for spreadsheets only.
+
+## Documents
+
+**Blank document** on the home page creates a text document (`/doc/<id>`): a WYSIWYG editor for writing, built on ProseMirror. A document is a sequence of blocks (paragraphs, a title and subtitle, headings, bulleted and numbered lists, quotes, code blocks, images and horizontal rules) whose text can be bold, italic, underlined, struck through, code, linked, colored or highlighted, set in another font or size (the toolbar lists system fonts and a set loaded from Google Fonts), and aligned left, center, right or justified.
+
+- The toolbar and the **Format** menu set the paragraph style and text formatting; the usual shortcuts work (⌘B/I/U, ⌘⇧X strikethrough, ⌘E code, ⌘K link, ⌘⇧7/8 lists, ⌘⌥0–3 paragraph and headings, ⌘⇧L/E/R/J alignment, Tab and ⇧Tab to indent list items). Typing `# `, `- `, `1. `, `> `, ```` ``` ```` or `---` at the start of a line turns it into the matching block.
+- **Insert → Image…**, pasting or dropping an image adds an image block (stored like cell images); drag its corner handle to resize it, and use the alignment buttons to place it. ⌘-click a link to open it.
+- Every edit is a command (a ProseMirror transaction whose steps know how to invert themselves), recorded by `DocStore` (`client/src/doc/store.ts`): ⌘Z undoes a run of typing, or everything the assistant changed for one request, as a single step. Changes save automatically.
+- **File** downloads the document as Markdown or as a web page, or prints it (Save as PDF).
+
+The assistant edits documents too. It sees a document as numbered blocks in Markdown (`read_doc`) and writes Markdown back: `insert_content`, `replace_blocks` and `delete_blocks` work on whole blocks, `replace_text` changes words in place, `format_text` makes text bold, italic, underlined, colored, highlighted or a link without retyping it, `format_blocks` changes a block's kind or alignment, and `insert_image` adds a picture. `list_docs`, `create_doc` (with the content as Markdown), `read_other_doc` and `open_doc` find, create, read and open documents. Deleting blocks, or replacing ten or more at once, asks for confirmation.
+
+The file format (`shared/doc.ts`) is the ProseMirror JSON of the document under a schema that is the single definition of what a document may contain; `shared/docMarkdown.ts` converts documents to and from Markdown (plus `# text {.title}`, `## text {.subtitle}`, `<u>`, `<mark>` and `<span style="color: …; font-family: …; font-size: 14pt">` for what Markdown cannot say), and the server validates every save against the schema.
 
 ## Branches
 

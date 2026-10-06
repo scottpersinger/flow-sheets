@@ -8,6 +8,7 @@ import { AuthPage } from './pages/AuthPage.tsx';
 import { ChangesPage } from './pages/ChangesPage.tsx';
 import { ConnectorsPage } from './pages/ConnectorsPage.tsx';
 import { DeckPage } from './pages/DeckPage.tsx';
+import { DocPage } from './pages/DocPage.tsx';
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordResetPages.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
@@ -44,6 +45,7 @@ function AppShell() {
           <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
           <Route path="/s/:id" element={<RequireAuth><SpreadsheetPage /></RequireAuth>} />
           <Route path="/d/:id" element={<RequireAuth><DeckPage /></RequireAuth>} />
+          <Route path="/doc/:id" element={<RequireAuth><DocPage /></RequireAuth>} />
           <Route path="/changes" element={<RequireAuth><ChangesPage /></RequireAuth>} />
           <Route path="/connectors" element={<RequireAuth><ConnectorsPage /></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />

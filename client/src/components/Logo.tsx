@@ -10,6 +10,17 @@ export function DeckIcon({ size = 28 }: { size?: number }) {
   );
 }
 
+/** Icon for text documents. */
+export function DocIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#4285f4" />
+      <path d="M9 7h10l5 5v13H9z" fill="none" stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M19 7v5h5M12 16h8M12 20h8" fill="none" stroke="#fff" strokeWidth="2" />
+    </svg>
+  );
+}
+
 export function Logo({ size = 28 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">

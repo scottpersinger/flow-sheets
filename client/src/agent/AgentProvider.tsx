@@ -9,6 +9,7 @@ import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
+import type { DocController } from '../doc/controller.ts';
 import { renderSlideImage } from '../deck/renderSlide.ts';
 import type { SheetController } from '../state/controller.ts';
 import { confirmationFor, runClientTool, ToolError } from './clientTools.ts';
@@ -20,6 +21,11 @@ export interface OpenSheet {
 
 export interface OpenDeck {
   ctl: DeckController;
+  meta: SheetMeta;
+}
+
+export interface OpenDoc {
+  ctl: DocController;
   meta: SheetMeta;
 }
 
@@ -49,6 +55,12 @@ interface AgentState {
   deckFailed(id: string, message: string): void;
   /** The open presentation, or null on other pages. */
   deck: OpenDeck | null;
+  /** The document page reports the open document (null when it closes). */
+  setOpenDoc(doc: OpenDoc | null): void;
+  /** The document page reports that a document failed to load. */
+  docFailed(id: string, message: string): void;
+  /** The open document, or null on other pages. */
+  doc: OpenDoc | null;
   /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
   job: AgentJob | null;
   /** Hide a finished job's card. */
@@ -97,6 +109,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [sheet, setSheet] = useState<OpenSheet | null>(null);
   const deckRef = useRef<OpenDeck | null>(null);
   const [deck, setDeck] = useState<OpenDeck | null>(null);
+  const docRef = useRef<OpenDoc | null>(null);
+  const [doc, setDoc] = useState<OpenDoc | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Pending open_sheet / open_deck calls, resolved with the controller once the page has loaded the document.
   const waiters = useRef(new Map<string, { resolve(ctl: unknown): void; reject(e: Error): void }>());
@@ -136,8 +150,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           setJob({ ...job, acknowledged: true });
           // Right after the reload the spreadsheet page may still be loading; give it a moment so the
           // assistant's context says which spreadsheet is open.
-          if (location.pathname.startsWith('/s/') || location.pathname.startsWith('/d/')) {
-            for (let i = 0; i < 100 && !sheetRef.current && !deckRef.current && !cancelled; i++) await new Promise((r) => setTimeout(r, 100));
+          if (location.pathname.startsWith('/s/') || location.pathname.startsWith('/d/') || location.pathname.startsWith('/doc/')) {
+            for (let i = 0; i < 100 && !sheetRef.current && !deckRef.current && !docRef.current && !cancelled; i++) await new Promise((r) => setTimeout(r, 100));
           }
           if (cancelled) return;
           sendRef.current(jobLiveMessage(job));
@@ -233,7 +247,29 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setOpenDoc = useCallback((doc: OpenDoc | null) => {
+    docRef.current = doc;
+    setDoc(doc);
+    const w = doc && waiters.current.get(doc.meta.id);
+    if (w) {
+      waiters.current.delete(doc.meta.id);
+      w.resolve(doc.ctl);
+    }
+  }, []);
+
   const context = (): AgentContext => {
+    const t = docRef.current;
+    if (t) {
+      const selected = t.ctl.selectedText();
+      return {
+        page: 'doc',
+        docId: t.meta.id,
+        title: t.meta.title,
+        blockCount: t.ctl.doc.childCount,
+        cursorBlock: t.ctl.cursorBlock(),
+        ...(selected ? { selectedText: selected.length > 200 ? `${selected.slice(0, 200)}…` : selected } : {}),
+      };
+    }
     const d = deckRef.current;
     if (d) {
       return {
@@ -270,6 +306,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       deck.ctl.stopEditing();
       await deck.ctl.saver.flush();
     }
+    const doc = docRef.current;
+    if (doc) await doc.ctl.saver.flush();
     const loaded = new Promise<C>((resolve, reject) => {
       waiters.current.set(id, { resolve: resolve as (ctl: unknown) => void, reject });
       setTimeout(() => {
@@ -290,6 +328,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     const cur = deckRef.current;
     if (cur?.meta.id === id) return cur.ctl;
     return openDocument<DeckController>(id, '/d', 'presentation');
+  };
+
+  const openDocById = async (id: string): Promise<DocController> => {
+    const cur = docRef.current;
+    if (cur?.meta.id === id) return cur.ctl;
+    return openDocument<DocController>(id, '/doc', 'document');
   };
 
   const requestAppChange = async (title: string, spec: string): Promise<{ id: string }> => {
@@ -340,7 +384,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     for (const call of calls) {
       if (signal.aborted) break;
       setItems((prev) => [...prev, { kind: 'tool', id: call.id, name: call.name, input: call.input, status: 'running' }]);
-      const question = confirmationFor(call, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null);
+      const question = confirmationFor(call, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null);
       if (question && !(await ask(question))) {
         const declined = 'The user declined this action.';
         results.push({ id: call.id, content: declined, isError: true });
@@ -352,6 +396,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         const content = await runClientTool(call, {
           ctl: sheetRef.current?.ctl ?? null,
           deck: deckRef.current?.ctl ?? null,
+          doc: docRef.current?.ctl ?? null,
           deckId: deckRef.current?.meta.id ?? null,
           loadDeck: async (id) => (await api.getDeck(id)).deck,
           renderSlide: renderSlideImage,
@@ -359,6 +404,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           group,
           openSheet: openSheetById,
           openDeck: openDeckById,
+          openDoc: openDocById,
           requestAppChange,
           requestResearch,
           uploadImage: api.uploadImage,
@@ -472,6 +518,9 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setOpenDeck,
     deckFailed: sheetFailed,
     deck,
+    setOpenDoc,
+    docFailed: sheetFailed,
+    doc,
     job,
     dismissJob,
   };
@@ -492,6 +541,16 @@ export function useRegisterSheet(ctl: SheetController, meta: SheetMeta): void {
     setOpenSheet(sheet);
     return () => setOpenSheet(null);
   }, [sheet, setOpenSheet]);
+}
+
+/** Report the open document to the agent while a document page is mounted. */
+export function useRegisterDoc(ctl: DocController, meta: SheetMeta): void {
+  const { setOpenDoc } = useAgent();
+  const doc = useMemo(() => ({ ctl, meta }), [ctl, meta]);
+  useEffect(() => {
+    setOpenDoc(doc);
+    return () => setOpenDoc(null);
+  }, [doc, setOpenDoc]);
 }
 
 /** Report the open presentation to the agent while a deck page is mounted. */

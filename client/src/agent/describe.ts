@@ -15,6 +15,12 @@ function span(a: unknown, b: unknown): string {
   return a === b ? String(a) : `${a}–${b}`;
 }
 
+/** "block 3" or "blocks 3–7" of a document. */
+function blocks(i: Input): string {
+  const to = i.to ?? i.from;
+  return `${to === i.from ? 'block' : 'blocks'} ${span(i.from, to)}`;
+}
+
 export function toolLabel(name: string, i: Input): string {
   switch (name) {
     case 'get_sheet_overview':
@@ -93,6 +99,30 @@ export function toolLabel(name: string, i: Input): string {
       return `Changed the theme to ${i.theme}`;
     case 'render_slide':
       return `Checked how slide ${i.slide} looks`;
+    case 'open_doc':
+      return 'Opened a document';
+    case 'read_doc':
+      return typeof i.from === 'number' ? `Read blocks ${i.from}–${i.to ?? i.from} of the document` : 'Read the document';
+    case 'insert_content':
+      return i.after === 0 ? 'Added content at the top of the document' : typeof i.after === 'number' ? `Added content after block ${i.after}` : 'Added content to the document';
+    case 'replace_blocks':
+      return `Rewrote ${blocks(i)}`;
+    case 'delete_blocks':
+      return `Deleted ${blocks(i)}`;
+    case 'replace_text':
+      return `Replaced “${i.find}” with “${i.replace}”`;
+    case 'format_text':
+      return typeof i.find === 'string' && i.find ? `Formatted “${i.find}”` : `Formatted ${blocks(i)}`;
+    case 'format_blocks':
+      return `${typeof i.type === 'string' ? `Changed ${blocks(i)} to ${String(i.type).replace('_', ' ')}` : `Aligned ${blocks(i)}`}`;
+    case 'insert_image':
+      return 'Added an image to the document';
+    case 'list_docs':
+      return typeof i.query === 'string' && i.query ? `Searched your documents for “${i.query}”` : 'Listed your documents';
+    case 'create_doc':
+      return `Created document “${i.title}”`;
+    case 'read_other_doc':
+      return 'Read another document';
     case 'list_decks':
       return typeof i.query === 'string' && i.query ? `Searched your presentations for “${i.query}”` : 'Listed your presentations';
     case 'create_deck':

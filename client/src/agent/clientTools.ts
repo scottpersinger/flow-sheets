@@ -14,6 +14,9 @@ import type { SheetController } from '../state/controller.ts';
 import * as ops from '../state/ops.ts';
 import type { WorkbookStore } from '../state/store.ts';
 import { DECK_TOOLS, deckConfirmationFor, renderSlideTool, runDeckTool, type RenderSlideEnv } from './deckTools.ts';
+import { DOC_TOOLS, docConfirmationFor, runDocTool } from './docTools.ts';
+import { docOutline } from '../../../shared/agent/docRead.ts';
+import type { DocController } from '../doc/controller.ts';
 import { ToolError } from './toolError.ts';
 
 export { ToolError };
@@ -23,12 +26,16 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   ctl: SheetController | null;
   /** The open presentation, or null on other pages. */
   deck: DeckController | null;
+  /** The open text document, or null on other pages. */
+  doc: DocController | null;
   /** Undo group for this agent request. */
   group: string;
   /** Navigate to a spreadsheet and resolve once it has loaded. */
   openSheet(id: string): Promise<SheetController>;
   /** Navigate to a presentation and resolve once it has loaded. */
   openDeck(id: string): Promise<DeckController>;
+  /** Navigate to a text document and resolve once it has loaded. */
+  openDoc(id: string): Promise<DocController>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
   /** Queue a background research task; resolves with the job id. */
@@ -49,9 +56,8 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : und
 
 function requireSheet(env: ClientToolEnv): SheetController {
   if (!env.ctl) {
-    throw new ToolError(
-      env.deck ? 'A presentation is open, not a spreadsheet. Use list_sheets to find one and open_sheet to open it.' : 'No spreadsheet is open. Use list_sheets to find one and open_sheet to open it.',
-    );
+    const open = env.deck ? 'A presentation' : env.doc ? 'A document' : null;
+    throw new ToolError(open ? `${open} is open, not a spreadsheet. Use list_sheets to find one and open_sheet to open it.` : 'No spreadsheet is open. Use list_sheets to find one and open_sheet to open it.');
   }
   return env.ctl;
 }
@@ -97,12 +103,13 @@ function nonEmptyCount(tab: Tab, rg: Range): number {
 }
 
 /** A question to ask the user before running a destructive call, or null if it can run straight away. */
-export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null): string | null {
+export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null): string | null {
   const i = call.input;
   if (call.name === 'request_app_change') {
     return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.`;
   }
   if (DECK_TOOLS.has(call.name)) return deckConfirmationFor(call, deck);
+  if (DOC_TOOLS.has(call.name)) return docConfirmationFor(call, doc);
   if (!ctl) return null;
   try {
     switch (call.name) {
@@ -162,6 +169,11 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
   }
   if (call.name === 'render_slide') return renderSlideTool(call, env);
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
+  if (call.name === 'open_doc') {
+    const doc = await env.openDoc(String(i.doc_id));
+    return JSON.stringify({ opened: true, ...docOutline(doc.doc, { cursorBlock: doc.cursorBlock() }) });
+  }
+  if (DOC_TOOLS.has(call.name)) return runDocTool(call, env);
 
   const ctl = requireSheet(env);
   const run = (fn: Parameters<SheetController['runAgent']>[1]) => ctl.runAgent(env.group, fn);

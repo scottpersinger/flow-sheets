@@ -1,0 +1,479 @@
+// Editor state for an open document: the ProseMirror state (held by DocStore with undo/redo), the editor view
+// when one is mounted, and the operations the toolbar, menus, keyboard and the assistant's document tools use.
+import { baseKeymap, chainCommands, exitCode, lift, setBlockType as setTextblockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import { InputRule, inputRules, textblockTypeInputRule, undoInputRule, wrappingInputRule } from 'prosemirror-inputrules';
+import { keymap } from 'prosemirror-keymap';
+import type { Mark, MarkType, Node as PMNode, NodeType } from 'prosemirror-model';
+import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
+import { EditorState, NodeSelection, TextSelection, type Command, type Plugin, type Transaction } from 'prosemirror-state';
+import type { EditorView } from 'prosemirror-view';
+import { useSyncExternalStore } from 'react';
+import { docSchema, type Alignment, type BlockType, type Doc, type HeadingLevel, type MarkName } from '../../../shared/doc.ts';
+import { AutoSaver } from '../state/store.ts';
+import { CLOSE_HISTORY_META, DocStore } from './store.ts';
+
+const s = docSchema;
+const n = s.nodes;
+
+export type CurrentBlock = BlockType | 'image' | 'horizontal_rule';
+
+export class DocController {
+  readonly store: DocStore;
+  readonly saver: AutoSaver<Doc>;
+  /** The page's link dialog, opened by Mod-K and the toolbar. */
+  onLinkPrompt: (() => void) | null = null;
+  version = 0;
+  private view: EditorView | null = null;
+  private listeners = new Set<() => void>();
+
+  constructor(doc: Doc, save: (doc: Doc) => Promise<void>) {
+    this.store = new DocStore(doc, this.plugins());
+    this.saver = new AutoSaver<Doc>(this.store, save);
+    this.store.subscribe(() => this.emit());
+  }
+
+  dispose(): void {
+    this.saver.dispose();
+  }
+
+  subscribe = (fn: () => void): (() => void) => {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  };
+
+  getVersion = (): number => this.version;
+
+  private emit(): void {
+    this.version++;
+    for (const l of this.listeners) l();
+  }
+
+  get state(): EditorState {
+    return this.store.state;
+  }
+
+  get doc(): PMNode {
+    return this.state.doc;
+  }
+
+  /** The editor component reports its view while mounted. */
+  attachView(view: EditorView | null): void {
+    this.view = view;
+    if (view) view.updateState(this.state);
+  }
+
+  focus(): void {
+    this.view?.focus();
+  }
+
+  dispatch = (tr: Transaction, group?: string): void => {
+    this.store.apply(tr, group);
+    this.view?.updateState(this.store.state);
+  };
+
+  /** Run a ProseMirror command against the current state. */
+  exec(cmd: Command): boolean {
+    return cmd(this.state, (tr) => this.dispatch(tr), this.view ?? undefined);
+  }
+
+  /** Run several commands as one undo step; stops at the first that does not apply. */
+  private execAll(cmds: Command[]): boolean {
+    const group = `ui-${Date.now()}-${Math.random()}`;
+    let any = false;
+    for (const cmd of cmds) {
+      const ok = cmd(this.state, (tr) => this.dispatch(tr, group), this.view ?? undefined);
+      if (!ok) break;
+      any = true;
+    }
+    return any;
+  }
+
+  /** Build and apply one transaction as one undoable step. */
+  run(fn: (tr: Transaction) => void): boolean {
+    const tr = this.state.tr;
+    fn(tr);
+    if (!tr.docChanged && !tr.selectionSet && !tr.storedMarksSet) return false;
+    this.dispatch(tr);
+    return tr.docChanged;
+  }
+
+  /** A change made by the agent. All changes with the same group (one agent request) undo as one step. */
+  runAgent(group: string, fn: (tr: Transaction) => void): boolean {
+    const tr = this.state.tr;
+    fn(tr);
+    tr.scrollIntoView();
+    this.dispatch(tr, group);
+    return tr.docChanged;
+  }
+
+  undo(): void {
+    this.store.undo();
+    this.view?.updateState(this.store.state);
+    this.focus();
+  }
+
+  redo(): void {
+    this.store.redo();
+    this.view?.updateState(this.store.state);
+    this.focus();
+  }
+
+  // --- Plugins ------------------------------------------------------------------
+
+  private plugins(): Plugin[] {
+    const hardBreak: Command = (state, dispatch) => {
+      dispatch?.(state.tr.replaceSelectionWith(n.hard_break.create()).scrollIntoView());
+      return true;
+    };
+    const rule = new InputRule(/^(?:---|\*\*\*|___)$/, (state, _m, start, end) => {
+      const $start = state.doc.resolve(start);
+      if ($start.depth !== 1 || $start.parent.type !== n.paragraph || $start.parent.content.size !== end - start) return null;
+      const tr = state.tr.replaceWith($start.before(), $start.after(), [n.horizontal_rule.create(), n.paragraph.create()]);
+      return tr.setSelection(TextSelection.create(tr.doc, $start.before() + 2));
+    });
+    return [
+      inputRules({
+        rules: [
+          wrappingInputRule(/^\s*([-+*])\s$/, n.bullet_list),
+          wrappingInputRule(
+            /^(\d+)\.\s$/,
+            n.ordered_list,
+            (m) => ({ start: Number(m[1]) }),
+            (m, node) => node.childCount + (node.attrs.start as number) === Number(m[1]),
+          ),
+          wrappingInputRule(/^\s*>\s$/, n.blockquote),
+          textblockTypeInputRule(/^(#{1,3})\s$/, n.heading, (m) => ({ level: m[1].length })),
+          textblockTypeInputRule(/^```$/, n.code_block),
+          rule,
+        ],
+      }),
+      keymap({
+        'Mod-z': () => (this.undo(), true),
+        'Shift-Mod-z': () => (this.redo(), true),
+        'Mod-y': () => (this.redo(), true),
+        'Mod-b': toggleMark(s.marks.bold),
+        'Mod-i': toggleMark(s.marks.italic),
+        'Mod-u': toggleMark(s.marks.underline),
+        'Shift-Mod-x': toggleMark(s.marks.strike),
+        'Mod-e': toggleMark(s.marks.code),
+        'Mod-k': () => (this.onLinkPrompt?.(), true),
+        'Shift-Mod-7': () => this.setBlockType('ordered_list'),
+        'Shift-Mod-8': () => this.setBlockType('bullet_list'),
+        'Mod-Alt-0': () => this.setBlockType('paragraph'),
+        'Mod-Alt-1': () => this.setBlockType('heading1'),
+        'Mod-Alt-2': () => this.setBlockType('heading2'),
+        'Mod-Alt-3': () => this.setBlockType('heading3'),
+        'Shift-Mod-l': () => this.setAlign('left'),
+        'Shift-Mod-e': () => this.setAlign('center'),
+        'Shift-Mod-r': () => this.setAlign('right'),
+        'Shift-Mod-j': () => this.setAlign('justify'),
+        Enter: splitListItem(n.list_item),
+        Tab: sinkListItem(n.list_item),
+        'Shift-Tab': liftListItem(n.list_item),
+        'Mod-Enter': chainCommands(exitCode, hardBreak),
+        'Shift-Enter': chainCommands(exitCode, hardBreak),
+        Backspace: undoInputRule,
+      }),
+      keymap(baseKeymap),
+    ];
+  }
+
+  // --- Marks ----------------------------------------------------------------------
+
+  isMarkActive(name: MarkName): boolean {
+    const { from, $from, to, empty } = this.state.selection;
+    const type = s.marks[name];
+    if (empty) return !!type.isInSet(this.state.storedMarks ?? $from.marks());
+    return this.state.doc.rangeHasMark(from, to, type);
+  }
+
+  /** The first mark of this kind at the cursor (or the start of the selection). */
+  markAt(name: MarkName): Mark | undefined {
+    const { $from, empty } = this.state.selection;
+    const marks = empty ? (this.state.storedMarks ?? $from.marks()) : $from.marks();
+    const type = s.marks[name];
+    return marks.find((m) => m.type === type) ?? (empty ? undefined : this.marksInRange(type)[0]);
+  }
+
+  private marksInRange(type: MarkType): Mark[] {
+    const { from, to } = this.state.selection;
+    const out: Mark[] = [];
+    this.state.doc.nodesBetween(from, to, (node) => {
+      for (const m of node.marks) if (m.type === type) out.push(m);
+    });
+    return out;
+  }
+
+  toggleMark(name: MarkName): boolean {
+    const ok = this.exec(toggleMark(s.marks[name]));
+    this.focus();
+    return ok;
+  }
+
+  /** Set a mark with attributes (color, highlight, link) on the selection, or remove it with null. */
+  setMark(name: MarkName, attrs: Record<string, unknown> | null): boolean {
+    const type = s.marks[name];
+    const { from, to, empty } = this.state.selection;
+    const ok = this.run((tr) => {
+      if (empty) {
+        const marks = this.state.storedMarks ?? this.state.selection.$from.marks();
+        tr.setStoredMarks(attrs ? type.create(attrs).addToSet(marks) : type.removeFromSet(marks));
+        return;
+      }
+      tr.removeMark(from, to, type);
+      if (attrs) tr.addMark(from, to, type.create(attrs));
+    });
+    this.focus();
+    return ok;
+  }
+
+  /** The link at the cursor, if any, with the range it covers. */
+  linkAtCursor(): { href: string; from: number; to: number } | null {
+    const { $from } = this.state.selection;
+    const type = s.marks.link;
+    const mark = type.isInSet($from.marks()) ?? type.isInSet($from.nodeAfter?.marks ?? []);
+    if (!mark) return null;
+    const parent = $from.parent;
+    const base = $from.start();
+    const parts: { off: number; size: number; has: boolean }[] = [];
+    parent.forEach((child, off) => parts.push({ off, size: child.nodeSize, has: child.marks.some((m) => m.eq(mark)) }));
+    const i = parts.findIndex((p) => p.has && p.off <= $from.parentOffset && p.off + p.size >= $from.parentOffset);
+    if (i < 0) return null;
+    // Extend over the neighbours that carry the same link.
+    let a = i;
+    let b = i;
+    while (a > 0 && parts[a - 1].has) a--;
+    while (b < parts.length - 1 && parts[b + 1].has) b++;
+    return { href: String(mark.attrs.href), from: base + parts[a].off, to: base + parts[b].off + parts[b].size };
+  }
+
+  /** Link the selection (or the link under the cursor) to href; null removes the link. */
+  setLink(href: string | null): boolean {
+    const sel = this.state.selection;
+    let { from, to } = sel;
+    if (sel.empty) {
+      const link = this.linkAtCursor();
+      if (!link) return false;
+      ({ from, to } = link);
+    }
+    const ok = this.run((tr) => {
+      tr.removeMark(from, to, s.marks.link);
+      if (href) tr.addMark(from, to, s.marks.link.create({ href }));
+    });
+    this.focus();
+    return ok;
+  }
+
+  /** Remove every mark from the selection and turn headings back into paragraphs. */
+  clearFormatting(): boolean {
+    const { from, to, empty } = this.state.selection;
+    const ok = this.run((tr) => {
+      if (empty) tr.setStoredMarks([]);
+      else tr.removeMark(from, to);
+      this.state.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.type === n.heading || node.type === n.title || node.type === n.subtitle) tr.setNodeMarkup(pos, n.paragraph, { align: node.attrs.align });
+        else if ((node.type === n.paragraph || node.type === n.image) && node.attrs.align) tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: null });
+      });
+    });
+    this.focus();
+    return ok;
+  }
+
+  // --- Blocks -----------------------------------------------------------------------
+
+  /** The list the cursor is in, if any. */
+  private listType(): NodeType | null {
+    const { $from } = this.state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      const t = $from.node(d).type;
+      if (t === n.bullet_list || t === n.ordered_list) return t;
+    }
+    return null;
+  }
+
+  private inBlockquote(): boolean {
+    const { $from } = this.state.selection;
+    for (let d = $from.depth; d > 0; d--) if ($from.node(d).type === n.blockquote) return true;
+    return false;
+  }
+
+  /** What kind of block the cursor is in (for the toolbar's block menu). */
+  currentBlock(): CurrentBlock {
+    const sel = this.state.selection;
+    if (sel instanceof NodeSelection) {
+      if (sel.node.type === n.image) return 'image';
+      if (sel.node.type === n.horizontal_rule) return 'horizontal_rule';
+    }
+    const list = this.listType();
+    if (list) return list === n.bullet_list ? 'bullet_list' : 'ordered_list';
+    const parent = sel.$from.parent;
+    if (parent.type === n.heading) return `heading${parent.attrs.level as HeadingLevel}`;
+    if (parent.type === n.title) return 'title';
+    if (parent.type === n.subtitle) return 'subtitle';
+    if (parent.type === n.code_block) return 'code_block';
+    if (this.inBlockquote()) return 'blockquote';
+    return 'paragraph';
+  }
+
+  /** Make the selected blocks this kind (toggles lists and quotes off when they already are). */
+  setBlockType(type: BlockType): boolean {
+    const list = this.listType();
+    const liftOut: Command[] = [];
+    for (let k = 0; k < 6; k++) liftOut.push(liftListItem(n.list_item));
+    let ok: boolean;
+    if (type === 'bullet_list' || type === 'ordered_list') {
+      const target = n[type];
+      if (list === target) ok = this.exec(liftListItem(n.list_item));
+      else if (list) ok = this.run((tr) => this.swapListType(tr, target));
+      else ok = this.exec(wrapInList(target));
+    } else if (type === 'blockquote') {
+      ok = this.inBlockquote() ? this.exec(lift) : this.exec(wrapIn(n.blockquote));
+    } else {
+      const to =
+        type === 'code_block' || type === 'paragraph' || type === 'title' || type === 'subtitle' ? setTextblockType(n[type]) : setTextblockType(n.heading, { level: Number(type.slice(-1)) });
+      ok = list ? this.execAll([...liftOut.map((c) => this.untilNotInList(c)), to]) : this.exec(to);
+    }
+    this.focus();
+    return ok;
+  }
+
+  /** A lift command that is a no-op (but succeeds) once the cursor has left every list. */
+  private untilNotInList(cmd: Command): Command {
+    return (state, dispatch, view) => {
+      const $from = state.selection.$from;
+      let inList = false;
+      for (let d = $from.depth; d > 0; d--) if ($from.node(d).type === n.list_item) inList = true;
+      return inList ? cmd(state, dispatch, view) : true;
+    };
+  }
+
+  /** Turn the innermost list around the cursor into the other kind. */
+  private swapListType(tr: Transaction, target: NodeType): void {
+    const { $from } = this.state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type === n.bullet_list || node.type === n.ordered_list) {
+        tr.setNodeMarkup($from.before(d), target, target === n.ordered_list ? { start: 1 } : null);
+        return;
+      }
+    }
+  }
+
+  indent(): boolean {
+    const ok = this.exec(sinkListItem(n.list_item));
+    this.focus();
+    return ok;
+  }
+
+  outdent(): boolean {
+    const ok = this.exec(liftListItem(n.list_item));
+    this.focus();
+    return ok;
+  }
+
+  currentAlign(): Alignment {
+    const sel = this.state.selection;
+    const node = sel instanceof NodeSelection ? sel.node : sel.$from.parent;
+    return (node.attrs.align as Alignment | null) ?? 'left';
+  }
+
+  setAlign(align: Alignment): boolean {
+    const { from, to } = this.state.selection;
+    const ok = this.run((tr) => {
+      this.state.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.type === n.paragraph || node.type === n.heading || node.type === n.title || node.type === n.subtitle || node.type === n.image) {
+          const next = align === 'left' ? null : align;
+          if ((node.attrs.align ?? null) !== next) tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: next });
+        }
+      });
+    });
+    this.focus();
+    return ok;
+  }
+
+  insertHorizontalRule(): boolean {
+    const ok = this.insertBlock(n.horizontal_rule.create());
+    this.focus();
+    return ok;
+  }
+
+  /** Add an image block at the cursor (replacing an empty paragraph), with a paragraph after it to type in. */
+  insertImage(src: string, attrs: { alt?: string; width?: number | null; align?: Alignment | null } = {}): boolean {
+    const node = n.image.create({ src, alt: attrs.alt ?? '', width: attrs.width ?? null, align: attrs.align ?? null });
+    const ok = this.insertBlock(node);
+    this.focus();
+    return ok;
+  }
+
+  private insertBlock(node: PMNode): boolean {
+    return this.run((tr) => {
+      const { $from } = this.state.selection;
+      const emptyPara = $from.depth === 1 && $from.parent.type === n.paragraph && $from.parent.content.size === 0;
+      const at = emptyPara ? $from.before() : null;
+      if (at !== null) tr.replaceWith(at, at + $from.parent.nodeSize, node);
+      else tr.replaceSelectionWith(node);
+      // Keep a paragraph after the block so the user can continue typing.
+      const pos = at !== null ? at + node.nodeSize : tr.selection.to;
+      const $pos = tr.doc.resolve(Math.min(pos, tr.doc.content.size));
+      const after = $pos.depth === 0 ? $pos.nodeAfter : null;
+      if ($pos.depth === 0 && (!after || !after.isTextblock)) tr.insert($pos.pos, n.paragraph.create());
+      tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min($pos.pos + 1, tr.doc.content.size))));
+      tr.scrollIntoView();
+    });
+  }
+
+  /** The selected image block, if the selection is one. */
+  selectedImage(): { node: PMNode; pos: number } | null {
+    const sel = this.state.selection;
+    return sel instanceof NodeSelection && sel.node.type === n.image ? { node: sel.node, pos: sel.from } : null;
+  }
+
+  setImageAttrs(attrs: Partial<{ alt: string; width: number | null; align: Alignment | null }>): boolean {
+    const img = this.selectedImage();
+    if (!img) return false;
+    return this.run((tr) => {
+      tr.setNodeMarkup(img.pos, undefined, { ...img.node.attrs, ...attrs });
+      tr.setSelection(NodeSelection.create(tr.doc, img.pos));
+    });
+  }
+
+  /** Start a fresh undo step (e.g. when the editor loses focus). */
+  closeHistory(): void {
+    this.store.closeHistory();
+  }
+
+  /** Mark the next transaction as a separate undo step. */
+  separateStep(tr: Transaction): Transaction {
+    return tr.setMeta(CLOSE_HISTORY_META, true);
+  }
+
+  // --- For the assistant --------------------------------------------------------------
+
+  /** 1-based number of the top-level block holding the cursor. */
+  cursorBlock(): number {
+    const $head = this.state.selection.$head;
+    return Math.min($head.index(0) + 1, Math.max(1, this.doc.childCount));
+  }
+
+  selectedText(): string {
+    const { from, to, empty } = this.state.selection;
+    return empty ? '' : this.doc.textBetween(from, to, '\n');
+  }
+
+  /** Select a top-level block (0-based) and scroll to it, to show the user something. */
+  selectBlock(index: number): void {
+    const doc = this.doc;
+    if (index < 0 || index >= doc.childCount) return;
+    let pos = 0;
+    for (let k = 0; k < index; k++) pos += doc.child(k).nodeSize;
+    const node = doc.child(index);
+    this.run((tr) => {
+      tr.setSelection(node.isTextblock || node.isBlock ? (node.isLeaf || node.type === n.image ? NodeSelection.create(tr.doc, pos) : TextSelection.near(tr.doc.resolve(pos + 1))) : TextSelection.near(tr.doc.resolve(pos)));
+      tr.scrollIntoView();
+    });
+  }
+}
+
+export function useDocController(ctl: DocController): number {
+  return useSyncExternalStore(ctl.subscribe, ctl.getVersion);
+}

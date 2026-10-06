@@ -5,7 +5,7 @@ import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
-import { DeckIcon, Logo } from '../components/Logo.tsx';
+import { DeckIcon, DocIcon, Logo } from '../components/Logo.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { checkImportFile, isPowerPointFile, pickImportFile, titleFromFileName } from '../importFile.ts';
 
@@ -21,7 +21,7 @@ export function HomePage() {
   const navigate = useNavigate();
   const [sheets, setSheets] = useState<SheetMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState<'sheet' | 'deck' | null>(null);
+  const [creating, setCreating] = useState<'sheet' | 'deck' | 'doc' | null>(null);
   const [renaming, setRenaming] = useState<SheetMeta | null>(null);
   const [deleting, setDeleting] = useState<SheetMeta | null>(null);
   const [filter, setFilter] = useState('');
@@ -48,13 +48,14 @@ export function HomePage() {
     }
   };
 
-  // Spreadsheets and presentations in one list, most recently edited first.
+  // Spreadsheets, presentations and documents in one list, most recently edited first.
   const load = () =>
-    Promise.all([api.listSheets(), api.listDecks()])
-      .then(([s, d]) => setSheets([...s.sheets, ...d.decks].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))))
+    Promise.all([api.listSheets(), api.listDecks(), api.listDocs()])
+      .then(([s, d, t]) => setSheets([...s.sheets, ...d.decks, ...t.docs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))))
       .catch((e: Error) => setError(e.message));
 
-  const pathOf = (s: SheetMeta) => (s.kind === 'deck' ? `/d/${s.id}` : `/s/${s.id}`);
+  const pathOf = (s: SheetMeta) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : `/s/${s.id}`);
+  const KIND_NAMES = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document' } as const;
 
   // Reload after the assistant finishes a request, in case it created a spreadsheet.
   const { running: agentRunning } = useAgent();
@@ -113,7 +114,7 @@ export function HomePage() {
           <Logo />
           <span>Sheets</span>
         </div>
-        <input className="home-search" placeholder="Search spreadsheets and presentations" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <input className="home-search" placeholder="Search spreadsheets, presentations and documents" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
           <Link to="/connectors" className="home-changes" title="Connect data sources such as Brex">
             Connectors
@@ -146,6 +147,12 @@ export function HomePage() {
               <div className="tile-label">Blank presentation</div>
             </div>
             <div>
+              <button className="new-sheet-tile doc-tile" onClick={() => setCreating('doc')} aria-label="Create a blank document">
+                <span className="plus">+</span>
+              </button>
+              <div className="tile-label">Blank document</div>
+            </div>
+            <div>
               <button
                 className="new-sheet-tile import-tile"
                 disabled={!!importing}
@@ -172,7 +179,7 @@ export function HomePage() {
         {sheets === null ? (
           <div className="muted">Loading…</div>
         ) : visible.length === 0 ? (
-          <div className="empty-state">{sheets.length ? 'Nothing matches your search.' : 'No spreadsheets or presentations yet. Create one to get started.'}</div>
+          <div className="empty-state">{sheets.length ? 'Nothing matches your search.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
         ) : (
           <table className="sheet-list">
             <thead>
@@ -190,7 +197,7 @@ export function HomePage() {
                     <Link to={pathOf(s)} className="sheet-title" onClick={(e) => e.stopPropagation()}>
                       <span style={{ width: depth * 22 }} className="tree-indent" />
                       {depth > 0 ? <span className="tree-elbow">└</span> : null}
-                      {s.kind === 'deck' ? <DeckIcon size={18} /> : <Logo size={18} />} {s.title}
+                      {s.kind === 'deck' ? <DeckIcon size={18} /> : s.kind === 'doc' ? <DocIcon size={18} /> : <Logo size={18} />} {s.title}
                       {s.branch && <span className={`branch-tag${s.branch.detached ? ' detached' : ''}`}>{s.branch.detached ? `branch of deleted “${s.branch.parentTitle}”` : depth ? 'branch' : `branch of ${s.branch.parentTitle}`}</span>}
                     </Link>
                   </td>
@@ -212,7 +219,7 @@ export function HomePage() {
                         <button onClick={() => navigate(pathOf(s))}>Open</button>
                         <button onClick={() => (setMenuFor(null), window.open(pathOf(s), '_blank'))}>Open in new tab</button>
                         <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>
-                        {s.kind !== 'deck' && <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>}
+                        {s.kind === 'sheet' && <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>}
                         <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
                           Delete
                         </button>
@@ -261,6 +268,19 @@ export function HomePage() {
           onClose={() => setCreating(null)}
         />
       )}
+      {creating === 'doc' && (
+        <PromptModal
+          title="New document"
+          label="Name"
+          initial="Untitled document"
+          confirmText="Create"
+          onConfirm={async (title) => {
+            const { doc } = await api.createDoc(title);
+            navigate(`/doc/${doc.id}`);
+          }}
+          onClose={() => setCreating(null)}
+        />
+      )}
       {branching && (
         <PromptModal
           title="Create branch"
@@ -276,12 +296,12 @@ export function HomePage() {
       )}
       {renaming && (
         <PromptModal
-          title={renaming.kind === 'deck' ? 'Rename presentation' : 'Rename spreadsheet'}
+          title={`Rename ${KIND_NAMES[renaming.kind]}`}
           label="Name"
           initial={renaming.title}
           confirmText="Rename"
           onConfirm={async (title) => {
-            await (renaming.kind === 'deck' ? api.renameDeck(renaming.id, title) : api.renameSheet(renaming.id, title));
+            await (renaming.kind === 'deck' ? api.renameDeck(renaming.id, title) : renaming.kind === 'doc' ? api.renameDoc(renaming.id, title) : api.renameSheet(renaming.id, title));
             await load();
           }}
           onClose={() => setRenaming(null)}
@@ -289,7 +309,7 @@ export function HomePage() {
       )}
       {deleting && (
         <ConfirmModal
-          title={deleting.kind === 'deck' ? 'Delete presentation?' : 'Delete spreadsheet?'}
+          title={`Delete ${KIND_NAMES[deleting.kind]}?`}
           message={
             <>
               “{deleting.title}” will be permanently deleted. This cannot be undone.
@@ -298,7 +318,7 @@ export function HomePage() {
           confirmText="Delete"
           danger
           onConfirm={async () => {
-            await (deleting.kind === 'deck' ? api.deleteDeck(deleting.id) : api.deleteSheet(deleting.id));
+            await (deleting.kind === 'deck' ? api.deleteDeck(deleting.id) : deleting.kind === 'doc' ? api.deleteDoc(deleting.id) : api.deleteSheet(deleting.id));
             await load();
           }}
           onClose={() => setDeleting(null)}

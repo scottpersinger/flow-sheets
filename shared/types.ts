@@ -119,8 +119,8 @@ export interface Workbook {
   tabs: Tab[];
 }
 
-/** What a stored document is: a spreadsheet (workbook JSON) or a slide deck (see shared/deck.ts). */
-export type DocKind = 'sheet' | 'deck';
+/** What a stored document is: a spreadsheet (workbook JSON), a slide deck (shared/deck.ts) or a text document (shared/doc.ts). */
+export type DocKind = 'sheet' | 'deck' | 'doc';
 
 export interface SheetMeta {
   id: string;
