@@ -48,7 +48,10 @@ type XNode = Record<string, unknown>;
 const parser = new XMLParser({ preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: '', parseTagValue: false, parseAttributeValue: false, trimValues: false });
 
 const tagOf = (n: XNode): string => Object.keys(n).find((k) => k !== ':@') ?? '';
-const kids = (n: XNode | undefined): XNode[] => (n ? ((n[tagOf(n)] as XNode[] | undefined) ?? []) : []);
+const kids = (n: XNode | undefined): XNode[] => {
+  const v = n ? n[tagOf(n)] : undefined;
+  return Array.isArray(v) ? (v as XNode[]) : []; // a text node holds a string, not children
+};
 const attrs = (n: XNode | undefined): Record<string, string> => ((n?.[':@'] as Record<string, string> | undefined) ?? {});
 const child = (n: XNode | undefined, name: string): XNode | undefined => kids(n).find((c) => tagOf(c) === name);
 const children = (n: XNode | undefined, name: string): XNode[] => kids(n).filter((c) => tagOf(c) === name);
@@ -126,6 +129,8 @@ class Importer {
   private sink: ImageSink;
   private warn = new Map<string, number>();
   private styles = new Map<string, Style>();
+  /** The document's own default font and size (docDefaults plus the Normal style): runs that match them get no mark. */
+  private defaultRun: RunProps = {};
   /** numId → abstractNumId, and abstractNumId → per-level format ("bullet" or a number format). */
   private nums = new Map<string, string>();
   private abstractNums = new Map<string, Map<number, string>>();
@@ -186,6 +191,11 @@ class Importer {
         rPr: child(s, 'w:rPr'),
       });
     }
+    const defaults = child(stylesRoot, 'w:docDefaults');
+    let run = this.runProps(child(child(defaults, 'w:rPrDefault'), 'w:rPr'), {});
+    const normal = [...this.styles.values()].find((s) => s.type === 'paragraph' && (s.id === 'Normal' || /^normal$/i.test(s.name)));
+    if (normal) run = this.runProps(normal.rPr, run);
+    this.defaultRun = { font: run.font, size: run.size };
   }
 
   private async loadNumbering(): Promise<void> {
@@ -312,10 +322,11 @@ class Importer {
     if (p.italic) out.push(m.italic.create());
     if (p.underline && !href) out.push(m.underline.create());
     if (p.strike) out.push(m.strike.create());
-    if (p.color && isColor(p.color)) out.push(m.color.create({ color: p.color }));
+    // Links have their own look; Word's explicit blue on link text would fight it.
+    if (p.color && isColor(p.color) && !href) out.push(m.color.create({ color: p.color }));
     if (p.highlight && isColor(p.highlight)) out.push(m.highlight.create({ color: p.highlight }));
-    if (p.font) out.push(m.font.create({ family: p.font }));
-    if (p.size !== undefined) out.push(m.size.create({ size: p.size }));
+    if (p.font && p.font !== this.defaultRun.font) out.push(m.font.create({ family: p.font }));
+    if (p.size !== undefined && p.size !== this.defaultRun.size) out.push(m.size.create({ size: p.size }));
     return out;
   }
 

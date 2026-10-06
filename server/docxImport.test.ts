@@ -56,6 +56,18 @@ describe('docx import', () => {
     expect(warnings).toEqual(['Headers and footers were dropped.', 'Tables were converted to paragraphs (one per row, cells separated by tabs).']);
   });
 
+  it('skips marks equal to the document defaults, drops link colors, and survives text inside drawings', async () => {
+    const body = [
+      p(`${r('Calibri eleven', '<w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/>')}${r(' and ')}${r('Arial twelve', '<w:rFonts w:ascii="Arial"/><w:sz w:val="24"/>')}`),
+      p(`<w:hyperlink r:id="rId5">${r('blue link', '<w:color w:val="1155CC"/>')}</w:hyperlink>`),
+      p(`<w:r><w:drawing><wp:inline><wp:extent cx="952500" cy="952500"/><wp:docPr id="2" name="Picture 2"/><a:graphic><a:graphicData><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="x.png"/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId7"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`),
+    ].join('');
+    const { doc } = await importDocx(await buildDocx(body), sink);
+    expect(docToMarkdown(docNode(doc))).toBe(
+      'Calibri eleven and <span style="font-family: Arial, sans-serif"><span style="font-size: 12pt">Arial twelve</span></span>\n\n[blue link](https://biztrip.ai/)\n\n![](/api/images/00000000-0000-0000-0000-000000000001)',
+    );
+  });
+
   it('rejects files that are not Word documents and handles empty ones', async () => {
     await expect(importDocx(Buffer.from('garbage'), sink)).rejects.toThrow(/not a valid Word document/);
     expect(await isDocx(Buffer.from('garbage'))).toBe(false);
