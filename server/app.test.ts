@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildSlide, newId } from '../shared/deck.ts';
 import { buildPptx } from '../shared/pptxExport.ts';
 import { buildApp } from './app.ts';
-import { mailbox, signUp } from './testing.ts';
+import { buildDocx, mailbox, signUp } from './testing.ts';
 
 let dir: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -397,6 +397,18 @@ describe('documents', () => {
 
     res = await app.inject({ method: 'PATCH', url: `/api/docs/${meta.id}`, headers: { cookie }, payload: { title: 'Notes 2026' } });
     expect(res.json().meta.title).toBe('Notes 2026');
+
+    // Word import: a new document from the upload, or just the converted blocks.
+    const docx = await buildDocx('<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>From Word</w:t></w:r></w:p><w:p><w:r><w:t>Body.</w:t></w:r></w:p>');
+    res = await app.inject({ method: 'POST', url: '/api/docs/import?title=Memo', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: docx });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().doc).toMatchObject({ title: 'Memo', kind: 'doc' });
+    res = await app.inject({ method: 'GET', url: `/api/docs/${res.json().doc.id}`, headers: { cookie } });
+    expect(res.json().doc.content.content[0]).toMatchObject({ type: 'heading', attrs: { level: 1 } });
+    res = await app.inject({ method: 'POST', url: '/api/import/docx', headers: { cookie, 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }, payload: docx });
+    expect(res.json().doc.content.content).toHaveLength(2);
+    res = await app.inject({ method: 'POST', url: '/api/import/docx', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('garbage') });
+    expect(res.statusCode).toBe(400);
     res = await app.inject({ method: 'DELETE', url: `/api/docs/${meta.id}`, headers: { cookie } });
     expect(res.statusCode).toBe(200);
     expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${meta.id}.json`);

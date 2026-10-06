@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
+import { importDocx } from './docxImport.ts';
 import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
@@ -28,6 +29,7 @@ const SESSION_COOKIE = 'sid';
 const GOOGLE_STATE_COOKIE = 'gstate';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 declare module 'fastify' {
@@ -111,7 +113,7 @@ export async function buildApp(opts: AppOptions) {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
   // Raw file uploads (xlsx import).
-  app.addContentTypeParser([XLSX_MIME, PPTX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
+  app.addContentTypeParser([XLSX_MIME, PPTX_MIME, DOCX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
     done(null, body),
   );
   // Raw cell image uploads. Images are stored as files and cells only reference them, so workbook saves
@@ -471,6 +473,38 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       if (!(await sheets.delete(req.user!.id, id, 'doc'))) return reply.code(404).send({ error: 'Document not found' });
       return { ok: true };
+    });
+
+    /** Convert an uploaded .docx body; sends a 400 and returns null on failure. Pictures are stored for the user. */
+    const convertDocx = async (req: FastifyRequest, reply: FastifyReply) => {
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        reply.code(400).send({ error: 'Upload a Word document (.docx) as the request body.' });
+        return null;
+      }
+      try {
+        return await importDocx(body, (type, data) => images.create(req.user!.id, type, data));
+      } catch (e) {
+        if (!(e instanceof ImportError)) req.log.warn({ err: e }, 'docx import failed');
+        reply.code(400).send({ error: e instanceof ImportError ? e.message : 'This file could not be imported. Make sure it is a valid Word document (.docx).' });
+        return null;
+      }
+    };
+
+    // Import as a brand-new document.
+    r.post('/api/docs/import', async (req, reply) => {
+      const result = await convertDocx(req, reply);
+      if (!result) return reply;
+      const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported document';
+      const doc = await sheets.createDoc(req.user!.id, title, result.doc);
+      return { doc, warnings: result.warnings };
+    });
+
+    // Convert only (nothing is stored but the pictures); the client adds the blocks to an open document.
+    r.post('/api/import/docx', async (req, reply) => {
+      const result = await convertDocx(req, reply);
+      if (!result) return reply;
+      return result;
     });
   });
 

@@ -108,6 +108,10 @@ export const api = {
   getDoc: (id: string) => request<{ meta: SheetMeta; doc: Doc }>('GET', `/api/docs/${encodeURIComponent(id)}`),
   saveDoc: (id: string, doc: Doc, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/docs/${encodeURIComponent(id)}`, { doc }, keepalive ? { keepalive: true } : undefined),
+  /** Import a Word file (.docx) as a new document. */
+  importDocx: (file: File, title: string) => uploadExcel<{ doc: SheetMeta; warnings: string[] }>(`/api/docs/import?title=${encodeURIComponent(title)}`, file),
+  /** Convert a Word file (.docx) to document blocks without creating a document. */
+  convertDocx: (file: File) => uploadExcel<{ doc: Doc; warnings: string[] }>('/api/import/docx', file),
   renameDoc: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/docs/${encodeURIComponent(id)}`, { title }),
   deleteDoc: (id: string) => request<{ ok: true }>('DELETE', `/api/docs/${encodeURIComponent(id)}`),
 

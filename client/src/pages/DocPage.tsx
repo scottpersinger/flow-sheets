@@ -1,7 +1,7 @@
 import { DOMSerializer } from 'prosemirror-model';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { docSchema, type BlockType } from '../../../shared/doc.ts';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { docNode, docSchema, type BlockType } from '../../../shared/doc.ts';
 import { docToMarkdown } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
@@ -17,6 +17,7 @@ import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { DocController, useDocController } from '../doc/controller.ts';
 import { DocEditor } from '../doc/DocEditor.tsx';
 import { DocToolbar } from '../doc/DocToolbar.tsx';
+import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
 
 function downloadFile(name: string, mime: string, content: string) {
@@ -90,7 +91,14 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   useDocController(ctl);
   useDocFonts(ctl.doc);
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, logout } = useAuth();
+  // Notes from a Word import: arrive via navigation state (home-page import) or from File → Import.
+  const [importWarnings, setImportWarnings] = useState<string[]>(() => (location.state as { importWarnings?: string[] } | null)?.importWarnings ?? []);
+  const dismissImportWarnings = () => {
+    setImportWarnings([]);
+    if (location.state) navigate(location.pathname, { replace: true, state: null });
+  };
   const [meta, setMeta] = useState(initialMeta);
   useRegisterDoc(ctl, meta);
   const [title, setTitle] = useState(initialMeta.title);
@@ -145,6 +153,29 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
     if (file) await addImageFiles([file]);
   };
 
+  /** File → Import: add the blocks of a .docx after the cursor's block, as one undoable change. */
+  const importDocxBlocks = async () => {
+    const file = await pickDocxFile();
+    if (!file) return;
+    const problem = checkDocxFile(file);
+    if (problem) return notify(problem);
+    notify(`Importing “${file.name}”…`);
+    try {
+      const { doc, warnings } = await api.convertDocx(file);
+      const blocks = docNode(doc).content;
+      ctl.run((tr) => {
+        const $head = tr.selection.$head;
+        const pos = $head.depth ? $head.after(1) : $head.pos;
+        tr.insert(pos, blocks).scrollIntoView();
+      });
+      setImportWarnings(warnings);
+      const count = blocks.childCount;
+      notify(`Added ${count} block${count === 1 ? '' : 's'} from “${file.name}”. Press ${MOD}Z to undo.`);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   // The link dialog, from the toolbar, the Insert menu and Mod-K.
   const openLinkDialog = useCallback(() => setDialog({ kind: 'link', initial: ctl.linkAtCursor()?.href ?? '' }), [ctl]);
   useEffect(() => {
@@ -183,6 +214,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
           },
         },
         { label: 'Rename…', action: () => setDialog({ kind: 'rename' }) },
+        { label: 'Import Word document…', action: () => void importDocxBlocks() },
         'sep',
         { label: 'Download as Markdown (.md)', action: () => downloadFile(`${meta.title}.md`, 'text/markdown', docToMarkdown(ctl.doc)) },
         { label: 'Download as web page (.html)', action: () => downloadFile(`${meta.title}.html`, 'text/html', docToHtml(ctl, meta.title)) },
@@ -327,6 +359,21 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
         </div>
       </header>
       <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} />
+      {importWarnings.length > 0 && (
+        <div className="import-banner" role="status">
+          <div>
+            <strong>Imported with some changes:</strong>
+            <ul>
+              {importWarnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+          <button className="link" onClick={dismissImportWarnings}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div
         className="doc-body"
         onDragOver={(e) => {
