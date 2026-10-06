@@ -4,7 +4,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
-import { buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
+import { ARROW_STYLE_IDS, buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
 import { SHAPE_KINDS } from '../../shared/shapes.ts';
 import { Engine } from '../../shared/formula/engine.ts';
 import type { ConnectorService } from '../connectors/service.ts';
@@ -33,10 +33,13 @@ const slideContentFields = {
   background: z.string().max(64).optional().describe('Background CSS color for this slide; "" uses the theme background.'),
 };
 const slideSpec = z.object({ layout: layout.optional().describe('Defaults to title-body.'), ...slideContentFields });
+const connection = z
+  .object({ element_id: z.string().describe('Id of the element to attach to (from read_deck).'), site: z.enum(['top', 'right', 'bottom', 'left']).describe('Which side: the connection point is the middle of that side.') })
+  .nullable();
 const elementSpec = z
   .object({
     id: z.string().optional().describe('Id of an existing element (from read_deck) to change. Omit to add a new element.'),
-    type: z.enum(['text', 'image', 'shape']).optional().describe('Required for a new element.'),
+    type: z.enum(['text', 'image', 'shape', 'line']).optional().describe('Required for a new element. Use "line" for lines, arrows and connectors.'),
     x: z.number().optional().describe('Left edge in points (the slide is 960 wide).'),
     y: z.number().optional().describe('Top edge in points (the slide is 540 tall).'),
     w: z.number().min(0).optional(),
@@ -53,11 +56,21 @@ const elementSpec = z
     line_height: z.number().min(0.5).max(4).optional().describe('Text elements: line height as a multiple of the font size (default 1.25).'),
     src: z.string().optional().describe('Image elements: an http(s) image URL, or the /api/images/... address of an image attached to the chat.'),
     fit: z.enum(['contain', 'cover']).optional().describe('Image elements: how the picture fills its box.'),
-    shape: z.enum(SHAPE_KINDS).optional().describe('Shape elements: the kind of shape. Arrows point right; a line is horizontal when h is 0, vertical when w is 0, diagonal otherwise.'),
-    arrow: z.enum(['start', 'end', 'both', 'none']).optional().describe('Lines: arrowheads at the end (right or bottom), the start, or both.'),
+    shape: z.enum(SHAPE_KINDS).optional().describe('Shape elements: the kind of shape. Arrows point right. Use type "line" instead of shape "line".'),
+    x1: z.number().optional().describe('Lines: x of the start point (the slide is 960 wide). A line can point in any direction.'),
+    y1: z.number().optional().describe('Lines: y of the start point (the slide is 540 tall).'),
+    x2: z.number().optional().describe('Lines: x of the end point.'),
+    y2: z.number().optional().describe('Lines: y of the end point.'),
+    kind: z.enum(['straight', 'elbow', 'curved']).optional().describe('Lines: straight (default), elbow (right-angle route) or curved connector.'),
+    dash: z.enum(['solid', 'dash', 'dot']).optional().describe('Lines: dash style.'),
+    start_arrow: z.enum(ARROW_STYLE_IDS).optional().describe('Lines: arrowhead at the start point: none, arrow, open, triangle, circle or diamond.'),
+    end_arrow: z.enum(ARROW_STYLE_IDS).optional().describe('Lines: arrowhead at the end point: none, arrow, open, triangle, circle or diamond.'),
+    connect_start: connection.optional().describe('Lines: attach the start to a side of an existing element (id from read_deck); the line then follows it when it moves, and elbows re-route. null detaches. The start point is moved to that side.'),
+    connect_end: connection.optional().describe('Lines: attach the end to a side of an existing element; null detaches.'),
+    arrow: z.enum(['start', 'end', 'both', 'none']).optional().describe('Lines: shorthand for start_arrow / end_arrow with the "arrow" style: at the end point, the start point, or both.'),
     fill: z.string().max(64).optional().describe('Shape fill CSS color, or "none".'),
-    stroke: z.string().max(64).optional().describe('Shape outline color.'),
-    stroke_width: z.number().min(0).max(100).optional(),
+    stroke: z.string().max(64).optional().describe('Shape outline color, or the color of a line.'),
+    stroke_width: z.number().min(0).max(100).optional().describe('Outline width of a shape, or the thickness of a line (default 3).'),
     start_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: start angle in degrees, clockwise from 3 o'clock (default 270 = top). The arc is an open stroke (no fill) along the ellipse in the shape's box, drawn clockwise to end_angle."),
     end_angle: z.number().min(-360).max(720).optional().describe("Arc shapes: end angle in degrees, clockwise from 3 o'clock (default 0 = right)."),
   })
@@ -211,7 +224,7 @@ const schemas = {
       set: z.array(elementSpec).max(50).optional().describe('Elements to add (no id) or change (with id).'),
       remove: z.array(z.string()).max(50).optional().describe('Ids of elements to remove.'),
     })
-    .describe('Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images and shapes. Prefer update_slide for text changes.'),
+    .describe('Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images, shapes, and lines/arrows/connectors (type "line"). Prefer update_slide for text changes.'),
   render_slide: z
     .object({
       slide: slideNumber,

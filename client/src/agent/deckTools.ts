@@ -10,7 +10,11 @@ import {
   toParagraphs,
   updateSlideContent,
   validateElement,
+  type ArrowStyle,
+  type ConnectionSite,
   type LayoutId,
+  type LineElement,
+  type LineKind,
   type ShapeElement,
   type SlideContent,
   type SlideElement,
@@ -18,6 +22,7 @@ import {
   type TextStyle,
   type ThemeId,
 } from '../../../shared/deck.ts';
+import { boxFromEnds, lineEnds, lineFromShape } from '../../../shared/lines.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { SlideRender } from '../deck/renderSlide.ts';
@@ -64,9 +69,58 @@ function checkImage(src: unknown): string {
   return src as string;
 }
 
+/** A line element from an edit_elements spec (x1,y1,x2,y2, kind, dash, arrowheads, connections), merged into the line it changes. */
+function applyLineSpec(id: string, prev: LineElement | undefined, s: Input, byId: Map<string, SlideElement>): LineElement {
+  const given = (k: string) => (typeof s[k] === 'number' ? (s[k] as number) : undefined);
+  const old = prev ? lineEnds(prev) : undefined;
+  let ends: { x1: number; y1: number; x2: number; y2: number };
+  const hasPoints = ['x1', 'y1', 'x2', 'y2'].some((k) => given(k) !== undefined);
+  if (!hasPoints && prev && ['x', 'y', 'w', 'h'].some((k) => given(k) !== undefined)) {
+    // Moved or resized by its box: keep the direction.
+    const box = { x: given('x') ?? prev.x, y: given('y') ?? prev.y, w: given('w') ?? prev.w, h: given('h') ?? prev.h, flipH: prev.flipH, flipV: prev.flipV };
+    ends = lineEnds(box);
+  } else {
+    const x1 = given('x1') ?? old?.x1 ?? given('x') ?? 80;
+    const y1 = given('y1') ?? old?.y1 ?? given('y') ?? 80;
+    ends = { x1, y1, x2: given('x2') ?? old?.x2 ?? x1 + (given('w') ?? 200), y2: given('y2') ?? old?.y2 ?? y1 + (given('h') ?? 0) };
+  }
+  const el: LineElement = { id, type: 'line', kind: (s.kind as LineKind | undefined) ?? prev?.kind ?? 'straight', ...boxFromEnds(ends.x1, ends.y1, ends.x2, ends.y2) };
+  const color = s.stroke !== undefined ? s.stroke : prev?.strokeColor;
+  const width = s.stroke_width !== undefined ? s.stroke_width : prev?.strokeWidth;
+  const dash = (s.dash as LineElement['dash'] | undefined) ?? prev?.dash;
+  if (color) el.strokeColor = color as string;
+  if (typeof width === 'number') el.strokeWidth = width;
+  if (dash && dash !== 'solid') el.dash = dash;
+  // `arrow` is the older input: the "arrow" style at the end, the start or both.
+  const legacy = s.arrow as string | undefined;
+  const start = (s.start_arrow as ArrowStyle | undefined) ?? (legacy ? (legacy === 'start' || legacy === 'both' ? 'arrow' : 'none') : prev?.startArrow);
+  const end = (s.end_arrow as ArrowStyle | undefined) ?? (legacy ? (legacy === 'end' || legacy === 'both' ? 'arrow' : 'none') : prev?.endArrow);
+  if (start && start !== 'none') el.startArrow = start;
+  if (end && end !== 'none') el.endArrow = end;
+  if (prev?.bend !== undefined) el.bend = prev.bend;
+  for (const [key, input, old] of [
+    ['startConnection', s.connect_start, prev?.startConnection],
+    ['endConnection', s.connect_end, prev?.endConnection],
+  ] as const) {
+    const c = input === undefined ? old : input === null ? undefined : { elementId: String((input as Input).element_id), site: (input as Input).site as ConnectionSite };
+    if (!c) continue;
+    const target = byId.get(c.elementId);
+    if (!target || target.type === 'line') throw new ToolError(`Cannot connect to "${c.elementId}": it is not a text, image or shape element on this slide. Use read_deck for the ids.`);
+    el[key] = c;
+  }
+  return el;
+}
+
 /** Merge an element spec from edit_elements into an existing element, or build a new one. */
-function applyElementSpec(existing: SlideElement | undefined, s: Input): SlideElement {
+function applyElementSpec(existing: SlideElement | undefined, s: Input, byId: Map<string, SlideElement> = new Map()): SlideElement {
+  if (existing?.type === 'shape' && existing.shape === 'line') existing = lineFromShape(existing);
+  if (s.type === 'shape' && s.shape === 'line') s = { ...s, type: 'line' };
   const type = (s.type ?? existing?.type) as SlideElement['type'] | undefined;
+  if (type === 'line') {
+    if (existing && existing.type !== 'line') throw new ToolError(`Element ${existing.id} is a ${existing.type}; its type cannot change. Remove it and add a new one.`);
+    return applyLineSpec(existing?.id ?? newId(), existing as LineElement | undefined, s, byId);
+  }
+  if (existing?.type === 'line') throw new ToolError(`Element ${existing.id} is a line; its type cannot change. Remove it and add a new one.`);
   if (!type) throw new ToolError('A new element needs a type: text, image or shape.');
   if (existing && s.type && s.type !== existing.type) throw new ToolError(`Element ${existing.id} is a ${existing.type}; its type cannot change. Remove it and add a new one.`);
   const box = {
@@ -246,7 +300,7 @@ export function runDeckTool(call: ClientToolCall, env: DeckToolEnv): string {
       for (const s of sets) {
         const existing = typeof s.id === 'string' ? byId.get(s.id) : undefined;
         if (typeof s.id === 'string' && !existing) throw new ToolError(`Slide ${index + 1} has no element "${s.id}". Omit id to add a new element.`);
-        const el = applyElementSpec(existing, s);
+        const el = applyElementSpec(existing, s, byId);
         const problem = validateElement(el, `slide ${index + 1}`);
         if (problem) throw new ToolError(problem);
         changed.push(el);
@@ -264,7 +318,16 @@ export function runDeckTool(call: ClientToolCall, env: DeckToolEnv): string {
       );
       ctl.goTo(index);
       ctl.select(changed.map((e) => e.id));
-      return JSON.stringify({ slide: index + 1, set: changed.map((e) => ({ id: e.id, type: e.type, x: e.x, y: e.y, w: e.w, h: e.h })), removed: [...removes] });
+      // Connected lines were moved to their shapes' sides when the slide was updated: report them as stored.
+      const stored = new Map(ctl.deck.slides[index].elements.map((e) => [e.id, e]));
+      return JSON.stringify({
+        slide: index + 1,
+        set: changed.map((c) => {
+          const e = stored.get(c.id) ?? c;
+          return e.type === 'line' ? { id: e.id, type: e.type, ...lineEnds(e) } : { id: e.id, type: e.type, x: e.x, y: e.y, w: e.w, h: e.h };
+        }),
+        removed: [...removes],
+      });
     }
 
     case 'delete_slides': {

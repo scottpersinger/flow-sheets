@@ -2394,6 +2394,39 @@ button.agent-tool-label:hover {
 }
 
 /* Shapes */
+.sl-line-svg {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+.deck-canvas.drawing,
+.deck-canvas.drawing .sl-el {
+  cursor: crosshair;
+}
+.sl-endpoint {
+  position: absolute;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--blue);
+  box-sizing: border-box;
+  z-index: 2;
+  cursor: move;
+}
+.sl-endpoint.mid {
+  background: var(--blue);
+}
+.sl-site {
+  position: absolute;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--blue);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 2;
+}
+.sl-site.active {
+  background: var(--blue);
+}
 .sl-shape-svg {
   position: absolute;
   inset: 0;

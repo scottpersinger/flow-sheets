@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSlide, newId, slideTitle, type Deck, type ImageElement, type ShapeElement, type TextElement } from '../shared/deck.ts';
+import { buildSlide, newId, slideTitle, type Deck, type ImageElement, type LineElement, type ShapeElement, type TextElement } from '../shared/deck.ts';
 import { buildPptx, fontFace, hexColor } from '../shared/pptxExport.ts';
 import JSZip from 'jszip';
 import { importPptx, isPptx } from './pptxImport.ts';
@@ -61,6 +61,8 @@ async function googleStylePptx(): Promise<Buffer> {
     cxn('16', xfrm(2601300, 1948400, 922500, 0), '<a:headEnd type="none"/><a:tailEnd type="triangle"/>') +
     cxn('17', xfrm(1546050, 2571650, 360900, 628200), '<a:headEnd type="none"/><a:tailEnd type="triangle"/>') +
     cxn('18', xfrm(1546050, 3571650, 360900, 628200, ' flipH="1"'), '<a:headEnd type="triangle"/><a:tailEnd type="none"/>') +
+    // An elbow connector from the bottom of shape 12 (site 2) to the top of shape 13 (site 0), dashed, with an open arrowhead.
+    `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="19" name="c19"/><p:cNvCxnSpPr><a:stCxn id="12" idx="2"/><a:endCxn id="13" idx="0"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr>${xfrm(1500000, 3000000, 2000000, 600000)}${geom('bentConnector3')}<a:ln w="19050"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:prstDash val="sysDash"/><a:tailEnd type="arrow"/></a:ln></p:spPr></p:cxnSp>` +
     `</p:spTree></p:cSld></p:sld>`;
   const zip = new JSZip();
   zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
@@ -114,12 +116,17 @@ describe('pptx export and import', () => {
     expect(texts.find((t) => t.paragraphs[0].text === 'Styled')!.style?.color).toBe('#ffffff');
     // Cylinders, and connectors with their arrowheads and diagonals.
     expect(els.find((e) => e.type === 'shape' && e.shape === 'cylinder')).toMatchObject({ fill: '#eeeeee', stroke: '#595959' });
-    const lines = els.filter((e): e is ShapeElement => e.type === 'shape' && e.shape === 'line');
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toMatchObject({ h: 0, arrow: 'end', stroke: '#595959', strokeWidth: 1 });
-    expect(lines[1]).toMatchObject({ w: 38, h: 66, arrow: 'end' });
-    expect(lines[1].flip).toBeUndefined();
-    expect(lines[2]).toMatchObject({ w: 38, h: 66, arrow: 'end', flip: true }); // flipped: the start is on the right
+    const lines = els.filter((e): e is LineElement => e.type === 'line');
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toMatchObject({ kind: 'straight', h: 0, endArrow: 'triangle', strokeColor: '#595959', strokeWidth: 1 });
+    expect(lines[1]).toMatchObject({ w: 38, h: 66, endArrow: 'triangle' });
+    expect(lines[1].flipH).toBeUndefined();
+    expect(lines[2]).toMatchObject({ w: 38, h: 66, startArrow: 'triangle', flipH: true }); // flipped: the start is on the right
+    // Elbow connectors keep their route, dash, arrowhead and the shapes they are attached to.
+    const rect = els.find((e) => e.type === 'shape' && e.shape === 'rect' && e.text === undefined && e.id === lines[3].startConnection?.elementId);
+    const disk = els.find((e) => e.type === 'shape' && e.shape === 'cylinder')!;
+    expect(lines[3]).toMatchObject({ kind: 'elbow', dash: 'dash', endArrow: 'open', strokeColor: '#ff0000', startConnection: { site: 'bottom' }, endConnection: { elementId: disk.id, site: 'top' } });
+    expect(rect).toBeDefined();
   });
 
   it('converts colors and fonts for PowerPoint', () => {
@@ -156,6 +163,8 @@ describe('pptx export and import', () => {
       { id: newId(), type: 'shape', shape: 'cylinder', x: 840, y: 100, w: 80, h: 100, fill: '#dddddd', stroke: '#333333', strokeWidth: 1 },
       { id: newId(), type: 'shape', shape: 'line', x: 700, y: 60, w: 120, h: 80, flip: true, arrow: 'both', stroke: '#123456', strokeWidth: 2 },
       { id: newId(), type: 'image', x: 600, y: 160, w: 200, h: 150, src: PNG },
+      { id: newId(), type: 'line', kind: 'elbow', x: 100, y: 200, w: 150, h: 90, flipV: true, dash: 'dot', startArrow: 'diamond', endArrow: 'circle', strokeColor: '#abcdef', strokeWidth: 3 },
+      { id: newId(), type: 'line', kind: 'curved', x: 100, y: 320, w: 150, h: 40, endArrow: 'open' },
     );
     const deck: Deck = { version: 1, theme: 'light', slides: [title, body] };
 
@@ -199,16 +208,16 @@ describe('pptx export and import', () => {
     const go = s2.elements[s2.elements.indexOf(ellipse) + 1] as TextElement;
     expect(go).toMatchObject({ type: 'text', paragraphs: [{ text: 'Go' }], style: { align: 'center', valign: 'middle', color: '#ffffff' } });
     expect(Math.abs(ellipse.x - 700)).toBeLessThanOrEqual(2);
-    const line = s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'line')!;
-    expect(line).toMatchObject({ stroke: '#ff0000', h: 0 });
+    const line = s2.elements.find((e): e is LineElement => e.type === 'line')!;
+    expect(line).toMatchObject({ strokeColor: '#ff0000', h: 0 });
     expect(line.strokeWidth).toBeGreaterThanOrEqual(3);
     // Translucent fills, vertical lines and per-paragraph sizes survive too.
     const pill = s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'rounded')!;
     expect(pill.fill).toBe('rgba(255, 255, 255, 0.12)');
     expect(pill.stroke).toBe('rgba(255, 255, 255, 0.3)');
-    const vline = s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'line' && e.w === 0)!;
+    const vline = s2.elements.find((e): e is LineElement => e.type === 'line' && e.w === 0)!;
     expect(Math.abs(vline.h - 200)).toBeLessThanOrEqual(2);
-    expect(vline.stroke).toBe('#00ff00');
+    expect(vline.strokeColor).toBe('#00ff00');
     const figure = s2.elements.find((e): e is TextElement => e.type === 'text' && e.paragraphs[0]?.text === '2-3x')!;
     expect(figure.style).toMatchObject({ size: 47, align: 'center', color: '#ffffff', font: 'Poppins', lineHeight: 1.5 });
     expect(figure.paragraphs[0].size).toBeUndefined(); // the first paragraph is the box's own style
@@ -219,10 +228,14 @@ describe('pptx export and import', () => {
     expect(s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'arrow')).toMatchObject({ fill: 'none', stroke: '#0000ff' });
     // Cylinders, diagonal lines and arrowheads round-trip too.
     expect(s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'cylinder')).toMatchObject({ fill: '#dddddd', stroke: '#333333' });
-    const diagonal = s2.elements.find((e): e is ShapeElement => e.type === 'shape' && e.shape === 'line' && e.w > 0 && e.h > 0)!;
-    expect(diagonal).toMatchObject({ flip: true, arrow: 'both', stroke: '#123456' });
+    const diagonal = s2.elements.find((e): e is LineElement => e.type === 'line' && e.w > 0 && e.h > 0)!;
+    expect(diagonal).toMatchObject({ flipV: true, startArrow: 'triangle', endArrow: 'triangle', strokeColor: '#123456' });
     expect(Math.abs(diagonal.w - 120)).toBeLessThanOrEqual(2);
     expect(Math.abs(diagonal.h - 80)).toBeLessThanOrEqual(2);
+    // Elbow and curved connectors keep their kind, flips, dash and arrowheads.
+    const elbow = s2.elements.find((e): e is LineElement => e.type === 'line' && e.kind === 'elbow')!;
+    expect(elbow).toMatchObject({ flipV: true, dash: 'dot', startArrow: 'diamond', endArrow: 'circle', strokeColor: '#abcdef' });
+    expect(s2.elements.find((e): e is LineElement => e.type === 'line' && e.kind === 'curved')).toMatchObject({ endArrow: 'open' });
     const img = s2.elements.find((e): e is ImageElement => e.type === 'image')!;
     expect(img.src).toBe('/api/images/00000000-0000-0000-0000-000000000001');
     expect(stored).toEqual([{ type: 'image/png', size: expect.any(Number) }]);

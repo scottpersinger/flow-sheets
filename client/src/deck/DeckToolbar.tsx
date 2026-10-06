@@ -1,6 +1,7 @@
 // Toolbar for the deck editor: slides, layout, theme, inserting elements, text styling and arrangement.
 import { useEffect, useState, type ReactNode } from 'react';
-import { LAYOUT_IDS, THEME_IDS, THEMES, type LayoutId, type TextElement, type ThemeId } from '../../../shared/deck.ts';
+import { LAYOUT_IDS, THEME_IDS, THEMES, type ArrowStyle, type LayoutId, type LineElement, type LineKind, type TextElement, type ThemeId } from '../../../shared/deck.ts';
+import { ARROW_STYLES, DASH_STYLES, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPE_KINDS, SHAPES } from '../../../shared/shapes.ts';
 import { MOD } from '../commands.ts';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -63,6 +64,36 @@ function ShapePicker({ ctl }: { ctl: DeckController }) {
     </div>
   );
 }
+
+const LINE_TOOLS: { name: string; kind: LineKind; arrow: boolean; path: string }[] = [
+  { name: 'Line', kind: 'straight', arrow: false, path: 'M4 20L20 4' },
+  { name: 'Arrow', kind: 'straight', arrow: true, path: 'M4 20L19 5M12 5h7v7' },
+  { name: 'Elbow connector', kind: 'elbow', arrow: true, path: 'M4 6h8v12h8M16 14l4 4-4 4' },
+  { name: 'Curved connector', kind: 'curved', arrow: true, path: 'M4 6c10 0 6 12 16 12M16 14l4 4-4 4' },
+];
+
+const lineIcon = (path: string) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+    <path d={path} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** The Line menu: pick a kind of line, then drag on the slide to draw it. */
+function LinePicker({ ctl }: { ctl: DeckController }) {
+  const items: MenuItem[] = LINE_TOOLS.map((t) => ({
+    label: (
+      <span className="menu-icon-label">
+        {lineIcon(t.path)} {t.name}
+      </span>
+    ),
+    checked: ctl.tool?.kind === t.kind && ctl.tool.arrow === t.arrow,
+    action: () => ctl.setTool({ kind: t.kind, arrow: t.arrow }),
+  }));
+  return <Drop title="Line" label={<span className={ctl.tool ? 'active' : ''}>{lineIcon(LINE_TOOLS[0].path)}</span>} items={items} />;
+}
+
+const ARROW_NAMES: Record<ArrowStyle, string> = { none: 'None', arrow: 'Arrow', open: 'Open arrow', triangle: 'Triangle', circle: 'Circle', diamond: 'Diamond' };
+const WEIGHTS = [1, 2, 3, 4, 6, 8, 12];
 
 const PALETTE = [
   ['#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff'],
@@ -155,6 +186,7 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage }: { ctl: DeckContro
   const texts = selected.filter((e): e is TextElement => e.type === 'text');
   const text = texts[0];
   const shapes = selected.filter((e) => e.type === 'shape');
+  const line = selected.find((e): e is LineElement => e.type === 'line');
   const role = text?.role ?? 'body';
   const bold = text ? (text.style?.bold ?? role === 'title') : false;
   const italic = !!text?.style?.italic;
@@ -183,6 +215,38 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage }: { ctl: DeckContro
         </svg>
       </Btn>
       <ShapePicker ctl={ctl} />
+      <LinePicker ctl={ctl} />
+      <span className="tb-sep" />
+      <ColorPicker title="Line color" icon={lineIcon('M4 20L20 4')} value={line?.strokeColor} disabled={!line} onPick={(c) => ctl.styleLines({ strokeColor: c })} />
+      <select className="tb-select" title="Line weight" aria-label="Line weight" disabled={!line} value={line?.strokeWidth ?? DEFAULT_LINE_WIDTH} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ strokeWidth: Number(e.target.value) })}>
+        {!WEIGHTS.includes(line?.strokeWidth ?? DEFAULT_LINE_WIDTH) && <option value={line?.strokeWidth}>{line?.strokeWidth}</option>}
+        {WEIGHTS.map((w) => (
+          <option key={w} value={w}>
+            {w}px
+          </option>
+        ))}
+      </select>
+      <select className="tb-select" title="Line dash" aria-label="Line dash" disabled={!line} value={line?.dash ?? 'solid'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ dash: e.target.value === 'solid' ? undefined : (e.target.value as LineElement['dash']) })}>
+        {DASH_STYLES.map((d) => (
+          <option key={d} value={d}>
+            {d === 'solid' ? 'Solid' : d === 'dash' ? 'Dash' : 'Dot'}
+          </option>
+        ))}
+      </select>
+      <select className="tb-select" title="Start arrowhead" aria-label="Start arrowhead" disabled={!line} value={line?.startArrow ?? 'none'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ startArrow: e.target.value === 'none' ? undefined : (e.target.value as ArrowStyle) })}>
+        {ARROW_STYLES.map((a) => (
+          <option key={a} value={a}>
+            Start: {ARROW_NAMES[a]}
+          </option>
+        ))}
+      </select>
+      <select className="tb-select" title="End arrowhead" aria-label="End arrowhead" disabled={!line} value={line?.endArrow ?? 'none'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ endArrow: e.target.value === 'none' ? undefined : (e.target.value as ArrowStyle) })}>
+        {ARROW_STYLES.map((a) => (
+          <option key={a} value={a}>
+            End: {ARROW_NAMES[a]}
+          </option>
+        ))}
+      </select>
       <span className="tb-sep" />
       <Btn title={`Bold (${MOD}B)`} active={bold} disabled={!text} onClick={() => ctl.styleSelected({ bold: !bold })}>
         <b>B</b>

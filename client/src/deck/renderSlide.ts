@@ -76,7 +76,7 @@ export function measureOverflow(host: HTMLElement, slide: Slide): OverflowItem[]
   const out: OverflowItem[] = [];
   for (const node of Array.from(host.querySelectorAll<HTMLElement>('[data-el]'))) {
     const el = slide.elements.find((e) => e.id === node.dataset.el);
-    if (!el || el.type === 'image') continue;
+    if (!el || el.type === 'image' || el.type === 'line') continue;
     let textW = 0;
     let textH = 0;
     if (el.type === 'text') {

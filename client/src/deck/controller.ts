@@ -10,6 +10,8 @@ import {
   slideContent,
   type Deck,
   type LayoutId,
+  type LineElement,
+  type LineKind,
   type ShapeKind,
   type Slide,
   type SlideContent,
@@ -18,6 +20,7 @@ import {
   type TextStyle,
   type ThemeId,
 } from '../../../shared/deck.ts';
+import { boxFromEnds, cloneElements, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPES } from '../../../shared/shapes.ts';
 import { AutoSaver } from '../state/store.ts';
 import { DeckStore, type DeckTx } from './store.ts';
@@ -41,6 +44,8 @@ export class DeckController {
   selection: string[] = [];
   /** Element whose text is being edited inline. */
   editing: string | null = null;
+  /** The line tool picked in the toolbar: the next drag on the slide draws this kind of line. */
+  tool: { kind: LineKind; arrow: boolean } | null = null;
   /** Presenting (full-screen) mode. */
   presenting = false;
   version = 0;
@@ -165,6 +170,15 @@ export class DeckController {
     this.emit();
   }
 
+  setTool(tool: DeckController['tool']): void {
+    this.tool = tool;
+    if (tool) {
+      this.editing = null;
+      this.selection = [];
+    }
+    this.emit();
+  }
+
   setPresenting(on: boolean): void {
     this.presenting = on;
     this.editing = null;
@@ -189,7 +203,7 @@ export class DeckController {
   duplicateSlide(index = this.current): void {
     const src = this.deck.slides[index];
     if (!src) return;
-    const copy: Slide = { ...src, id: newId(), elements: src.elements.map((e) => ({ ...e, id: newId() })) };
+    const copy: Slide = { ...src, id: newId(), elements: cloneElements(src.elements, newId) };
     this.run((tx) => tx.insertSlide(index + 1, copy));
     this.goTo(index + 1);
   }
@@ -271,10 +285,51 @@ export class DeckController {
   }
 
   addShape(shape: ShapeKind): string {
+    if (shape === 'line') return this.addLine('straight');
     const square = SHAPES[shape].square;
-    const w = shape === 'line' ? 300 : square ? 150 : 200;
-    const h = shape === 'line' ? 0 : square ? 150 : 120;
-    return this.addElement({ type: 'shape', shape, x: (SLIDE_W - w) / 2, y: (SLIDE_H - h) / 2, w, h, ...(shape === 'line' ? { strokeWidth: 3 } : {}) });
+    const w = square ? 150 : 200;
+    const h = square ? 150 : 120;
+    return this.addElement({ type: 'shape', shape, x: (SLIDE_W - w) / 2, y: (SLIDE_H - h) / 2, w, h });
+  }
+
+  /** Add a line from (x1, y1) to (x2, y2), by default one across the middle of the slide. */
+  addLine(kind: LineKind, arrow = false, ends?: { x1: number; y1: number; x2: number; y2: number } & Partial<Pick<LineElement, 'startConnection' | 'endConnection'>>): string {
+    const el: Omit<LineElement, 'id'> = ends
+      ? { type: 'line', kind, ...boxFromEnds(ends.x1, ends.y1, ends.x2, ends.y2), strokeWidth: DEFAULT_LINE_WIDTH }
+      : { type: 'line', kind, x: (SLIDE_W - 300) / 2, y: SLIDE_H / 2, w: 300, h: kind === 'straight' ? 0 : 100, strokeWidth: DEFAULT_LINE_WIDTH };
+    if (arrow) el.endArrow = 'arrow';
+    if (ends?.startConnection) el.startConnection = ends.startConnection;
+    if (ends?.endConnection) el.endConnection = ends.endConnection;
+    return this.addElement(el);
+  }
+
+  /** Apply a patch to the selected lines (undefined removes a property). */
+  styleLines(patch: Partial<Omit<LineElement, 'id' | 'type'>>): void {
+    this.updateElements(this.selection, (e) => {
+      if (e.type !== 'line') return e;
+      const next = { ...e, ...patch } as Record<string, unknown>;
+      for (const k in patch) if (next[k] === undefined) delete next[k];
+      return next as unknown as LineElement;
+    });
+  }
+
+  /** Move elements to new positions (a drag or nudge); lines that move without the shapes they are attached to come loose. */
+  moveElements(to: Record<string, { x: number; y: number }>): void {
+    const moving = new Set(Object.keys(to));
+    this.run((tx) =>
+      tx.updateSlide(this.current, (s) => ({
+        ...s,
+        elements: s.elements.map((e) => {
+          if (!moving.has(e.id)) return e;
+          const next = { ...e, ...to[e.id] } as SlideElement;
+          if (next.type === 'line') {
+            if (next.startConnection && !moving.has(next.startConnection.elementId)) delete next.startConnection;
+            if (next.endConnection && !moving.has(next.endConnection.elementId)) delete next.endConnection;
+          }
+          return next;
+        }),
+      })),
+    );
   }
 
   /** Add an image scaled to fit the slide (natural size is used when known). */
@@ -361,7 +416,9 @@ export class DeckController {
 
   nudge(dx: number, dy: number): void {
     if (!this.selection.length) return;
-    this.updateElements(this.selection, (e) => ({ ...e, x: e.x + dx, y: e.y + dy }));
+    const to: Record<string, { x: number; y: number }> = {};
+    for (const e of this.selected) to[e.id] = { x: e.x + dx, y: e.y + dy };
+    this.moveElements(to);
   }
 
   copySelected(): void {
@@ -371,7 +428,7 @@ export class DeckController {
   /** Paste copied elements onto the current slide, offset a little, and select them. */
   paste(): void {
     if (!this.clipboard.length) return;
-    const copies = this.clipboard.map((e) => ({ ...e, id: newId(), x: e.x + 20, y: e.y + 20 }));
+    const copies = cloneElements(this.clipboard, newId, 20, 20);
     this.run((tx) => tx.updateSlide(this.current, (s) => ({ ...s, elements: [...s.elements, ...copies] })));
     this.select(copies.map((c) => c.id));
   }
