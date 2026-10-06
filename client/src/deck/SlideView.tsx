@@ -7,6 +7,7 @@ import {
   SLIDE_H,
   SLIDE_W,
   THEMES,
+  type LineElement,
   type Paragraph,
   type ShapeElement,
   type Slide,
@@ -15,10 +16,11 @@ import {
   type Theme,
   type ThemeId,
 } from '../../../shared/deck.ts';
+import { dashArray, DEFAULT_LINE_WIDTH, lineGeometry as routeGeometry } from '../../../shared/lines.ts';
 import { arcPath, isDrawn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
 /** A box override while an element is being dragged or resized. */
-export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>>;
+export type BoxPreview = Partial<Pick<SlideElement, 'x' | 'y' | 'w' | 'h'>> & Partial<Pick<LineElement, 'flipH' | 'flipV' | 'startConnection' | 'endConnection' | 'bend'>>;
 
 export interface SlideViewProps {
   slide: Slide;
@@ -113,6 +115,32 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
     border: sw ? `${sw}px solid ${stroke ?? fill}` : undefined,
     ...text,
   };
+}
+
+/**
+ * A line element's stroke and arrowheads. Drawn in slide coordinates inside a zero-size SVG at the slide's origin
+ * (the caller's box is positioned at the line's own corner, hence the offset), so it works for horizontal and
+ * vertical lines whose box has no width or height. The wide transparent stroke is the click target.
+ */
+export function LineDrawing({ el, theme, hit }: { el: LineElement; theme: Theme; hit?: boolean }) {
+  const g = routeGeometry(el);
+  const sw = el.strokeWidth ?? DEFAULT_LINE_WIDTH;
+  const color = el.strokeColor ?? theme.accent;
+  return (
+    <svg className="sl-line-svg" width={1} height={1} style={{ left: -el.x, top: -el.y }} aria-hidden="true">
+      <path d={g.d} fill="none" stroke={color} strokeWidth={sw} strokeDasharray={dashArray(el.dash, sw)} />
+      {g.heads.map((h, i) =>
+        h.type === 'circle' ? (
+          <circle key={i} cx={h.cx} cy={h.cy} r={h.r} fill={color} />
+        ) : h.type === 'polygon' ? (
+          <polygon key={i} points={h.points} fill={color} stroke={color} strokeWidth={1} strokeLinejoin="round" />
+        ) : (
+          <polyline key={i} points={h.points} fill="none" stroke={color} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round" />
+        ),
+      )}
+      {hit && <path d={g.d} fill="none" stroke="transparent" strokeWidth={Math.max(sw, 14)} style={{ pointerEvents: 'stroke' }} />}
+    </svg>
+  );
 }
 
 /** The arrowhead length for a line of a stroke width. */
@@ -359,6 +387,14 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
             return (
               <div key={el.id} {...common} className="sl-el sl-text" style={style}>
                 <Paragraphs paragraphs={el.paragraphs} />
+              </div>
+            );
+          }
+          if (el.type === 'line') {
+            const live = { ...el, ...preview?.[el.id] };
+            return (
+              <div key={el.id} {...common} className="sl-el sl-line-el" style={{ left: live.x, top: live.y, width: live.w, height: live.h }}>
+                <LineDrawing el={live} theme={theme} hit={!!onElementMouseDown} />
               </div>
             );
           }

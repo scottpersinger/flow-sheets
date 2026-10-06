@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Deck } from '../shared/deck.ts';
+import { migrateDeck } from '../shared/lines.ts';
 import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import type { DB } from './db.ts';
 
@@ -199,7 +200,7 @@ export class SheetStore {
   async loadDeck(ownerId: string, id: string): Promise<{ meta: SheetMeta; deck: Deck } | null> {
     const r = this.row(ownerId, id, 'deck');
     if (!r) return null;
-    return { meta: toMeta(r), deck: await this.read<Deck>(r) };
+    return { meta: toMeta(r), deck: migrateDeck(await this.read<Deck>(r)) };
   }
 
   async saveDeck(ownerId: string, id: string, deck: Deck): Promise<SheetMeta | null> {

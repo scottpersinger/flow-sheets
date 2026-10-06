@@ -2,7 +2,10 @@
 // exactly PowerPoint's 16:9 layout (10 × 5.625 inches), so positions map 1:1. Runs in the browser (File →
 // Download as PowerPoint) and in Node (tests); the caller loads images, since that differs between the two.
 import type PptxGenJS from 'pptxgenjs';
-import { ROLE_SIZE, THEMES, type Deck, type SlideElement, type TextElement } from './deck.ts';
+import { ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideElement, type TextElement } from './deck.ts';
+
+/** PowerPoint's arrowhead types for ours (its "arrow" is the open one, "stealth" the barbed filled one). */
+const PPTX_ARROW: Record<Exclude<ArrowStyle, 'none'>, 'arrow' | 'diamond' | 'oval' | 'stealth' | 'triangle'> = { arrow: 'stealth', open: 'arrow', triangle: 'triangle', circle: 'oval', diamond: 'diamond' };
 import { SHAPES } from './shapes.ts';
 
 /** Returns a data URL for an image address, or null if it cannot be loaded. */
@@ -119,8 +122,30 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
       }
       return;
     }
-    // Shapes
     const accent = hexColor(theme.accent) ?? '1A73E8';
+    if (el.type === 'line') {
+      // Lines, elbow connectors (bentConnector3) and curved connectors (curvedConnector3), flipped to run any direction.
+      // Connections are not written: pptxgenjs has no way to name the shape ids a connector would attach to.
+      const prst = el.kind === 'elbow' ? 'bentConnector3' : el.kind === 'curved' ? 'curvedConnector3' : 'line';
+      const arrow = (a: ArrowStyle | undefined): PptxGenJS.ShapeLineProps['beginArrowType'] => (a && a !== 'none' ? PPTX_ARROW[a] : undefined);
+      const begin = arrow(el.startArrow);
+      const end = arrow(el.endArrow);
+      s.addShape(prst as PptxGenJS.SHAPE_NAME, {
+        ...box,
+        ...(el.flipH ? { flipH: true } : {}),
+        ...(el.flipV ? { flipV: true } : {}),
+        line: {
+          color: hexColor(el.strokeColor) ?? accent,
+          width: pt(el.strokeWidth ?? 3),
+          transparency: transparencyOf(el.strokeColor),
+          ...(el.dash === 'dash' ? { dashType: 'dash' as const } : el.dash === 'dot' ? { dashType: 'sysDot' as const } : {}),
+          ...(begin ? { beginArrowType: begin } : {}),
+          ...(end ? { endArrowType: end } : {}),
+        },
+      });
+      return;
+    }
+    // Shapes
     const strokeColor = hexColor(el.stroke);
     if (el.shape === 'line') {
       const diagonal = el.w > 0 && el.h > 0;

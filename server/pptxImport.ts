@@ -8,8 +8,11 @@ import {
   SLIDE_H,
   SLIDE_W,
   validateDeck,
+  type ArrowStyle,
+  type ConnectionSite,
   type Deck,
   type LayoutId,
+  type LineElement,
   type Paragraph,
   type ShapeElement,
   type Slide,
@@ -95,6 +98,9 @@ class Importer {
   private scale = 1;
   private ox = 0;
   private oy = 0;
+  /** Per slide: our element id for each shape id in the file, and the connector ends waiting to be attached to them. */
+  private idMap = new Map<string, string>();
+  private pending: { el: LineElement; start?: [string, number]; end?: [string, number] }[] = [];
 
   constructor(zip: JSZip, sink: ImageSink) {
     this.zip = zip;
@@ -180,7 +186,10 @@ class Importer {
 
     const elements: SlideElement[] = [];
     const cSld = child(sld ?? undefined, 'p:cSld');
+    this.idMap = new Map();
+    this.pending = [];
     if (sld) await this.shapes(child(cSld, 'p:spTree'), rels, inherit, elements, null);
+    this.connect(elements);
     if (elements.length > MAX_SHAPES) {
       this.note(`Slides with more than ${MAX_SHAPES} elements were truncated.`);
       elements.length = MAX_SHAPES;
@@ -230,10 +239,13 @@ class Importer {
     for (const node of kids(tree)) {
       const tag = tagOf(node);
       if (tag === 'p:sp') {
-        out.push(...(await this.shape(node, inherit, group)));
+        const made = await this.shape(node, inherit, group);
+        out.push(...made);
+        this.remember(attrs(path(node, 'p:nvSpPr', 'p:cNvPr')).id, made[0]);
       } else if (tag === 'p:pic') {
         const el = await this.picture(node, rels, group);
         if (el) out.push(el);
+        this.remember(attrs(path(node, 'p:nvPicPr', 'p:cNvPr')).id, el ?? undefined);
       } else if (tag === 'p:cxnSp') {
         const el = this.connector(node, group);
         if (el) out.push(el);
@@ -478,10 +490,15 @@ class Importer {
     const stroked = !!strokeColor || (!noLine && styledLine);
     const geometric = !!prst && prst !== 'rect';
 
+    if (!ph && prst && LINE_PRESETS.test(prst)) {
+      const line = this.lineElement(prst, box, xfrm, ln);
+      if (!line.strokeColor && stroked) line.strokeColor = '#5f6368';
+      return [line];
+    }
+
     let onShape: ShapeElement | null = null;
     if (!ph && (filled || stroked || geometric)) {
       const el: ShapeElement = { id: newId(), type: 'shape', shape: shapeKind(prst, (m) => this.note(m)), ...box };
-      if (el.shape === 'line') this.lineProps(el, xfrm, ln);
       if (fillColor) el.fill = fillColor;
       else if (!filled) el.fill = 'none';
       if (strokeColor) el.stroke = strokeColor;
@@ -659,26 +676,64 @@ class Importer {
     return plain ? undefined : link;
   }
 
-  /** Arrowheads and direction of a line, from its outline and transform. */
-  private lineProps(el: ShapeElement, xfrm: XNode | undefined, ln: XNode | undefined): void {
-    const diagonal = el.w > 2 && el.h > 2;
-    if (!diagonal) {
+  /** A line, arrow or connector (preset `prst`) in a box: its route, flips, arrowheads, dash, color and width. */
+  private lineElement(prst: string | undefined, box: { x: number; y: number; w: number; h: number }, xfrm: XNode | undefined, ln: XNode | undefined): LineElement {
+    const kind = /^bentConnector/.test(prst ?? '') ? 'elbow' : /^curvedConnector/.test(prst ?? '') ? 'curved' : 'straight';
+    const el: LineElement = { id: newId(), type: 'line', kind, ...box };
+    if (kind === 'straight' && !(el.w > 2 && el.h > 2)) {
+      // A horizontal or vertical line: the thin side is the stroke, not a size.
       if (el.h > el.w) el.w = 0;
       else el.h = 0;
     }
     const x = attrs(xfrm);
-    const flipH = x.flipH === '1' || x.flipH === 'true';
-    const flipV = x.flipV === '1' || x.flipV === 'true';
-    if (diagonal && flipH !== flipV) el.flip = true;
-    const isArrow = (end: string) => {
+    // The line starts at the top-left corner of its box (headEnd is there); a flip moves the start to the other side.
+    if ((x.flipH === '1' || x.flipH === 'true') && el.w > 0) el.flipH = true;
+    if ((x.flipV === '1' || x.flipV === 'true') && el.h > 0) el.flipV = true;
+    const head = (end: string): ArrowStyle | undefined => {
       const type = attrs(child(ln, end)).type;
-      return !!type && type !== 'none';
+      return !type || type === 'none' ? undefined : ({ triangle: 'triangle', stealth: 'arrow', arrow: 'open', oval: 'circle', diamond: 'diamond' } as Record<string, ArrowStyle>)[type] ?? 'arrow';
     };
-    // headEnd is at the start of the line, which a horizontal flip moves to the right.
-    const [start, end] = flipH ? [isArrow('a:tailEnd'), isArrow('a:headEnd')] : [isArrow('a:headEnd'), isArrow('a:tailEnd')];
-    if (start && end) el.arrow = 'both';
-    else if (start) el.arrow = 'start';
-    else if (end) el.arrow = 'end';
+    const start = head('a:headEnd');
+    const end = head('a:tailEnd');
+    if (start) el.startArrow = start;
+    if (end) el.endArrow = end;
+    const dash = attrs(child(ln, 'a:prstDash')).val;
+    if (dash && dash !== 'solid') el.dash = /dot/i.test(dash) && !/dash/i.test(dash) ? 'dot' : 'dash';
+    const color = this.solidColor(ln);
+    if (color) el.strokeColor = color;
+    const w = num(attrs(ln).w);
+    if (w !== undefined) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
+    return el;
+  }
+
+  /** Remember a shape's id from the file so connectors can be attached to it. */
+  private remember(id: string | undefined, el: SlideElement | undefined): void {
+    if (id && el) this.idMap.set(id, el.id);
+  }
+
+  /** Queue the stCxn / endCxn of a connector; connect() attaches them once the whole slide is read. */
+  private queueConnections(el: LineElement, cxn: XNode): void {
+    const c = child(child(cxn, 'p:nvCxnSpPr'), 'p:cNvCxnSpPr');
+    const ref = (tag: string): [string, number] | undefined => {
+      const a = attrs(child(c, tag));
+      return a.id !== undefined && a.idx !== undefined ? [a.id, Number(a.idx)] : undefined;
+    };
+    const start = ref('a:stCxn');
+    const end = ref('a:endCxn');
+    if (start || end) this.pending.push({ el, ...(start ? { start } : {}), ...(end ? { end } : {}) });
+  }
+
+  /** Attach queued connector ends to the elements they referred to. */
+  private connect(elements: SlideElement[]): void {
+    const byId = new Map(elements.map((e) => [e.id, e]));
+    for (const { el, start, end } of this.pending) {
+      for (const [key, ref] of [['startConnection', start], ['endConnection', end]] as const) {
+        const target = ref && byId.get(this.idMap.get(ref[0]) ?? '');
+        const site = target && siteOf(target, ref[1]);
+        if (target && site) el[key] = { elementId: target.id, site };
+      }
+    }
+    this.pending = [];
   }
 
   private connector(cxn: XNode, group: GroupTransform | null): SlideElement | null {
@@ -686,13 +741,8 @@ class Importer {
     const xfrm = child(spPr, 'a:xfrm');
     const box = this.box(xfrm, group);
     if (!box) return null;
-    const ln = child(spPr, 'a:ln');
-    const el: ShapeElement = { id: newId(), type: 'shape', shape: 'line', ...box };
-    this.lineProps(el, xfrm, ln);
-    const color = this.solidColor(ln);
-    if (color) el.stroke = color;
-    const w = num(attrs(ln).w);
-    if (w !== undefined) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
+    const el = this.lineElement(attrs(child(spPr, 'a:prstGeom')).prst, box, xfrm, child(spPr, 'a:ln'));
+    this.queueConnections(el, cxn);
     return el;
   }
 
@@ -796,6 +846,16 @@ function paragraphText(p: XNode): string {
     else if (t === 'a:br') out += '\n';
   }
   return out;
+}
+
+/** Presets that are lines or connectors. */
+const LINE_PRESETS = /^(line|straightConnector1|(bent|curved)Connector[2-5])$/;
+
+/** The side of an element that a connection site index of the file means (rectangles: top, left, bottom, right; ellipses have eight). */
+function siteOf(el: SlideElement, idx: number): ConnectionSite | undefined {
+  const rect: ConnectionSite[] = ['top', 'left', 'bottom', 'right'];
+  if (el.type === 'shape' && el.shape === 'ellipse') return rect[idx / 2];
+  return rect[idx];
 }
 
 function shapeKind(prst: string | undefined, note: (m: string) => void): ShapeElement['shape'] {

@@ -2,6 +2,56 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-06 — Proper line/arrow/connector tool in the slide editor
+
+The slide editor now has a proper line tool and a new `line` element. It covers the toolbar menu, the line formatting controls, connectors that snap to shapes, the data model, PowerPoint import/export and the assistant. `npm run typecheck` and `npm test` pass. I haven't run the editor in a browser, so the drawing, dragging and snapping interactions are untested beyond the unit tests.
+
+- **Editor:**
+  - **Line menu:** Line, Arrow, Elbow connector and Curved connector. Click-drag to draw; shift snaps to 15°.
+  - **Selected line:** two endpoint handles, plus a mid handle on elbows only.
+  - **Connecting:** dragging an endpoint near a shape shows its four side-midpoint connection points and snaps to them.
+  - **Formatting:** the toolbar sets color, weight, dash, and start and end arrowheads (none, arrow, open, triangle, circle, diamond).
+  - **Following:** connected lines follow when a shape moves or resizes, and elbows re-route. Dragging only the line detaches it. Arrowheads render in the editor, present mode, thumbnails and `render_slide`.
+- **Model:** a line is stored as a box plus `flipH`/`flipV`, with `kind`, stroke color/width, dash, arrowheads and optional start/end connections. Old horizontal, vertical and diagonal line shapes are converted when a deck loads, and `shape: "line"` input from the assistant is converted too.
+- **PowerPoint:** import maps lines, straight, bent and curved connectors, head/tail ends, dash, flips and connection ids to the new model. Export writes `bentConnector3` for elbows, `curvedConnector3` for curves and `line` for straight lines, with flips, dash and arrowheads.
+- **Not done:**
+  - Export doesn't write connection ids, because pptxgenjs can't name the shapes a connector attaches to.
+  - Vertical-first elbows export with horizontal-first routing.
+  - Curved connectors have no mid handle.
+  - I didn't check the acceptance example on the real "Supercog Ops Map" deck. A test builds the same elbow, bottom of one box to top of another, and checks that it follows when the box moves.
+
+**Assistant:** no new tool. `edit_elements` now creates and edits lines with `type: "line"`:
+- `x1`, `y1`, `x2`, `y2`: the endpoints.
+- `kind`: `straight`, `elbow` or `curved`.
+- `stroke`, `stroke_width`, `dash` (`solid`, `dash`, `dot`).
+- `start_arrow`, `end_arrow`: `none`, `arrow`, `open`, `triangle`, `circle` or `diamond`.
+- `connect_start`, `connect_end`: `{element_id, site: top|right|bottom|left}`, or `null` to detach.
+- The old `arrow` input still works. `read_deck` reports all of these fields for lines.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-06.
+
+### Request
+
+Goal: add a proper line tool to the slide editor like Google Slides, plus matching assistant support.
+
+Problems today (seen on slide 2 of deck "Supercog Ops Map", id c346ac44-a2cb-438f-ae1e-2b0bd3fdfa1d, a redrawn architecture diagram):
+- Lines are a "shape: line" whose direction is only horizontal (h=0), vertical (w=0) or a bounding-box diagonal. There are no true endpoints, so you cannot draw a line from one point to another, flip it, or drag its ends.
+- Arrowheads set via edit_elements `arrow` ("start"/"end"/"both") were silently not rendered on freshly created lines at first and appeared later; behaviour was inconsistent. Arrowheads should always render for lines in the editor, present mode, render_slide and thumbnails.
+- Elbow routes (e.g. down, left, down into a box) had to be faked with 3 separate line segments plus text glyphs (▼ ▶) as arrowheads.
+
+Requested:
+1. Toolbar line tool (like Google Slides' Line menu): Line, Arrow, Elbow connector, Curved connector. Click-drag on the canvas to draw from point A to point B (shift = snap to 15 degree angles). Selected line shows two endpoint handles (and a mid handle for elbow/curve) rather than an 8-handle bounding box; endpoints can be dragged freely, and the line may point in any direction (store x1,y1,x2,y2 or box+flipH/flipV).
+2. Line formatting in the toolbar/side panel: stroke color, weight, dash style (solid, dash, dot), start and end arrowheads (none, arrow, open arrow, triangle, circle, diamond).
+3. Connectors that snap to shapes: dragging an endpoint near a shape's edge midpoints shows connection points; once connected, the line follows when the shape is moved/resized. Elbow connectors re-route automatically.
+4. Data model: line elements with points (x1,y1,x2,y2), kind (straight|elbow|curved), strokeColor, strokeWidth, dash, startArrow, endArrow, optional startConnection/endConnection {elementId, site}. Migrate existing horizontal/vertical/diagonal line shapes without visual change.
+5. PPTX import/export: map connectors (straightConnector1, bentConnector2-5, curvedConnector2-5, line) with headEnd/tailEnd, dash, flips, and connection ids (stCxn/endCxn) to this model and back.
+6. Assistant tool edit_elements: support creating/editing lines with x1,y1,x2,y2, kind (straight|elbow|curved), stroke, stroke_width, dash, start_arrow/end_arrow (arrowhead style), and connect_start/connect_end {element id, site: top|right|bottom|left}. read_deck should report these fields. Keep the old `arrow` input working. The render_slide output must show the arrowheads.
+Acceptance example: on slide 2, one elbow connector from the bottom of the '1.2 Fetch Rolling Window' box to the top of the '2. In-Memory Cache' box, with an arrowhead at the end, replaces the three separate line segments and the ▼ text glyph, and follows if the boxes are moved.
+
+Files: client/src/agent/deckTools.test.ts, client/src/agent/deckTools.ts, client/src/deck/DeckEditor.tsx, client/src/deck/DeckToolbar.tsx, client/src/deck/SlideView.tsx, client/src/deck/controller.ts, client/src/deck/renderSlide.ts, client/src/deck/store.ts, client/src/styles.css, server/agent/prompt.ts, server/agent/tools.ts, server/pptxImport.test.ts, server/pptxImport.ts, server/sheets.ts, shared/deck.ts, shared/lines.test.ts, shared/lines.ts, shared/pptxExport.ts
+
+Job: 94d872f8-2d83-4cc3-b6af-316987e9d5b2
+
 ## 2026-10-05 — Support "arc" shapes in PPT import and editor
 
 Typecheck and all 175 tests now pass. The one failure, `google sign-in > is off unless configured` in `server/app.test.ts`, wasn't caused by the arc change. The test builds the app with no `google` option, so the app read Google credentials from the environment here. I made the test clear `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` before building the app, so it no longer depends on the machine's environment. I couldn't read the environment variables directly to confirm they were set, so that cause is inferred from the code and the passing run. No new assistant tool; the arc support from before is unchanged: `edit_elements` takes `shape: "arc"`, `start_angle` and `end_angle`.

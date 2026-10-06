@@ -7,6 +7,7 @@
 // elements, so both the UI and the assistant can make slides without choosing coordinates.
 import { SHAPE_KINDS, type ShapeKind } from './shapes.ts';
 import { checkCellImage } from './types.ts';
+import { lineEnds } from './lines.ts';
 
 export type { ShapeKind };
 
@@ -103,7 +104,42 @@ export interface ShapeElement extends ElementBase {
   textFont?: string;
 }
 
-export type SlideElement = TextElement | ImageElement | ShapeElement;
+export const ARROW_STYLE_IDS = ['none', 'arrow', 'open', 'triangle', 'circle', 'diamond'] as const;
+export type ArrowStyle = (typeof ARROW_STYLE_IDS)[number];
+export type LineKind = 'straight' | 'elbow' | 'curved';
+export type ConnectionSite = 'top' | 'right' | 'bottom' | 'left';
+
+export interface LineConnection {
+  /** The shape (or text box or image) the end is attached to. */
+  elementId: string;
+  /** The middle of one side of it. */
+  site: ConnectionSite;
+}
+
+/**
+ * A line, arrow or connector from one point to another (see shared/lines.ts). x, y, w, h is the box around its two
+ * ends; it starts at the top-left corner, or the top-right with flipH, the bottom-left with flipV, and ends at the
+ * opposite corner. Ends with a connection follow that element when it moves or resizes.
+ */
+export interface LineElement extends ElementBase {
+  type: 'line';
+  kind: LineKind;
+  flipH?: boolean;
+  flipV?: boolean;
+  /** CSS color; defaults to the theme accent. */
+  strokeColor?: string;
+  /** Defaults to 3. */
+  strokeWidth?: number;
+  dash?: 'solid' | 'dash' | 'dot';
+  startArrow?: ArrowStyle;
+  endArrow?: ArrowStyle;
+  startConnection?: LineConnection;
+  endConnection?: LineConnection;
+  /** Elbow connectors: where the middle segment sits between the ends, 0 to 1 (default 0.5). */
+  bend?: number;
+}
+
+export type SlideElement = TextElement | ImageElement | ShapeElement | LineElement;
 
 export interface Slide {
   id: string;
@@ -447,6 +483,20 @@ export function validateElement(e: unknown, where: string): string | null {
       if (el.fit !== undefined && el.fit !== 'contain' && el.fit !== 'cover') return `${where}: invalid fit`;
       return null;
     }
+    case 'line': {
+      if (!['straight', 'elbow', 'curved'].includes(el.kind)) return `${where}: invalid line kind`;
+      if (el.strokeColor !== undefined && !isColor(el.strokeColor)) return `${where}: invalid line color`;
+      if (el.strokeWidth !== undefined && !num(el.strokeWidth, 0, 100)) return `${where}: invalid stroke width`;
+      if (el.dash !== undefined && !['solid', 'dash', 'dot'].includes(el.dash)) return `${where}: invalid dash`;
+      for (const k of ['startArrow', 'endArrow'] as const) if (el[k] !== undefined && !ARROW_STYLE_IDS.includes(el[k]!)) return `${where}: invalid arrowhead`;
+      if (el.bend !== undefined && !num(el.bend, 0, 1)) return `${where}: invalid bend`;
+      for (const k of ['flipH', 'flipV'] as const) if (el[k] !== undefined && typeof el[k] !== 'boolean') return `${where}: invalid flip`;
+      for (const k of ['startConnection', 'endConnection'] as const) {
+        const c = el[k];
+        if (c !== undefined && (!c || typeof c.elementId !== 'string' || !['top', 'right', 'bottom', 'left'].includes(c.site))) return `${where}: invalid connection`;
+      }
+      return null;
+    }
     case 'shape': {
       if (!SHAPE_KINDS.includes(el.shape)) return `${where}: invalid shape`;
       if (el.fill !== undefined && !isColor(el.fill)) return `${where}: invalid fill`;
@@ -512,6 +562,26 @@ export function deckOutline(deck: Deck, current?: number) {
         const box = { id: e.id, x: e.x, y: e.y, w: e.w, h: e.h };
         if (e.type === 'text') return { ...box, type: 'text', ...(e.role ? { role: e.role } : {}), text: fromParagraphs(e.paragraphs).join('\n'), ...(e.style ? { style: e.style } : {}) };
         if (e.type === 'image') return { ...box, type: 'image', src: e.src.length > 80 ? `${e.src.slice(0, 77)}...` : e.src };
+        if (e.type === 'line') {
+          const { x1, y1, x2, y2 } = lineEnds(e);
+          const conn = (c: LineConnection | undefined) => (c ? { element_id: c.elementId, site: c.site } : undefined);
+          return {
+            ...box,
+            type: 'line',
+            kind: e.kind,
+            x1,
+            y1,
+            x2,
+            y2,
+            ...(e.strokeColor ? { stroke: e.strokeColor } : {}),
+            stroke_width: e.strokeWidth ?? 3,
+            dash: e.dash ?? 'solid',
+            start_arrow: e.startArrow ?? 'none',
+            end_arrow: e.endArrow ?? 'none',
+            ...(e.startConnection ? { connect_start: conn(e.startConnection) } : {}),
+            ...(e.endConnection ? { connect_end: conn(e.endConnection) } : {}),
+          };
+        }
         const label = e.text
           ? {
               text: e.text,

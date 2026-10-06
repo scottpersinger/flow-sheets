@@ -96,6 +96,66 @@ describe('agent deck tools', () => {
     await expect(call('edit_elements', { slide: 1, set: [{ type: 'text', text: 'hi', x: Number.NaN }] })).rejects.toThrow(/invalid x/);
   });
 
+  it('draws an elbow connector between two boxes that follows them, and reports it in read_deck', async () => {
+    const { deck, call } = setup();
+    await call('update_slide', { slide: 1, layout: 'blank' });
+    const made = await call('edit_elements', {
+      slide: 1,
+      set: [
+        { type: 'shape', shape: 'rect', x: 100, y: 50, w: 200, h: 60, fill: '#eeeeee', text: 'Fetch' },
+        { type: 'shape', shape: 'rect', x: 400, y: 250, w: 200, h: 60, fill: '#eeeeee', text: 'Cache' },
+      ],
+    });
+    const [a, b] = made.set.map((e: { id: string }) => e.id);
+    const res = await call('edit_elements', {
+      slide: 1,
+      set: [{ type: 'line', kind: 'elbow', end_arrow: 'triangle', dash: 'dash', stroke: '#ff0000', stroke_width: 2, connect_start: { element_id: a, site: 'bottom' }, connect_end: { element_id: b, site: 'top' } }],
+    });
+    // The ends sit on the middles of the sides.
+    expect(res.set[0]).toMatchObject({ type: 'line', x1: 200, y1: 110, x2: 500, y2: 250 });
+    const id = res.set[0].id;
+    expect(deck.deck.slides[0].elements.find((e) => e.id === id)).toMatchObject({ kind: 'elbow', endArrow: 'triangle', dash: 'dash', strokeColor: '#ff0000', strokeWidth: 2 });
+
+    // Moving a box moves the end of the line with it.
+    await call('edit_elements', { slide: 1, set: [{ id: b, x: 600, y: 300 }] });
+    const outline = await call('read_deck');
+    const line = outline.slides[0].elements.find((e: { id: string }) => e.id === id);
+    expect(line).toMatchObject({ kind: 'elbow', x1: 200, y1: 110, x2: 700, y2: 300, end_arrow: 'triangle', start_arrow: 'none', connect_start: { element_id: a, site: 'bottom' }, connect_end: { element_id: b, site: 'top' } });
+
+    // Removing a box detaches the line; the old `arrow` input still works; a connection needs a real element.
+    await call('edit_elements', { slide: 1, remove: [b] });
+    expect(deck.deck.slides[0].elements.find((e) => e.id === id)).not.toHaveProperty('endConnection');
+    await call('edit_elements', { slide: 1, set: [{ id, arrow: 'both' }] });
+    expect(deck.deck.slides[0].elements.find((e) => e.id === id)).toMatchObject({ startArrow: 'arrow', endArrow: 'arrow' });
+    await expect(call('edit_elements', { slide: 1, set: [{ id, connect_end: { element_id: 'nope', site: 'left' } }] })).rejects.toThrow(/Cannot connect/);
+
+    // Lines point any direction, and the legacy "shape: line" becomes a line element.
+    const back = await call('edit_elements', { slide: 1, set: [{ type: 'line', x1: 300, y1: 400, x2: 100, y2: 350 }, { type: 'shape', shape: 'line', x: 10, y: 20, w: 0, h: 80, arrow: 'end' }] });
+    expect(back.set[0]).toMatchObject({ x1: 300, y1: 400, x2: 100, y2: 350 });
+    expect(deck.deck.slides[0].elements.find((e) => e.id === back.set[0].id)).toMatchObject({ x: 100, y: 350, w: 200, h: 50, flipH: true, flipV: true });
+    expect(deck.deck.slides[0].elements.find((e) => e.id === back.set[1].id)).toMatchObject({ type: 'line', w: 0, h: 80, endArrow: 'arrow' });
+  });
+
+  it('keeps a drawn connector attached when a box is dragged or resized, and detaches it when only the line moves', () => {
+    const { deck } = setup();
+    const a = deck.addElement({ type: 'shape', shape: 'rect', x: 100, y: 100, w: 100, h: 50 });
+    const b = deck.addElement({ type: 'shape', shape: 'rect', x: 400, y: 300, w: 100, h: 50 });
+    const l = deck.addLine('elbow', true, { x1: 150, y1: 150, x2: 450, y2: 300, startConnection: { elementId: a, site: 'bottom' }, endConnection: { elementId: b, site: 'top' } });
+    const line = () => deck.slide.elements.find((e) => e.id === l) as import('../../../shared/deck.ts').LineElement;
+    expect(line()).toMatchObject({ kind: 'elbow', endArrow: 'arrow', x: 150, y: 150, w: 300, h: 150 });
+
+    deck.moveElements({ [b]: { x: 600, y: 320 } });
+    expect(line()).toMatchObject({ x: 150, y: 150, w: 500, h: 170 });
+    deck.updateElements([a], (e) => ({ ...e, x: 0, w: 300 })); // resized: the bottom middle is now x = 150 still, wider box
+    expect(line().startConnection).toBeDefined();
+
+    deck.moveElements({ [l]: { x: 10, y: 10 } });
+    expect(line().startConnection).toBeUndefined();
+    expect(line().endConnection).toBeUndefined();
+    deck.undo();
+    expect(line().endConnection).toMatchObject({ elementId: b });
+  });
+
   it('adds arcs with start and end angles and reports them', async () => {
     const { deck, call } = setup();
     const res = await call('edit_elements', { slide: 1, set: [{ type: 'shape', shape: 'arc', x: 10, y: 10, w: 100, h: 100, stroke: '#f00', stroke_width: 4, start_angle: 90, end_angle: 200 }] });

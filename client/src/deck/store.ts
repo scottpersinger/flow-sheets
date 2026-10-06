@@ -2,6 +2,7 @@
 // speed), the deck is small and replaced immutably on every change, so React components can compare by
 // reference. An undo step records whole slides before and after, which keeps the patch set tiny.
 import type { Deck, Slide, ThemeId } from '../../../shared/deck.ts';
+import { reconnectLines } from '../../../shared/lines.ts';
 
 export type DeckPatch =
   | { k: 'theme'; before: ThemeId; after: ThemeId }
@@ -73,8 +74,9 @@ export class DeckTx {
     if (before) this.push({ k: 'slide', index, before, after: undefined });
   }
 
-  replaceSlide(index: number, slide: Slide): void {
+  replaceSlide(index: number, next: Slide): void {
     const before = this.deck.slides[index];
+    const slide = reconnectLines(next); // connected lines follow their shapes
     if (!before || before === slide) return;
     if (JSON.stringify(before) === JSON.stringify(slide)) return;
     this.push({ k: 'slide', index, before, after: slide });
