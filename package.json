@@ -10,13 +10,21 @@
     "build": "vite build",
     "start": "NODE_ENV=production node server/supervise.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "plugin:dev": "node --watch --watch-path=plugin/server --watch-path=server --watch-path=shared plugin/server/index.ts",
+    "plugin:start": "NODE_ENV=production node plugin/server/index.ts",
+    "plugin:build": "vite build --config plugin/vite.config.ts",
+    "plugin:watch": "vite build --config plugin/vite.config.ts --watch",
+    "plugin:harness": "vite --config plugin/vite.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.288",
     "@anthropic-ai/sdk": "^0.131.0",
     "@fastify/cookie": "^11.1.2",
     "@fastify/static": "^10.1.5",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@openai/mcp-extensions": "^0.1.0",
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.11.2",
     "fastify": "^5.12.5",

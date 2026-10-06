@@ -87,7 +87,7 @@ const elementSpec = z
   })
   .describe('An element to add or change. Only the properties given change.');
 
-const schemas = {
+export const schemas = {
   // --- Open spreadsheet (run in the browser) ---
   get_sheet_overview: z.object({}).describe(
     'Describe the open spreadsheet: every tab with its size, used range, frozen panes, filter and first few rows, plus the current selection. Call this first when you need to know how the data is laid out.',

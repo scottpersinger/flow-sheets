@@ -1,0 +1,368 @@
+// The MCP server ChatGPT talks to: the model's document and presentation tools, the tools the app (the MCP
+// App shown in ChatGPT) uses to load and save files, and the app itself as a UI resource.
+//
+// One McpServer is built per HTTP request (stateless streamable HTTP), so this must stay cheap.
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
+import { z } from 'zod';
+import { schemas } from '../../server/agent/tools.ts';
+import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
+import type { Deck, ThemeId } from '../../shared/deck.ts';
+import type { Doc } from '../../shared/doc.ts';
+import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, ToolError, type DeckEditTool, type DocEditTool, type FileKind, type SlideSpec } from './files.ts';
+
+// Hosts cache UI resources by URI: bump the version whenever the app changes shape.
+export const APP_URI = 'ui://freeflow-docs/app-v4.html';
+export const SERVER_INFO = { name: 'freeflow-docs', version: '0.2.0' };
+/** What the server advertises: tools, resources, and MCP Apps UI resources. */
+export const SERVER_CAPABILITIES = {
+  tools: { listChanged: true },
+  resources: { listChanged: true },
+  extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } },
+};
+
+export interface Bundle {
+  js: string;
+  css: string;
+  /** Short content hash, for cache busting when the bundle is served as files. */
+  hash: string;
+}
+
+export interface McpOptions {
+  /** The built app. */
+  bundle: () => Bundle;
+  /** Public origin: where images are served from, and the app's script and stylesheet with hostedAssets. */
+  publicUrl: string | null;
+  /** Reference the script and stylesheet at publicUrl instead of inlining them. ChatGPT runs a custom
+   *  server's app with its CSP off and did not load an external script; inline is the safe default. */
+  hostedAssets?: boolean;
+  /** Serve a static test page instead of the app, to tell host problems from app problems. */
+  helloPage?: boolean;
+  /** Serve the resource as the legacy Apps SDK type (text/html+skybridge) instead of the MCP Apps type. */
+  legacyMime?: boolean;
+  /** Which _meta to put on the resource content: everything, only the MCP Apps keys, only the legacy keys, or none. */
+  resourceMeta?: 'full' | 'ui' | 'legacy' | 'none';
+  /** For bisecting what ChatGPT's setup rejects: 'minimal' is list_files alone, 'tools' is every model tool
+   *  but no UI (no resource, no app-only tools, no entrypoint), 'render' adds the resource and open_file
+   *  rendering it, 'app' adds the app-only tools and the docs_app tool, 'full' (default) adds the sidebar
+   *  entrypoint. */
+  level?: 'minimal' | 'tools' | 'render' | 'app' | 'full';
+}
+
+export const INSTRUCTIONS = `Freeflow Docs: the user's text documents and slide presentations, with an app that shows one file open for editing.
+Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document and presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation unless an id is given. Read first (read_doc or read_deck) to learn block or slide numbers and element ids; they change after inserts and deletes. Write document content as Markdown. Keep edits targeted: change the blocks, slides or elements that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
+
+const DOC_ICON = {
+  src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
+  mimeType: 'image/svg+xml',
+  sizes: ['20x20'],
+};
+
+const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document) or deck (slide presentation).');
+const fileId = z.string().describe('The file id (from list_files or the app).');
+const optionalDocId = z.string().optional().describe('The document to act on. Defaults to the document open in the app.');
+const optionalDeckId = z.string().optional().describe('The presentation to act on. Defaults to the presentation open in the app.');
+
+/** Which of the app's tools change the file, for ChatGPT's "ask before changes" setting. */
+const ANNOTATIONS: Record<DocEditTool | DeckEditTool, { readOnlyHint: boolean; destructiveHint: boolean }> = {
+  read_doc: { readOnlyHint: true, destructiveHint: false },
+  get_doc_info: { readOnlyHint: true, destructiveHint: false },
+  insert_content: { readOnlyHint: false, destructiveHint: false },
+  replace_blocks: { readOnlyHint: false, destructiveHint: true },
+  delete_blocks: { readOnlyHint: false, destructiveHint: true },
+  replace_text: { readOnlyHint: false, destructiveHint: false },
+  format_text: { readOnlyHint: false, destructiveHint: false },
+  format_blocks: { readOnlyHint: false, destructiveHint: false },
+  insert_image: { readOnlyHint: false, destructiveHint: false },
+  set_doc_style: { readOnlyHint: false, destructiveHint: false },
+  set_page_setup: { readOnlyHint: false, destructiveHint: false },
+  read_deck: { readOnlyHint: true, destructiveHint: false },
+  add_slides: { readOnlyHint: false, destructiveHint: false },
+  update_slide: { readOnlyHint: false, destructiveHint: false },
+  edit_elements: { readOnlyHint: false, destructiveHint: false },
+  delete_slides: { readOnlyHint: false, destructiveHint: true },
+  move_slide: { readOnlyHint: false, destructiveHint: false },
+  set_deck_theme: { readOnlyHint: false, destructiveHint: false },
+};
+
+/** Descriptions that differ from the in-app assistant's (which mention things only it has). */
+const DESCRIPTIONS: Partial<Record<DocEditTool | DeckEditTool, string>> = {
+  insert_image: 'Add an image block to the document from an https URL. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)',
+  replace_blocks: 'Replace blocks from..to of the document with new content written as Markdown. Use this to rewrite a paragraph or a whole section; prefer replace_text for small wording changes.',
+  delete_blocks: 'Delete blocks from..to of the document.',
+  delete_slides: 'Delete slides by number.',
+  read_deck: 'Outline of the presentation: theme, every slide with its layout, elements (id, type, position, text) and notes, and which slide the user is on. Call this before changing slides.',
+};
+
+function ok(data: Record<string, unknown>): CallToolResult {
+  return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data };
+}
+
+function fail(message: string): CallToolResult {
+  return { content: [{ type: 'text', text: message }], isError: true };
+}
+
+/** Run a tool body, turning the errors the model (or the app) should see into error results. */
+async function guard(fn: () => Promise<CallToolResult> | CallToolResult): Promise<CallToolResult> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof ToolError || e instanceof ConflictError) return fail(e.message);
+    if (e instanceof Error && e.name === 'RangeError') return fail(e.message);
+    throw e;
+  }
+}
+
+export function appHtml(bundle: Bundle, assetOrigin: string | null): string {
+  const head = '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Docs</title>';
+  if (assetOrigin) {
+    // Served from our own origin, which the resource's CSP (resourceDomains) allows.
+    return `<!doctype html>\n<html lang="en"><head>${head}<link rel="stylesheet" href="${assetOrigin}/app.css?v=${bundle.hash}"></head><body><div id="root"></div><script type="module" src="${assetOrigin}/app.js?v=${bundle.hash}"></script></body></html>`;
+  }
+  // Inlined: the host's default CSP allows inline scripts and styles.
+  const js = bundle.js.replace(/<\/script/gi, '<\\/script');
+  return `<!doctype html>\n<html lang="en"><head>${head}<style>${bundle.css}</style></head><body><div id="root"></div><script type="module">${js}</script></body></html>`;
+}
+
+const HELLO = '<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px system-ui;padding:16px}</style></head><body><h1>Docs</h1><p>Hello from the Docs plugin. If you can read this, ChatGPT can show our pages.</p></body></html>';
+
+export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
+  const server = new McpServer({ ...SERVER_INFO, icons: [DOC_ICON] }, { instructions: INSTRUCTIONS });
+  const level = opts.level ?? 'full';
+  const ui = level === 'render' || level === 'app' || level === 'full';
+  const appTools = level === 'app' || level === 'full';
+  const entrypoint = level === 'full';
+
+  const listFiles = { title: 'List files', description: "The user's documents and presentations, most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: kind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+  server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
+  if (level === 'minimal') return server;
+
+  if (ui) server.server.registerCapabilities(SERVER_CAPABILITIES);
+
+  // Shaped like OpenAI's reference plugin (bits-and-bolts). The declared domains apply once the app is
+  // reviewed; in developer mode ChatGPT runs the app with its CSP off.
+  const origins = opts.publicUrl ? [opts.publicUrl] : [];
+  const uiMeta = {
+    ui: {
+      csp: { connectDomains: origins, resourceDomains: [...origins, 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'] },
+      prefersBorder: true,
+    },
+    'openai/ui': { preferredDisplayMode: 'inline', availableDisplayModes: ['inline', 'fullscreen'] },
+    // Legacy Apps SDK aliases of the same things, which ChatGPT's web host still reads.
+    'openai/widgetDescription': 'The Freeflow Docs editor: the open document or presentation, editable in place.',
+    'openai/widgetPrefersBorder': true,
+    'openai/widgetCSP': { connect_domains: origins, resource_domains: [...origins, 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'] },
+  };
+  /** Tool metadata linking to the app, in both the MCP Apps form and the legacy Apps SDK form. */
+  const rendersApp = (extra: Record<string, unknown> = {}) => ({ ui: { resourceUri: APP_URI, ...extra }, 'openai/outputTemplate': APP_URI });
+
+  // --- The app ---------------------------------------------------------------------------
+
+  const mimeType = opts.legacyMime ? 'text/html+skybridge' : RESOURCE_MIME_TYPE;
+  const pick = opts.resourceMeta ?? 'full';
+  const contentMeta = pick === 'none' ? undefined : pick === 'ui' ? { ui: uiMeta.ui } : pick === 'legacy' ? Object.fromEntries(Object.entries(uiMeta).filter(([k]) => k.startsWith('openai/widget'))) : uiMeta;
+  if (ui)
+    server.registerResource('docs-app', APP_URI, { title: 'Docs', mimeType }, async () => ({
+      contents: [{ uri: APP_URI, mimeType, text: opts.helloPage ? HELLO : appHtml(opts.bundle(), opts.hostedAssets ? opts.publicUrl : null), ...(contentMeta ? { _meta: contentMeta } : {}) }],
+    }));
+
+  // Opens from ChatGPT's sidebar: the whole app, with the composer alongside.
+  if (appTools)
+    server.registerTool(
+      'docs_app',
+      {
+        title: 'Docs',
+        description: 'Open the Docs app.',
+        inputSchema: {},
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        _meta: { ...rendersApp({ visibility: ['app'] }), 'openai/widgetAccessible': true, ...(entrypoint ? { 'openai/ui': { entrypoints: [{ type: 'global' }] } } : {}) },
+      },
+      async () => ok({ ...service.state() }),
+    );
+
+  // --- Tools for the model (the app may call these too) ----------------------------------------
+
+  // Which account is linked (ChatGPT shows it and can link several).
+  server.registerTool(
+    'get_profile',
+    {
+      title: 'Linked account',
+      description: 'The account the plugin is signed in as: its id and email.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: { 'openai/profile': true },
+    },
+    async () => {
+      const p = service.profile();
+      return ok({ id: p.id, email: p.email, name: p.email });
+    },
+  );
+
+  server.registerTool(
+    'create_doc',
+    {
+      title: 'Create document',
+      description: 'Create a new text document, optionally with content written as Markdown, and open it in the app.',
+      inputSchema: { title: z.string().min(1).max(200), markdown: z.string().max(200_000).optional().describe('Initial content as Markdown. Supports headings, lists, quotes, code blocks, images, links, bold and italics.') },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ title, markdown }) =>
+      guard(async () => {
+        const file = await service.createDoc(title, markdown);
+        service.setOpen({ kind: 'doc', id: file.id });
+        return ok({ file, ...service.state() });
+      }),
+  );
+
+  server.registerTool(
+    'create_deck',
+    {
+      title: 'Create presentation',
+      description: 'Create a new slide presentation, optionally with its slides, and open it in the app.',
+      inputSchema: schemas.create_deck.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ title, theme, slides }) =>
+      guard(async () => {
+        const file = await service.createDeck(title, theme as ThemeId | undefined, (slides ?? []) as SlideSpec[]);
+        service.setOpen({ kind: 'deck', id: file.id });
+        return ok({ file, ...service.state() });
+      }),
+  );
+
+  // Opening a file shows the app with it (the same app the sidebar opens).
+  server.registerTool(
+    'open_file',
+    {
+      title: 'Open file',
+      description: `Open a document or presentation in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, or every slide). The document or presentation tools then act on it by default.`,
+      inputSchema: { kind, id: fileId },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      ...(ui ? { _meta: rendersApp() } : {}),
+    },
+    async ({ kind: k, id }) =>
+      guard(async () => {
+        service.setOpen({ kind: k, id });
+        const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : await service.editDeck(id, 'read_deck', {});
+        return ok({ ...outline, ...service.state() });
+      }),
+  );
+
+  server.registerTool(
+    'rename_file',
+    {
+      title: 'Rename file',
+      description: 'Change the title of a document or presentation. Defaults to the open file.',
+      inputSchema: { kind: kind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ kind: k, id, title }) =>
+      guard(() => {
+        const target = k && id ? { kind: k, id } : service.open;
+        if (!target) return fail('No file is open. Pass kind and id (see list_files).');
+        return ok({ file: service.rename(target.kind, target.id, title) });
+      }),
+  );
+
+  server.registerTool(
+    'delete_file',
+    {
+      title: 'Delete file',
+      description: 'Delete a document or presentation permanently. Only when the user clearly asks for it.',
+      inputSchema: { kind, id: fileId },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ kind: k, id }) =>
+      guard(async () => {
+        await service.delete(k, id);
+        return ok({ deleted: id, ...service.state() });
+      }),
+  );
+
+  const describe = (name: DocEditTool | DeckEditTool) => (DESCRIPTIONS[name] ?? schemas[name].description ?? '').replace(/the open (document|presentation)/g, 'the $1');
+
+  for (const name of DOC_EDIT_TOOLS) {
+    server.registerTool(
+      name,
+      { description: describe(name), inputSchema: { ...schemas[name].shape, doc_id: optionalDocId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
+      async (args: Record<string, unknown>) =>
+        guard(async () => {
+          const { doc_id, ...input } = args as Record<string, unknown> & { doc_id?: string };
+          const id = service.target('doc', doc_id);
+          if (!id) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');
+          return ok(await service.editDoc(id, name, input));
+        }),
+    );
+  }
+
+  for (const name of DECK_EDIT_TOOLS) {
+    server.registerTool(
+      name,
+      { description: describe(name), inputSchema: { ...schemas[name].shape, deck_id: optionalDeckId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
+      async (args: Record<string, unknown>) =>
+        guard(async () => {
+          const { deck_id, ...input } = args as Record<string, unknown> & { deck_id?: string };
+          const id = service.target('deck', deck_id);
+          if (!id) return fail('No presentation is open in the app. Pass deck_id (see list_files), or open one with open_file.');
+          return ok(await service.editDeck(id, name, input));
+        }),
+    );
+  }
+
+  // --- Tools for the app only (hidden from the model) ------------------------------------
+
+  if (!appTools) return server;
+  const appOnly = (readOnly: boolean) => ({ _meta: { ui: { visibility: ['app'] }, 'openai/widgetAccessible': true }, annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: false } });
+
+  server.registerTool('app_state', { description: 'Which file is open and its revision.', inputSchema: {}, ...appOnly(true) }, async () => ok({ ...service.state() }));
+
+  server.registerTool(
+    'set_open_file',
+    {
+      description: 'The app reports which file it shows (none when omitted) and where the user is in it.',
+      inputSchema: {
+        kind: kind.optional(),
+        id: z.string().optional(),
+        cursor_block: z.number().int().min(1).optional(),
+        selected_text: z.string().max(500).optional(),
+        slide: z.number().int().min(1).optional(),
+        selection: z.array(z.string()).max(50).optional(),
+      },
+      ...appOnly(false),
+    },
+    async ({ kind: k, id, cursor_block, selected_text, slide, selection }) =>
+      guard(() => {
+        service.setOpen(k && id ? { kind: k, id } : null, { cursor_block, selected_text, slide, selection });
+        return ok({ ...service.state() });
+      }),
+  );
+
+  server.registerTool('get_file', { description: 'Load a whole file for the editor.', inputSchema: { kind, id: fileId }, ...appOnly(true) }, async ({ kind: k, id }) => guard(async () => ok({ ...(await service.get(k, id)) })));
+
+  server.registerTool(
+    'save_file',
+    {
+      description: 'Save a whole file from the editor. Fails when the revision is stale.',
+      inputSchema: { kind, id: fileId, rev: z.string().describe('The revision the editor loaded.'), data: z.looseObject({}).describe('The whole file.') },
+      ...appOnly(false),
+    },
+    async ({ kind: k, id, rev, data }) =>
+      guard(async () => {
+        try {
+          return ok({ ...(await service.save(k, id, data as unknown as Doc | Deck, rev)) });
+        } catch (e) {
+          if (e instanceof ConflictError) return { content: [{ type: 'text', text: e.message }], structuredContent: { conflict: true, rev: e.rev }, isError: true };
+          throw e;
+        }
+      }),
+  );
+
+  server.registerTool(
+    'upload_image',
+    { description: 'Store an image pasted or dropped into the editor.', inputSchema: { type: z.string(), data: z.string().describe('Base64 bytes.') }, ...appOnly(false) },
+    async ({ type, data }) => guard(async () => ok({ src: await service.uploadImage(type, data) })),
+  );
+
+  return server;
+}

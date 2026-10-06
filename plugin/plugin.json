@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "freeflow-docs",
+  "version": "0.1.0",
+  "description": "Write and edit your Freeflow Docs documents in ChatGPT: the Docs editor in the sidebar, with edits from the composer.",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Freeflow Docs",
+        "shortDescription": "Documents, edited by chat",
+        "longDescription": "Opens your Freeflow Docs documents in ChatGPT's sidebar. Edit by hand in the full editor, or ask ChatGPT to rewrite a section, fix wording, add content or change formatting; the document updates in place.",
+        "developerName": "Freeflow",
+        "category": "Productivity"
+      }
+    }
+  }
+}

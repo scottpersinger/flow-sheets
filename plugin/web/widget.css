@@ -1,0 +1,115 @@
+/* Adjustments for running the Docs workbench inside ChatGPT's app frame. */
+/* The host measures the document to size the iframe: give the app an explicit height (set by host.ts). */
+html,
+body {
+  height: auto;
+}
+#root {
+  height: var(--app-height, 720px);
+}
+#root > .workbench,
+#root > .docs-library {
+  height: 100%;
+}
+.docs-plugin .wb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--text, #1f1f1f);
+  text-decoration: none;
+}
+.docs-plugin .wb-back:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+.docs-plugin .wb-ask {
+  display: flex;
+  gap: 6px;
+}
+.docs-library {
+  height: 100%;
+  overflow: auto;
+  padding: 24px;
+  box-sizing: border-box;
+  background: var(--chrome, #f8f9fa);
+}
+.docs-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 900px;
+  margin: 0 auto 16px;
+}
+.docs-library h1 {
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0;
+}
+.docs-library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.docs-card {
+  text-align: left;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  font: inherit;
+}
+.docs-card:hover {
+  border-color: #9aa0a6;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+.docs-card .title {
+  font-weight: 500;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docs-card .when {
+  color: #5f6368;
+  font-size: 12px;
+}
+.docs-empty {
+  color: #5f6368;
+  text-align: center;
+  padding: 48px 0;
+}
+.docs-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: #323232;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 50;
+}
+.docs-section {
+  max-width: 900px;
+  margin: 0 auto 24px;
+}
+.docs-section h2 {
+  font-size: 15px;
+  font-weight: 500;
+  color: #5f6368;
+  margin: 0 0 10px;
+}
+.docs-section .docs-empty {
+  padding: 12px 0;
+  text-align: left;
+}
+.docs-card .title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

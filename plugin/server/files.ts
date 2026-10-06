@@ -1,0 +1,346 @@
+// Access to the user's documents and presentations for the ChatGPT plugin: the same SQLite database and JSON
+// files the app uses, scoped to one account, plus the headless editing the model's tools need. Edits run the
+// app's own tools (client/src/agent/docTools.ts and deckTools.ts) against a controller that has no editor
+// view, so a tool behaves exactly as it does inside the app, then the result is saved.
+import path from 'node:path';
+import { runDeckTool } from '../../client/src/agent/deckTools.ts';
+import { runDocTool } from '../../client/src/agent/docTools.ts';
+import { ToolError } from '../../client/src/agent/toolError.ts';
+import { DeckController } from '../../client/src/deck/controller.ts';
+import { DocController } from '../../client/src/doc/controller.ts';
+import { openDb, type DB } from '../../server/db.ts';
+import { ImageStore } from '../../server/images.ts';
+import { SheetStore } from '../../server/sheets.ts';
+import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
+import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
+import { markdownToDoc } from '../../shared/docMarkdown.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta } from '../../shared/types.ts';
+
+export { ToolError };
+
+export type FileKind = 'doc' | 'deck';
+export const FILE_KINDS: readonly FileKind[] = ['doc', 'deck'];
+
+/** A save with a stale revision: someone else (the app, the model) changed the file first. */
+export class ConflictError extends Error {
+  rev: string;
+  constructor(rev: string) {
+    super('The file changed since it was loaded. Reload it and try again.');
+    this.rev = rev;
+  }
+}
+
+export interface FileSummary {
+  kind: FileKind;
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
+/** Where the user is in the open file, as reported by the app's editor. */
+export interface Cursor {
+  /** Documents: 1-based block holding the cursor, and the selected text. */
+  cursor_block?: number;
+  selected_text?: string;
+  /** Presentations: 1-based slide being viewed, and ids of the selected elements. */
+  slide?: number;
+  selection?: string[];
+}
+
+export interface OpenFile {
+  kind: FileKind;
+  id: string;
+  title: string;
+  rev: string;
+}
+
+export interface AppState {
+  open: OpenFile | null;
+}
+
+export interface FileHubOptions {
+  db: DB;
+  dataDir: string;
+  /** Public origin of the plugin server; images are served from it. */
+  publicUrl: string | null;
+}
+
+/** Tools the model may run on a document, in the app's vocabulary. */
+export const DOC_EDIT_TOOLS = ['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image', 'set_doc_style', 'set_page_setup'] as const;
+export type DocEditTool = (typeof DOC_EDIT_TOOLS)[number];
+/** Tools the model may run on a presentation (render_slide needs a browser and is left out). */
+export const DECK_EDIT_TOOLS = ['read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme'] as const;
+export type DeckEditTool = (typeof DECK_EDIT_TOOLS)[number];
+
+export interface SlideSpec extends SlideContent {
+  layout?: LayoutId;
+}
+
+const summary = (m: SheetMeta): FileSummary => ({ kind: m.kind as FileKind, id: m.id, title: m.title, updated_at: m.updatedAt });
+
+const noun = (kind: FileKind) => (kind === 'doc' ? 'document' : 'presentation');
+
+/** Apply fn to every image address in a document (the content is plain JSON). */
+function mapDocImages(doc: Doc, fn: (src: string) => string): Doc {
+  const walk = (node: unknown): unknown => {
+    if (!node || typeof node !== 'object') return node;
+    let out = node as { type?: string; attrs?: { src?: unknown }; content?: unknown[] };
+    if (out.type === 'image' && typeof out.attrs?.src === 'string') out = { ...out, attrs: { ...out.attrs, src: fn(out.attrs.src) } };
+    if (Array.isArray(out.content)) out = { ...out, content: out.content.map(walk) };
+    return out;
+  };
+  return { ...doc, content: walk(doc.content) as Doc['content'] };
+}
+
+/** Apply fn to every image element's address in a presentation. */
+function mapDeckImages(deck: Deck, fn: (src: string) => string): Deck {
+  return { ...deck, slides: deck.slides.map((s) => ({ ...s, elements: s.elements.map((e) => (e.type === 'image' ? { ...e, src: fn(e.src) } : e)) })) };
+}
+
+/** The app's storage, shared by every account the plugin serves. */
+export class FileHub {
+  readonly db: DB;
+  readonly sheets: SheetStore;
+  readonly images: ImageStore;
+  readonly publicUrl: string | null;
+  private readonly byUser = new Map<string, FileService>();
+
+  constructor(opts: FileHubOptions) {
+    this.db = opts.db;
+    this.sheets = new SheetStore(opts.db, path.join(opts.dataDir, 'sheets'));
+    this.images = new ImageStore(opts.db, path.join(opts.dataDir, 'images'));
+    this.publicUrl = opts.publicUrl?.replace(/\/$/, '') ?? null;
+  }
+
+  /** Open the app's database in this data directory. */
+  static async open(opts: { dataDir: string; publicUrl: string | null }): Promise<FileHub> {
+    const hub = new FileHub({ db: openDb(path.join(opts.dataDir, 'app.db')), dataDir: opts.dataDir, publicUrl: opts.publicUrl });
+    await hub.init();
+    return hub;
+  }
+
+  async init(): Promise<void> {
+    await this.sheets.init();
+    await this.images.init();
+  }
+
+  /** The files of one account; the same instance (with its open-file state) for every request of that user. */
+  forUser(userId: string): FileService {
+    let svc = this.byUser.get(userId);
+    if (!svc) {
+      svc = new FileService(this, userId);
+      this.byUser.set(userId, svc);
+    }
+    return svc;
+  }
+
+  userIdForEmail(email: string): string | null {
+    const row = this.db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase()) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  /** Who the account is, for ChatGPT's account linking. */
+  profile(userId: string): { id: string; email: string } | null {
+    const row = this.db.prepare('SELECT id, email FROM users WHERE id = ?').get(userId) as { id: string; email: string } | undefined;
+    return row ?? null;
+  }
+
+  /** A stored image by id, whoever owns it: the iframe fetches images without credentials, so the id is the secret. */
+  imageFile(id: string): { file: string; type: string } | null {
+    const row = this.db.prepare('SELECT owner_id FROM images WHERE id = ?').get(id) as { owner_id: string } | undefined;
+    return row ? this.images.get(row.owner_id, id) : null;
+  }
+}
+
+export class FileService {
+  readonly hub: FileHub;
+  readonly sheets: SheetStore;
+  readonly images: ImageStore;
+  readonly userId: string;
+  readonly publicUrl: string | null;
+  /** The file shown in the app, which the model's tools act on by default. */
+  open: { kind: FileKind; id: string } | null = null;
+  cursor: Cursor = {};
+
+  constructor(hub: FileHub, userId: string) {
+    this.hub = hub;
+    this.sheets = hub.sheets;
+    this.images = hub.images;
+    this.userId = userId;
+    this.publicUrl = hub.publicUrl;
+  }
+
+  profile(): { id: string; email: string } {
+    return this.hub.profile(this.userId) ?? { id: this.userId, email: '' };
+  }
+
+  // --- Listing and lifecycle --------------------------------------------------------
+
+  list(kind?: FileKind, query?: string): FileSummary[] {
+    const q = query?.trim().toLowerCase();
+    const kinds = kind ? [kind] : FILE_KINDS;
+    return kinds
+      .flatMap((k) => this.sheets.list(this.userId, k))
+      .filter((m) => !q || m.title.toLowerCase().includes(q))
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .map(summary);
+  }
+
+  async createDoc(title: string, markdown?: string): Promise<FileSummary> {
+    const doc = markdown ? markdownToDoc(markdown) : newDoc();
+    const problem = validateDoc(doc);
+    if (problem) throw new ToolError(problem);
+    return summary(await this.sheets.createDoc(this.userId, title.trim() || 'Untitled document', doc));
+  }
+
+  async createDeck(title: string, theme?: ThemeId, slides: SlideSpec[] = []): Promise<FileSummary> {
+    const deck: Deck = {
+      version: 1,
+      theme: theme ?? 'light',
+      slides: slides.length ? slides.map((s, i) => buildSlide(s.layout ?? (i === 0 ? 'title' : 'title-body'), s, newId)) : [buildSlide('title', {}, newId)],
+    };
+    const problem = validateDeck(deck);
+    if (problem) throw new ToolError(problem);
+    return summary(await this.sheets.createDeck(this.userId, title.trim() || 'Untitled presentation', deck));
+  }
+
+  rename(kind: FileKind, id: string, title: string): FileSummary {
+    const meta = this.sheets.rename(this.userId, id, title.trim(), kind);
+    if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    return summary(meta);
+  }
+
+  async delete(kind: FileKind, id: string): Promise<void> {
+    if (!(await this.sheets.delete(this.userId, id, kind))) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    if (this.open?.id === id) this.setOpen(null);
+  }
+
+  setOpen(file: { kind: FileKind; id: string } | null, cursor: Cursor = {}): void {
+    if (file && !this.sheets.get(this.userId, file.id, file.kind)) throw new ToolError(`There is no ${noun(file.kind)} ${file.id}.`);
+    this.open = file;
+    this.cursor = file ? cursor : {};
+  }
+
+  /** The id to act on for a tool of this kind: the given one, else the open file if it is of that kind. */
+  target(kind: FileKind, id: string | undefined): string | null {
+    if (id) return id;
+    return this.open?.kind === kind ? this.open.id : null;
+  }
+
+  state(): AppState {
+    const meta = this.open ? this.sheets.get(this.userId, this.open.id, this.open.kind) : null;
+    if (this.open && !meta) this.open = null;
+    return { open: meta ? { kind: this.open!.kind, id: meta.id, title: meta.title, rev: meta.updatedAt } : null };
+  }
+
+  // --- Whole files for the app's editors --------------------------------------------------
+
+  /** A file with image addresses the app's iframe can load. The revision is the save time. */
+  async get(kind: FileKind, id: string): Promise<{ meta: FileSummary; rev: string; data: Doc | Deck }> {
+    if (kind === 'doc') {
+      const loaded = await this.sheets.loadDoc(this.userId, id);
+      if (!loaded) throw new ToolError(`There is no document ${id}.`);
+      return { meta: summary(loaded.meta), rev: loaded.meta.updatedAt, data: this.toPublic(kind, loaded.doc) };
+    }
+    const loaded = await this.sheets.loadDeck(this.userId, id);
+    if (!loaded) throw new ToolError(`There is no presentation ${id}.`);
+    return { meta: summary(loaded.meta), rev: loaded.meta.updatedAt, data: this.toPublic(kind, loaded.deck) };
+  }
+
+  /** Save a whole file. With ifRev, the save only happens when nobody else saved first. */
+  async save(kind: FileKind, id: string, data: Doc | Deck, ifRev?: string): Promise<{ rev: string }> {
+    const stored = this.toStored(kind, data);
+    const problem = kind === 'doc' ? validateDoc(stored) : validateDeck(stored);
+    if (problem) throw new ToolError(problem);
+    const meta = this.sheets.get(this.userId, id, kind);
+    if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    if (ifRev && meta.updatedAt !== ifRev) throw new ConflictError(meta.updatedAt);
+    const saved = kind === 'doc' ? await this.sheets.saveDoc(this.userId, id, stored as Doc) : await this.sheets.saveDeck(this.userId, id, stored as Deck);
+    if (!saved) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    return { rev: saved.updatedAt };
+  }
+
+  // --- Headless editing for the model's tools --------------------------------------------
+
+  /**
+   * Run one of the app's document tools on a stored document and save the result. Returns what the tool
+   * returned (parsed), with the document id and its new revision.
+   */
+  async editDoc(id: string, tool: DocEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const loaded = await this.sheets.loadDoc(this.userId, id);
+    if (!loaded) throw new ToolError(`There is no document ${id}.`);
+    const before = JSON.stringify(loaded.doc);
+    const ctl = new DocController(loaded.doc, async () => {});
+    try {
+      const result = JSON.parse(runDocTool({ id: 'mcp', name: tool, input }, { doc: ctl, group: `mcp-${Date.now()}` })) as Record<string, unknown>;
+      const after = docFromNode(ctl.doc);
+      let rev = loaded.meta.updatedAt;
+      if (JSON.stringify(after) !== before) rev = (await this.save('doc', id, after, loaded.meta.updatedAt)).rev;
+      if (this.open?.id === id && (tool === 'read_doc' || tool === 'get_doc_info')) {
+        // The headless controller has no cursor; report the one the app's editor told us about.
+        if (this.cursor.cursor_block) result.cursor_block = this.cursor.cursor_block;
+        if (this.cursor.selected_text) result.selected_text = this.cursor.selected_text;
+        else delete result.selected_text;
+      }
+      return { doc_id: id, title: loaded.meta.title, rev, ...result };
+    } finally {
+      ctl.dispose();
+    }
+  }
+
+  /** The same for a presentation and the app's deck tools. */
+  async editDeck(id: string, tool: DeckEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const loaded = await this.sheets.loadDeck(this.userId, id);
+    if (!loaded) throw new ToolError(`There is no presentation ${id}.`);
+    const before = JSON.stringify(loaded.deck);
+    const ctl = new DeckController(loaded.deck, async () => {});
+    try {
+      if (this.open?.id === id) {
+        // Start where the user is, so "the current slide" and the outline's marker are right.
+        if (this.cursor.slide) ctl.goTo(this.cursor.slide - 1);
+        if (this.cursor.selection?.length) ctl.select(this.cursor.selection);
+      }
+      const result = JSON.parse(runDeckTool({ id: 'mcp', name: tool, input }, { deck: ctl, group: `mcp-${Date.now()}` })) as Record<string, unknown>;
+      const after = ctl.deck;
+      let rev = loaded.meta.updatedAt;
+      if (JSON.stringify(after) !== before) rev = (await this.save('deck', id, after, loaded.meta.updatedAt)).rev;
+      return { deck_id: id, title: loaded.meta.title, rev, ...result };
+    } finally {
+      ctl.dispose();
+    }
+  }
+
+  // --- Images ---------------------------------------------------------------------------
+
+  /** Store an image uploaded from the app; returns an address the iframe can load. */
+  async uploadImage(type: string, base64: string): Promise<string> {
+    if (!CELL_IMAGE_TYPES.includes(type)) throw new ToolError('Please choose a PNG, JPEG, GIF or WebP image.');
+    const data = Buffer.from(base64, 'base64');
+    if (data.length > MAX_CELL_IMAGE_BYTES) throw new ToolError(`Images must be under ${Math.round(MAX_CELL_IMAGE_BYTES / 1e6)} MB.`);
+    return this.publicSrc(await this.images.create(this.userId, type, data));
+  }
+
+  imageFile(id: string): { file: string; type: string } | null {
+    return this.images.get(this.userId, id);
+  }
+
+  /** Stored "/api/images/<id>" addresses become "<publicUrl>/img/<id>" for the iframe. */
+  publicSrc(src: string): string {
+    return this.publicUrl && src.startsWith('/api/images/') ? `${this.publicUrl}/img/${src.slice('/api/images/'.length)}` : src;
+  }
+
+  storedSrc(src: string): string {
+    const prefix = this.publicUrl ? `${this.publicUrl}/img/` : null;
+    return prefix && src.startsWith(prefix) ? `/api/images/${src.slice(prefix.length)}` : src;
+  }
+
+  toPublic<T extends Doc | Deck>(kind: FileKind, data: T): T {
+    if (!this.publicUrl) return data;
+    return (kind === 'doc' ? mapDocImages(data as Doc, (s) => this.publicSrc(s)) : mapDeckImages(data as Deck, (s) => this.publicSrc(s))) as T;
+  }
+
+  toStored<T extends Doc | Deck>(kind: FileKind, data: T): T {
+    if (!this.publicUrl) return data;
+    return (kind === 'doc' ? mapDocImages(data as Doc, (s) => this.storedSrc(s)) : mapDeckImages(data as Deck, (s) => this.storedSrc(s))) as T;
+  }
+}
