@@ -2,7 +2,7 @@
 // indentation, images and rules. Buttons keep the editor focused (mousedown is prevented) so the selection
 // they act on stays put.
 import { useEffect, useState, type ReactNode } from 'react';
-import { FONT_FAMILIES, FONT_SIZES, fontFamilyCss, type BlockType } from '../../../shared/doc.ts';
+import { DOC_DEFAULTS, FONT_FAMILIES, FONT_SIZES, fontFamilyCss, type BlockType } from '../../../shared/doc.ts';
 import { MOD } from '../commands.ts';
 import { ColorPicker } from '../components/ColorPicker.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -47,7 +47,7 @@ function FontPicker({ ctl, font, disabled }: { ctl: DocController; font: string;
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
   const items: MenuItem[] = [
-    { label: 'Default font', checked: !font, action: () => ctl.setMark('font', null) },
+    { label: `Default (${DOC_DEFAULTS.fontFamily})`, checked: !font, action: () => ctl.setMark('font', null) },
     'sep',
     ...(font && !(FONT_FAMILIES as readonly string[]).includes(font) ? [{ label: <span style={{ fontFamily: fontFamilyCss(font) }}>{font}</span>, checked: true, action: () => {} }] : []),
     ...SORTED_FONTS.map((f) => ({ label: <span style={{ fontFamily: fontFamilyCss(f) }}>{f}</span>, checked: font === f, action: () => ctl.setMark('font', { family: f }) })),
@@ -56,7 +56,7 @@ function FontPicker({ ctl, font, disabled }: { ctl: DocController; font: string;
     <div className="tb-drop doc-font-drop" onMouseDown={(e) => e.stopPropagation()}>
       <Btn title="Font" active={open} disabled={disabled} onClick={() => setOpen(!open)}>
         <span className="doc-font-label" style={font ? { fontFamily: fontFamilyCss(font) } : undefined}>
-          {font || 'Default font'}
+          {font || DOC_DEFAULTS.fontFamily}
         </span>
         <span className="tb-caret">▾</span>
       </Btn>
@@ -90,8 +90,9 @@ export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController;
   const color = ctl.markAt('color')?.attrs.color as string | undefined;
   const highlight = ctl.markAt('highlight')?.attrs.color as string | undefined;
   const font = (ctl.markAt('font')?.attrs.family as string | undefined) ?? '';
-  const size = (ctl.markAt('size')?.attrs.size as number | undefined) ?? 0;
   const blockValue = BLOCK_OPTIONS.some((o) => o.value === block) ? block : 'paragraph';
+  // With no size mark, the text is drawn at its block style's size; show that so the box always says what the cursor is in.
+  const size = (ctl.markAt('size')?.attrs.size as number | undefined) ?? DOC_DEFAULTS.blockSizes[isNode ? 'paragraph' : (block as BlockType)] ?? DOC_DEFAULTS.fontSize;
 
   return (
     <div className="toolbar doc-toolbar" role="toolbar" aria-label="Document toolbar">
@@ -125,10 +126,9 @@ export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController;
         disabled={isNode}
         value={size}
         onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => ctl.setMark('size', Number(e.target.value) ? { size: Number(e.target.value) } : null)}
+        onChange={(e) => ctl.setMark('size', { size: Number(e.target.value) })}
       >
-        <option value={0}>Size</option>
-        {size !== 0 && !(FONT_SIZES as readonly number[]).includes(size) && <option value={size}>{size}</option>}
+        {!(FONT_SIZES as readonly number[]).includes(size) && <option value={size}>{size}</option>}
         {FONT_SIZES.map((s) => (
           <option key={s} value={s}>
             {s}
