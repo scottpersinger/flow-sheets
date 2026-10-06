@@ -37,9 +37,9 @@ describe('docx import', () => {
     expect(node.content.childCount).toBe(12);
     expect(docToMarkdown(node)).toBe(
       [
-        '# Annual report {.title}',
+        '# <span style="font-size: 28pt">Annual report</span> {.title}',
         '## Fiscal 2026 {.subtitle}',
-        '# Overview',
+        '# **Overview**',
         '### Deep',
         'Plain, **bold**, *italic*, <u>under</u>, ~~gone~~, <span style="color: #c00000">red</span>, <span style="background-color: #ffff00">marked</span>, <span style="font-family: Georgia, serif"><span style="font-size: 14pt">big serif</span></span> and **strong**.',
         'See [the site](https://biztrip.ai/) now.',
@@ -52,6 +52,8 @@ describe('docx import', () => {
       ].join('\n\n'),
     );
     expect(node.child(5).attrs.align).toBe('center');
+    // Document defaults from docDefaults: Calibri 11, single spacing, no space after.
+    expect(node.attrs.style).toEqual({ font: 'Calibri', size: 11, lineHeight: 1.15, spaceAfter: 0 });
     expect(node.child(10).attrs.width).toBe(200);
     expect(warnings).toEqual(['Headers and footers were dropped.', 'Tables were converted to paragraphs (one per row, cells separated by tabs).']);
   });

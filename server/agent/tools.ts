@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { ARROW_STYLE_IDS, buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
-import { ALIGNMENTS, BLOCK_TYPES, docNode, MAX_HEADER_CHARS, MAX_MARGIN, MIN_MARGIN, PAGE_NUMBER_POSITIONS, PAGE_SIZE_IDS } from '../../shared/doc.ts';
+import { ALIGNMENTS, BLOCK_TYPES, docNode, MAX_FONT_SIZE, MAX_HEADER_CHARS, MAX_LINE_HEIGHT, MAX_MARGIN, MAX_PARAGRAPH_SPACE, MIN_FONT_SIZE, MIN_LINE_HEIGHT, MIN_MARGIN, PAGE_NUMBER_POSITIONS, PAGE_SIZE_IDS } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
 import { docOutline } from '../../shared/agent/docRead.ts';
 import { SHAPE_KINDS } from '../../shared/shapes.ts';
@@ -306,8 +306,11 @@ const schemas = {
       to: blockNumber.optional().describe('Defaults to "from" (one block).'),
       type: z.enum(BLOCK_TYPES).optional().describe('Turn the blocks into this kind: paragraph, title, subtitle, heading1-3, bullet_list, ordered_list (consecutive blocks become one list), blockquote or code_block.'),
       align: z.enum(ALIGNMENTS).optional().describe('Text alignment of the blocks (and of images).'),
+      space_before: z.number().min(0).max(MAX_PARAGRAPH_SPACE).optional().describe('Space above each paragraph, in points.'),
+      space_after: z.number().min(0).max(MAX_PARAGRAPH_SPACE).optional().describe('Space below each paragraph, in points.'),
+      line_spacing: z.number().min(0).max(MAX_LINE_HEIGHT).optional().describe('Line height as a multiple of the font size (1 single, 1.5, 2 double); 0 goes back to the document default.'),
     })
-    .describe('Change the kind or alignment of blocks in the open document, keeping their text and inline formatting.'),
+    .describe('Change the kind, alignment or spacing of blocks in the open document, keeping their text and inline formatting.'),
   insert_image: z
     .object({
       src: z.string().describe('Image address: an https URL, a stored /api/images/... address (from <attached_images> or render_slide), or a data: URL.'),
@@ -317,6 +320,14 @@ const schemas = {
       align: z.enum(ALIGNMENTS).optional().describe('left (default), center or right.'),
     })
     .describe('Add an image block to the open document. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)'),
+  set_doc_style: z
+    .object({
+      font: z.string().max(60).optional().describe('Default font family for the whole document, e.g. "Arial".'),
+      size: z.number().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE).optional().describe('Body text size in points; headings scale with it.'),
+      line_spacing: z.number().min(MIN_LINE_HEIGHT).max(MAX_LINE_HEIGHT).optional().describe('Default line height as a multiple of the font size.'),
+      space_after: z.number().min(0).max(MAX_PARAGRAPH_SPACE).optional().describe('Default space after each paragraph, in points.'),
+    })
+    .describe("Change the open document's defaults: font, body size, line spacing and paragraph spacing, used by all text that has no font or size of its own. Only the settings given change."),
   set_page_setup: z
     .object({
       mode: z.enum(['pages', 'pageless']).optional().describe('pages: fixed pages with margins and visible boundaries; pageless: one continuous column.'),

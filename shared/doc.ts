@@ -16,6 +16,73 @@ export interface Doc {
   content: DocJSON;
 }
 
+// --- Document style and paragraph spacing ---------------------------------------------------------
+
+/** The document's defaults: what text and paragraphs look like when nothing says otherwise. */
+export interface DocStyle {
+  /** Default font family. */
+  font: string;
+  /** Body text size in points. */
+  size: number;
+  /** Line height as a multiple of the font size. */
+  lineHeight: number;
+  /** Space after each paragraph in points. */
+  spaceAfter: number;
+}
+
+export const DEFAULT_DOC_STYLE: DocStyle = { font: 'Google Sans', size: 12, lineHeight: 1.65, spaceAfter: 7.5 };
+export const MIN_LINE_HEIGHT = 0.8;
+export const MAX_LINE_HEIGHT = 4;
+export const MAX_PARAGRAPH_SPACE = 200;
+
+/** Per-paragraph spacing overrides, in points (line is a multiple of the font size). */
+export interface Spacing {
+  before?: number;
+  after?: number;
+  line?: number;
+}
+
+export function docStyleOf(node: PMNode): DocStyle {
+  return { ...DEFAULT_DOC_STYLE, ...((node.attrs.style ?? {}) as Partial<DocStyle>) };
+}
+
+export function checkDocStyle(s: unknown): string | null {
+  if (s === null || s === undefined) return null;
+  if (typeof s !== 'object') return 'Invalid document style';
+  const d = s as Partial<DocStyle>;
+  if (d.font !== undefined && (typeof d.font !== 'string' || !cleanFontFamily(d.font))) return 'Invalid default font';
+  if (d.size !== undefined && (typeof d.size !== 'number' || d.size < MIN_FONT_SIZE || d.size > MAX_FONT_SIZE)) return 'Invalid default font size';
+  if (d.lineHeight !== undefined && (typeof d.lineHeight !== 'number' || d.lineHeight < MIN_LINE_HEIGHT || d.lineHeight > MAX_LINE_HEIGHT)) return 'Invalid line spacing';
+  if (d.spaceAfter !== undefined && (typeof d.spaceAfter !== 'number' || d.spaceAfter < 0 || d.spaceAfter > MAX_PARAGRAPH_SPACE)) return 'Invalid paragraph spacing';
+  return null;
+}
+
+export function checkSpacing(s: unknown): string | null {
+  if (s === null || s === undefined) return null;
+  if (typeof s !== 'object') return 'Invalid spacing';
+  const sp = s as Spacing;
+  for (const k of ['before', 'after'] as const) {
+    if (sp[k] !== undefined && (typeof sp[k] !== 'number' || sp[k] < 0 || sp[k] > MAX_PARAGRAPH_SPACE)) return `Invalid space ${k}`;
+  }
+  if (sp.line !== undefined && (typeof sp.line !== 'number' || sp.line < MIN_LINE_HEIGHT || sp.line > MAX_LINE_HEIGHT)) return 'Invalid line spacing';
+  return null;
+}
+
+/** Inline style for the editor root that sets the document's defaults (read by the stylesheet). */
+export function docStyleCss(s: DocStyle): string {
+  return `--doc-font: ${fontFamilyCss(s.font)}; --doc-size: ${s.size}pt; --doc-line: ${s.lineHeight}; --doc-space: ${s.spaceAfter}pt`;
+}
+
+/** Inline style for a block's spacing overrides, or undefined. */
+export function spacingCss(spacing: Spacing | null | undefined): string | undefined {
+  if (!spacing) return undefined;
+  const parts: string[] = [];
+  if (spacing.before !== undefined) parts.push(`margin-top: ${spacing.before}pt`);
+  if (spacing.after !== undefined) parts.push(`margin-bottom: ${spacing.after}pt`);
+  if (spacing.line !== undefined) parts.push(`line-height: ${spacing.line}`);
+  return parts.length ? parts.join('; ') : undefined;
+}
+
 // --- Pages -------------------------------------------------------------------------------------
 
 export const PAGE_SIZE_IDS = ['letter', 'legal', 'a4'] as const;
@@ -139,7 +206,7 @@ export const DOC_DEFAULTS = {
   fontSize: 12,
   lineHeight: 1.65,
   textColor: '#1f1f1f',
-  /** Size of each block style in points. */
+  /** Size of each block style in points, at the default body size of 12 (they scale with the document's size). */
   blockSizes: { paragraph: 12, title: 30, subtitle: 15, heading1: 22.5, heading2: 17.25, heading3: 13.5, blockquote: 12, code_block: 10.5, bullet_list: 12, ordered_list: 12 } as Record<BlockType, number>,
   /** Headings are semibold; the title is regular weight. */
   boldHeadings: true,
@@ -172,7 +239,15 @@ export const FONT_FAMILIES = [
   'Source Sans 3',
 ] as const;
 
-const alignAttr = (node: PMNode): Record<string, string> => (node.attrs.align && node.attrs.align !== 'left' ? { style: `text-align: ${node.attrs.align}` } : {});
+/** style attribute for a block's alignment and spacing. */
+const alignAttr = (node: PMNode): Record<string, string> => {
+  const parts: string[] = [];
+  if (node.attrs.align && node.attrs.align !== 'left') parts.push(`text-align: ${node.attrs.align}`);
+  const sp = spacingCss(node.attrs.spacing as Spacing | null);
+  if (sp) parts.push(sp);
+  return parts.length ? { style: parts.join('; ') } : {};
+};
+const TEXT_ATTRS = { align: { default: null }, spacing: { default: null } };
 const alignFromDOM = (dom: HTMLElement | string): Record<string, unknown> | false => {
   if (typeof dom === 'string') return false;
   const a = dom.style?.textAlign;
@@ -180,11 +255,11 @@ const alignFromDOM = (dom: HTMLElement | string): Record<string, unknown> | fals
 };
 
 const nodes: Record<string, NodeSpec> = {
-  doc: { content: 'block+', attrs: { page: { default: null } } },
+  doc: { content: 'block+', attrs: { page: { default: null }, style: { default: null } } },
   paragraph: {
     content: 'inline*',
     group: 'block',
-    attrs: { align: { default: null } },
+    attrs: TEXT_ATTRS,
     parseDOM: [{ tag: 'p', getAttrs: alignFromDOM }],
     toDOM: (node) => ['p', alignAttr(node), 0] as DOMOutputSpec,
   },
@@ -192,7 +267,7 @@ const nodes: Record<string, NodeSpec> = {
     content: 'inline*',
     group: 'block',
     defining: true,
-    attrs: { level: { default: 1 }, align: { default: null } },
+    attrs: { level: { default: 1 }, ...TEXT_ATTRS },
     parseDOM: [1, 2, 3, 4, 5, 6].map((n) => ({ tag: `h${n}`, getAttrs: (dom: HTMLElement | string) => ({ level: Math.min(n, 3), ...(alignFromDOM(dom) || {}) }) })),
     toDOM: (node) => [`h${node.attrs.level}`, alignAttr(node), 0] as DOMOutputSpec,
   },
@@ -202,7 +277,7 @@ const nodes: Record<string, NodeSpec> = {
     content: 'inline*',
     group: 'block',
     defining: true,
-    attrs: { align: { default: null } },
+    attrs: TEXT_ATTRS,
     parseDOM: [{ tag: 'h1.doc-title', getAttrs: alignFromDOM, priority: 60 }, { tag: 'p.doc-title', getAttrs: alignFromDOM, priority: 60 }],
     toDOM: (node) => ['h1', { class: 'doc-title', ...alignAttr(node) }, 0] as DOMOutputSpec,
   },
@@ -210,7 +285,7 @@ const nodes: Record<string, NodeSpec> = {
     content: 'inline*',
     group: 'block',
     defining: true,
-    attrs: { align: { default: null } },
+    attrs: TEXT_ATTRS,
     parseDOM: [{ tag: 'p.doc-subtitle', getAttrs: alignFromDOM, priority: 60 }, { tag: 'h2.doc-subtitle', getAttrs: alignFromDOM, priority: 60 }],
     toDOM: (node) => ['p', { class: 'doc-subtitle', ...alignAttr(node) }, 0] as DOMOutputSpec,
   },
@@ -376,6 +451,8 @@ export function validateDoc(d: unknown): string | null {
   if (node.childCount > MAX_BLOCKS) return 'Too many blocks';
   const pageProblem = checkPageSetup(node.attrs.page);
   if (pageProblem) return pageProblem;
+  const styleProblem = checkDocStyle(node.attrs.style);
+  if (styleProblem) return styleProblem;
   if (node.content.size > MAX_DOC_CHARS) return 'Document is too large';
   let problem: string | null = null;
   node.descendants((n) => {
@@ -386,6 +463,8 @@ export function validateDoc(d: unknown): string | null {
       if (n.attrs.width !== null && (typeof n.attrs.width !== 'number' || n.attrs.width < 1 || n.attrs.width > 10000)) problem = 'Invalid image width';
     }
     if ((n.attrs.align ?? null) !== null && !ALIGNMENTS.includes(n.attrs.align)) problem = 'Invalid alignment';
+    const spacingProblem = n.attrs.spacing !== undefined ? checkSpacing(n.attrs.spacing) : null;
+    if (spacingProblem) problem = spacingProblem;
     if (n.type.name === 'heading' && !HEADING_LEVELS.includes(n.attrs.level)) problem = 'Invalid heading level';
     for (const m of n.marks) {
       if (m.type.name === 'link' && !safeLinkUrl(String(m.attrs.href))) problem = 'Invalid link';
@@ -421,4 +500,9 @@ export function blockType(node: PMNode): BlockType | 'image' | 'horizontal_rule'
     default:
       return 'paragraph';
   }
+}
+
+/** Size in points of text in a block style, given the document's body size. */
+export function blockSizePt(type: BlockType, style: DocStyle): number {
+  return Math.round(((DOC_DEFAULTS.blockSizes[type] ?? DOC_DEFAULTS.fontSize) / DOC_DEFAULTS.fontSize) * style.size * 100) / 100;
 }

@@ -30,6 +30,7 @@ export function docOutline(doc: PMNode, opts: DocOutlineOptions = {}) {
       n: k + 1,
       type: blockType(node),
       ...(node.attrs.align ? { align: node.attrs.align as string } : {}),
+      ...(node.attrs.spacing ? { spacing: node.attrs.spacing as Record<string, number> } : {}),
       ...(page ? { page } : {}),
       markdown: blockToMarkdown(node),
     });

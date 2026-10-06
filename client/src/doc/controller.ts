@@ -8,7 +8,7 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirr
 import { EditorState, NodeSelection, TextSelection, type Command, type Plugin, type Transaction } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { useSyncExternalStore } from 'react';
-import { docSchema, pageSetupOf, type Alignment, type BlockType, type Doc, type HeadingLevel, type MarkName, type PageSetup } from '../../../shared/doc.ts';
+import { docSchema, docStyleOf, pageSetupOf, type Alignment, type BlockType, type Doc, type DocStyle, type HeadingLevel, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
 import { AutoSaver } from '../state/store.ts';
 import { autoLinkOnEnter, autoLinkRule } from './autolink.ts';
 import { paginationOf, paginationPlugin, type Pagination } from './pagination.ts';
@@ -194,6 +194,47 @@ export class DocController {
       keymap(baseKeymap),
       paginationPlugin(),
     ];
+  }
+
+  // --- Document style and paragraph spacing ----------------------------------------
+
+  docStyle(): DocStyle {
+    return docStyleOf(this.doc);
+  }
+
+  /** Change the document's default font, size, line spacing or paragraph spacing (undoable). */
+  setDocStyle(patch: Partial<DocStyle>): boolean {
+    const cur = this.docStyle();
+    const next = { ...cur, ...patch };
+    if (JSON.stringify(next) === JSON.stringify(cur)) return false;
+    return this.run((tr) => tr.setDocAttribute('style', next));
+  }
+
+  /** Spacing of the block at the cursor. */
+  spacingAt(): Spacing {
+    const sel = this.state.selection;
+    const node = sel instanceof NodeSelection ? sel.node : sel.$from.parent;
+    return (node.attrs.spacing as Spacing | null) ?? {};
+  }
+
+  /** Set spacing on the textblocks in the selection; undefined values are left alone, null removes one. */
+  setSpacing(patch: { [K in keyof Spacing]?: number | null }): boolean {
+    const { from, to } = this.state.selection;
+    const ok = this.run((tr) => {
+      this.state.doc.nodesBetween(from, to, (node, pos) => {
+        if (!node.isTextblock || node.type === n.code_block) return;
+        const cur = { ...((node.attrs.spacing as Spacing | null) ?? {}) };
+        for (const k of ['before', 'after', 'line'] as const) {
+          const v = patch[k];
+          if (v === undefined) continue;
+          if (v === null) delete cur[k];
+          else cur[k] = v;
+        }
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, spacing: Object.keys(cur).length ? cur : null });
+      });
+    });
+    this.focus();
+    return ok;
   }
 
   // --- Pages ----------------------------------------------------------------------

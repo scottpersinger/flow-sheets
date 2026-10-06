@@ -4,14 +4,14 @@ import { Fragment, type Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection, type Transaction } from 'prosemirror-state';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
-import { ALIGNMENTS, BLOCK_TYPES, blockType, checkPageSetup, cleanFontFamily, DOC_DEFAULTS, DOC_PAGE_WIDTH, docSchema, FONT_FAMILIES, isColor, MAX_FONT_SIZE, MIN_FONT_SIZE, pageMetrics, type Alignment, type BlockType, type MarkName, type PageSetup } from '../../../shared/doc.ts';
+import { ALIGNMENTS, BLOCK_TYPES, blockSizePt, blockType, checkDocStyle, checkPageSetup, checkSpacing, cleanFontFamily, DOC_DEFAULTS, DOC_PAGE_WIDTH, docSchema, FONT_FAMILIES, isColor, MAX_FONT_SIZE, MIN_FONT_SIZE, pageMetrics, type Alignment, type BlockType, type DocStyle, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
 import { markdownToNodes } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DocController } from '../doc/controller.ts';
 import { ToolError } from './toolError.ts';
 
-export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image', 'set_page_setup']);
+export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image', 'set_page_setup', 'set_doc_style']);
 
 export interface DocToolEnv {
   doc: DocController | null;
@@ -256,6 +256,7 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
       const byChars = <K,>(m: Map<K, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => ({ value: k, characters: c }));
       const setup = ctl.pageSetup();
       const metrics = pageMetrics(setup);
+      const docStyle = ctl.docStyle();
       return JSON.stringify({
         block_count: doc.childCount,
         blocks_by_type: blocks,
@@ -282,12 +283,13 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
         cursor_block: ctl.cursorBlock(),
         ...(ctl.selectedText() ? { selected_text: ctl.selectedText().slice(0, 200) } : {}),
         defaults: {
-          note: 'Text without a font or size mark uses these. There is no per-document default setting; format_text sets a font or size on specific text.',
-          font_family: DOC_DEFAULTS.fontFamily,
+          note: 'The document style: text without a font or size mark uses these (set_doc_style changes them; format_text sets a font or size on specific text).',
+          font_family: docStyle.font,
           font_fallbacks: DOC_DEFAULTS.fontFallbacks,
-          body_size_pt: DOC_DEFAULTS.fontSize,
-          block_sizes_pt: DOC_DEFAULTS.blockSizes,
-          line_height: DOC_DEFAULTS.lineHeight,
+          body_size_pt: docStyle.size,
+          block_sizes_pt: Object.fromEntries(BLOCK_TYPES.map((t) => [t, blockSizePt(t, docStyle)])),
+          line_height: docStyle.lineHeight,
+          space_after_paragraphs_pt: docStyle.spaceAfter,
           text_color: DOC_DEFAULTS.textColor,
           page_width_px: setup.mode === 'pages' ? metrics.contentW : DOC_PAGE_WIDTH,
         },
@@ -393,12 +395,42 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
       const align = i.align as Alignment | undefined;
       if (type && !BLOCK_TYPES.includes(type)) throw new ToolError(`Unknown block type "${type}". Use one of ${BLOCK_TYPES.join(', ')}.`);
       if (align && !ALIGNMENTS.includes(align)) throw new ToolError(`Unknown alignment "${align}".`);
-      if (!type && !align) throw new ToolError('Pass type and/or align.');
+      const spacing: { [K in keyof Spacing]?: number | null } = {};
+      for (const [from, to] of [
+        ['space_before', 'before'],
+        ['space_after', 'after'],
+        ['line_spacing', 'line'],
+      ] as const) {
+        if (typeof i[from] === 'number') spacing[to] = i[from] === 0 && to === 'line' ? null : (i[from] as number);
+      }
+      const spacingProblem = checkSpacing(Object.fromEntries(Object.entries(spacing).filter(([, v]) => v !== null)));
+      if (spacingProblem) throw new ToolError(`${spacingProblem}.`);
+      const hasSpacing = Object.keys(spacing).length > 0;
+      if (!type && !align && !hasSpacing) throw new ToolError('Pass type, align and/or spacing (space_before, space_after, line_spacing).');
       const blocks: PMNode[] = [];
       for (let k = a; k <= b; k++) blocks.push(ctl.doc.child(k));
-      const nodes = convertBlocks(blocks, type, align);
+      let nodes = convertBlocks(blocks, type, align);
+      if (hasSpacing) {
+        const withSpacing = (node: PMNode): PMNode => {
+          if (node.isTextblock && node.type !== n.code_block) {
+            const cur = { ...((node.attrs.spacing as Spacing | null) ?? {}) };
+            for (const k of ['before', 'after', 'line'] as const) {
+              const v = spacing[k];
+              if (v === undefined) continue;
+              if (v === null) delete cur[k];
+              else cur[k] = v;
+            }
+            return node.type.create({ ...node.attrs, spacing: Object.keys(cur).length ? cur : null }, node.content, node.marks);
+          }
+          if (node.isLeaf || node.isTextblock) return node;
+          const children: PMNode[] = [];
+          node.forEach((c) => children.push(withSpacing(c)));
+          return node.copy(Fragment.from(children));
+        };
+        nodes = nodes.map(withSpacing);
+      }
       run((tr) => replaceSpan(tr, a, b, nodes));
-      return JSON.stringify({ blocks: nodes.length === 1 ? [a + 1] : [a + 1, a + nodes.length], ...(type ? { type } : {}), ...(align ? { align } : {}), block_count: ctl.doc.childCount });
+      return JSON.stringify({ blocks: nodes.length === 1 ? [a + 1] : [a + 1, a + nodes.length], ...(type ? { type } : {}), ...(align ? { align } : {}), ...(hasSpacing ? { spacing } : {}), block_count: ctl.doc.childCount });
     }
 
     case 'insert_image': {
@@ -413,6 +445,24 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
         tr.setSelection(NodeSelection.create(tr.doc, pos));
       });
       return JSON.stringify({ inserted_block: index + 1, block_count: ctl.doc.childCount });
+    }
+
+    case 'set_doc_style': {
+      const patch: Partial<DocStyle> = {};
+      if (typeof i.font === 'string') {
+        const family = cleanFontFamily(i.font);
+        if (!family) throw new ToolError(`"${i.font}" is not a font name.`);
+        patch.font = family;
+      }
+      if (typeof i.size === 'number') patch.size = i.size;
+      if (typeof i.line_spacing === 'number') patch.lineHeight = i.line_spacing;
+      if (typeof i.space_after === 'number') patch.spaceAfter = i.space_after;
+      if (!Object.keys(patch).length) throw new ToolError('Pass at least one of font, size, line_spacing or space_after.');
+      const problem = checkDocStyle(patch);
+      if (problem) throw new ToolError(`${problem}.`);
+      const changed = ctl.setDocStyle(patch);
+      const s = ctl.docStyle();
+      return JSON.stringify({ changed, document_style: { font: s.font, size_pt: s.size, line_spacing: s.lineHeight, space_after_pt: s.spaceAfter } });
     }
 
     case 'set_page_setup': {

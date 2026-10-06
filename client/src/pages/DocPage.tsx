@@ -1,7 +1,7 @@
 import { DOMSerializer } from 'prosemirror-model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { docNode, docSchema, PAGE_SIZES, type BlockType } from '../../../shared/doc.ts';
+import { docNode, docSchema, docStyleCss, docStyleOf, PAGE_SIZES, type BlockType } from '../../../shared/doc.ts';
 import { docToMarkdown } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
@@ -17,6 +17,7 @@ import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { DocController, useDocController } from '../doc/controller.ts';
 import { DocEditor, DocPrint } from '../doc/DocEditor.tsx';
 import { PageSetupDialog } from '../doc/PageSetupDialog.tsx';
+import { DocStyleDialog } from '../doc/DocStyleDialog.tsx';
 import { DocToolbar } from '../doc/DocToolbar.tsx';
 import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
@@ -36,7 +37,8 @@ const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
 function docToHtml(ctl: DocController, title: string): string {
   const body = document.createElement('div');
   body.append(DOMSerializer.fromSchema(docSchema).serializeFragment(ctl.doc.content));
-  return `<!doctype html>\n<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>\n<style>body{max-width:760px;margin:40px auto;padding:0 24px;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:16px;line-height:1.65;color:#1f1f1f}h1.doc-title{font-size:40px;font-weight:400;margin:0 0 6px}p.doc-subtitle{font-size:20px;color:#5f6368;margin:0 0 20px}img{max-width:100%}figure{margin:16px 0}figure[data-align=center]{text-align:center}figure[data-align=right]{text-align:right}blockquote{margin:0;padding-left:16px;border-left:3px solid #dadce0;color:#5f6368}pre{background:#f1f3f4;padding:12px;border-radius:6px;overflow:auto}code{font-family:Menlo,Consolas,monospace;font-size:14px}</style></head>\n<body>\n${body.innerHTML}\n</body></html>\n`;
+  const s = docStyleOf(ctl.doc);
+  return `<!doctype html>\n<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>\n<style>body{${docStyleCss(s)};max-width:760px;margin:40px auto;padding:0 24px;font-family:var(--doc-font);font-size:var(--doc-size);line-height:var(--doc-line);color:#1f1f1f}p{margin:0 0 var(--doc-space)}h1.doc-title{font-size:40px;font-weight:400;margin:0 0 6px}p.doc-subtitle{font-size:20px;color:#5f6368;margin:0 0 20px}img{max-width:100%}figure{margin:16px 0}figure[data-align=center]{text-align:center}figure[data-align=right]{text-align:right}blockquote{margin:0;padding-left:16px;border-left:3px solid #dadce0;color:#5f6368}pre{background:#f1f3f4;padding:12px;border-radius:6px;overflow:auto}code{font-family:Menlo,Consolas,monospace;font-size:14px}</style></head>\n<body>\n${body.innerHTML}\n</body></html>\n`;
 }
 
 export function DocPage() {
@@ -86,7 +88,9 @@ export function DocPage() {
   return <DocWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
 }
 
-type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial: string } | { kind: 'pageSetup' } | null;
+type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial: string } | { kind: 'pageSetup' } | { kind: 'docStyle' } | null;
+
+const LINE_SPACINGS: [string, number | null][] = [['Default', null], ['Single', 1.15], ['1.5', 1.5], ['Double', 2]];
 
 const ZOOMS = [50, 75, 100, 125, 150] as const;
 
@@ -325,7 +329,12 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
         },
         'sep',
         { label: 'Clear formatting', action: () => ctl.clearFormatting() },
+        {
+          label: 'Line spacing',
+          submenu: LINE_SPACINGS.map(([label, value]) => ({ label, checked: (ctl.spacingAt().line ?? null) === value, action: () => ctl.setSpacing({ line: value }) })),
+        },
         'sep',
+        { label: 'Document style…', action: () => setDialog({ kind: 'docStyle' }) },
         { label: `Page setup… (${PAGE_SIZES[ctl.pageSetup().size].name.split(' ')[0]})`, action: () => setDialog({ kind: 'pageSetup' }) },
       ],
     },
@@ -420,6 +429,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
       {printing && ctl.pageSetup().mode === 'pages' && <DocPrint ctl={ctl} />}
 
       {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'docStyle' && <DocStyleDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'link' && (
         <PromptModal

@@ -2,7 +2,7 @@
 // indentation, images and rules. Buttons keep the editor focused (mousedown is prevented) so the selection
 // they act on stays put.
 import { useEffect, useState, type ReactNode } from 'react';
-import { DOC_DEFAULTS, FONT_FAMILIES, FONT_SIZES, fontFamilyCss, type BlockType } from '../../../shared/doc.ts';
+import { blockSizePt, FONT_FAMILIES, FONT_SIZES, fontFamilyCss, type BlockType } from '../../../shared/doc.ts';
 import { MOD } from '../commands.ts';
 import { ColorPicker } from '../components/ColorPicker.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -37,7 +37,7 @@ const icon = (d: string) => (
 /** Font families in alphabetical order, each shown in its own face. */
 const SORTED_FONTS = [...FONT_FAMILIES].sort((a, b) => a.localeCompare(b));
 
-function FontPicker({ ctl, font, disabled }: { ctl: DocController; font: string; disabled: boolean }) {
+function FontPicker({ ctl, font, defaultFont, disabled }: { ctl: DocController; font: string; defaultFont: string; disabled: boolean }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
@@ -47,7 +47,7 @@ function FontPicker({ ctl, font, disabled }: { ctl: DocController; font: string;
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
   const items: MenuItem[] = [
-    { label: `Default (${DOC_DEFAULTS.fontFamily})`, checked: !font, action: () => ctl.setMark('font', null) },
+    { label: `Default (${defaultFont})`, checked: !font, action: () => ctl.setMark('font', null) },
     'sep',
     ...(font && !(FONT_FAMILIES as readonly string[]).includes(font) ? [{ label: <span style={{ fontFamily: fontFamilyCss(font) }}>{font}</span>, checked: true, action: () => {} }] : []),
     ...SORTED_FONTS.map((f) => ({ label: <span style={{ fontFamily: fontFamilyCss(f) }}>{f}</span>, checked: font === f, action: () => ctl.setMark('font', { family: f }) })),
@@ -56,7 +56,7 @@ function FontPicker({ ctl, font, disabled }: { ctl: DocController; font: string;
     <div className="tb-drop doc-font-drop" onMouseDown={(e) => e.stopPropagation()}>
       <Btn title="Font" active={open} disabled={disabled} onClick={() => setOpen(!open)}>
         <span className="doc-font-label" style={font ? { fontFamily: fontFamilyCss(font) } : undefined}>
-          {font || DOC_DEFAULTS.fontFamily}
+          {font || defaultFont}
         </span>
         <span className="tb-caret">▾</span>
       </Btn>
@@ -92,7 +92,8 @@ export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController;
   const font = (ctl.markAt('font')?.attrs.family as string | undefined) ?? '';
   const blockValue = BLOCK_OPTIONS.some((o) => o.value === block) ? block : 'paragraph';
   // With no size mark, the text is drawn at its block style's size; show that so the box always says what the cursor is in.
-  const size = (ctl.markAt('size')?.attrs.size as number | undefined) ?? DOC_DEFAULTS.blockSizes[isNode ? 'paragraph' : (block as BlockType)] ?? DOC_DEFAULTS.fontSize;
+  const docStyle = ctl.docStyle();
+  const size = (ctl.markAt('size')?.attrs.size as number | undefined) ?? blockSizePt(isNode ? 'paragraph' : (block as BlockType), docStyle);
 
   return (
     <div className="toolbar doc-toolbar" role="toolbar" aria-label="Document toolbar">
@@ -118,7 +119,7 @@ export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController;
           </option>
         ))}
       </select>
-      <FontPicker ctl={ctl} font={font} disabled={isNode} />
+      <FontPicker ctl={ctl} font={font} defaultFont={docStyle.font} disabled={isNode} />
       <select
         className="tb-select doc-size-select"
         title="Font size (points)"

@@ -6,7 +6,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model';
-import { cleanFontFamily, docFromNode, docSchema, isColor, MAX_BLOCKS, MAX_FONT_SIZE, MAX_MARGIN, MIN_FONT_SIZE, MIN_MARGIN, PAGE_SIZES, validateDoc, type Alignment, type Doc, type PageSetup, type PageSizeId } from '../shared/doc.ts';
+import { cleanFontFamily, DEFAULT_DOC_STYLE, docFromNode, docSchema, isColor, MAX_BLOCKS, MAX_FONT_SIZE, MAX_LINE_HEIGHT, MAX_MARGIN, MAX_PARAGRAPH_SPACE, MIN_FONT_SIZE, MIN_LINE_HEIGHT, MIN_MARGIN, PAGE_SIZES, validateDoc, type Alignment, type Doc, type DocStyle, type PageSetup, type PageSizeId, type Spacing } from '../shared/doc.ts';
 import { safeLinkUrl } from '../shared/links.ts';
 import { MAX_CELL_IMAGE_BYTES } from '../shared/types.ts';
 import { ImportError, IMPORT_LIMITS } from './xlsxImport.ts';
@@ -110,7 +110,12 @@ interface ParaProps {
   /** Numbering, when the paragraph is a list item. */
   numId?: string;
   ilvl?: number;
+  /** Spacing from the paragraph and its styles (points; line as a multiple). */
+  spacing: Spacing;
 }
+
+/** Word's "single" line spacing (240 twentieths) is about 1.15 times the font size on screen. */
+const SINGLE_LINE = 1.15;
 
 interface Style {
   id: string;
@@ -129,8 +134,9 @@ class Importer {
   private sink: ImageSink;
   private warn = new Map<string, number>();
   private styles = new Map<string, Style>();
-  /** The document's own default font and size (docDefaults plus the Normal style): runs that match them get no mark. */
+  /** The document's defaults (docDefaults plus the Normal style), which become the document style. */
   private defaultRun: RunProps = {};
+  private defaultSpacing: Spacing = {};
   /** numId → abstractNumId, and abstractNumId → per-level format ("bullet" or a number format). */
   private nums = new Map<string, string>();
   private abstractNums = new Map<string, Map<number, string>>();
@@ -197,9 +203,48 @@ class Importer {
     }
     const defaults = child(stylesRoot, 'w:docDefaults');
     let run = this.runProps(child(child(defaults, 'w:rPrDefault'), 'w:rPr'), {});
+    let spacing = this.spacingProps(child(child(defaults, 'w:pPrDefault'), 'w:pPr'), {});
     const normal = [...this.styles.values()].find((s) => s.type === 'paragraph' && (s.id === 'Normal' || /^normal$/i.test(s.name)));
-    if (normal) run = this.runProps(normal.rPr, run);
+    if (normal) {
+      run = this.runProps(normal.rPr, run);
+      spacing = this.spacingProps(normal.pPr, spacing);
+    }
     this.defaultRun = { font: run.font, size: run.size };
+    this.defaultSpacing = spacing;
+  }
+
+  /** The document style for the document node: Word's defaults where the file gives them. */
+  docStyle(): Partial<DocStyle> | null {
+    const out: Partial<DocStyle> = {};
+    if (this.defaultRun.font) out.font = this.defaultRun.font;
+    if (this.defaultRun.size !== undefined) out.size = this.defaultRun.size;
+    out.lineHeight = this.defaultSpacing.line ?? SINGLE_LINE;
+    out.spaceAfter = this.defaultSpacing.after ?? 0;
+    return out;
+  }
+
+  /** Paragraph spacing from w:spacing: before/after in twentieths of a point, line as a multiple or in twentieths. */
+  private spacingProps(pPr: XNode | undefined, base: Spacing): Spacing {
+    const out: Spacing = { ...base };
+    const sp = child(pPr, 'w:spacing');
+    if (!sp) return out;
+    const a = attrs(sp);
+    const pt = (v: string | undefined) => {
+      const n = num(v);
+      return n === undefined ? undefined : Math.min(MAX_PARAGRAPH_SPACE, Math.max(0, Math.round(n / 2) / 10));
+    };
+    const before = pt(a['w:before']);
+    const after = pt(a['w:after']);
+    if (before !== undefined) out.before = before;
+    if (after !== undefined) out.after = after;
+    const line = num(a['w:line']);
+    if (line !== undefined && line > 0) {
+      const rule = a['w:lineRule'] ?? 'auto';
+      // auto: multiples of single spacing; exact/atLeast: a height in twentieths of a point, relative to 12pt.
+      const multiple = rule === 'auto' ? (line / 240) * SINGLE_LINE : line / 20 / 12;
+      out.line = Math.min(MAX_LINE_HEIGHT, Math.max(MIN_LINE_HEIGHT, Math.round(multiple * 100) / 100));
+    }
+    return out;
   }
 
   private async loadNumbering(): Promise<void> {
@@ -271,14 +316,23 @@ class Importer {
   }
 
   /**
-   * A paragraph's kind, alignment and numbering from its direct properties and its style chain. Fonts and sizes
-   * that come from the document defaults or paragraph styles are not turned into marks: the paragraph style
-   * (title, heading, ...) carries that look, and the rest is the document's default font.
+   * A paragraph's kind, alignment, numbering and spacing from its direct properties and its style chain, plus
+   * the run properties its styles give the text (used as the base for each run, against the document defaults).
    */
-  private paraProps(pPr: XNode | undefined): ParaProps {
+  private paraProps(pPr: XNode | undefined): { para: ParaProps; run: RunProps } {
     const styleId = attrs(child(pPr, 'w:pStyle'))['w:val'];
     const chain = this.styleChain(styleId);
-    const para: ParaProps = { kind: 'paragraph' };
+    const para: ParaProps = { kind: 'paragraph', spacing: {} };
+    let run: RunProps = {};
+    for (const s of chain) run = this.runProps(s.rPr, run);
+    let spacing: Spacing = { ...this.defaultSpacing };
+    for (const s of chain) spacing = this.spacingProps(s.pPr, spacing);
+    spacing = this.spacingProps(pPr, spacing);
+    for (const k of ['before', 'after', 'line'] as const) {
+      const v = spacing[k];
+      const base = this.defaultSpacing[k] ?? (k === 'line' ? SINGLE_LINE : 0);
+      if (v !== undefined && Math.abs(v - base) > 0.01) para.spacing[k] = v;
+    }
     // The kind comes from the most specific style whose id or name says what it is.
     for (const s of [...chain].reverse()) {
       const key = `${s.id} ${s.name}`.toLowerCase();
@@ -313,7 +367,7 @@ class Importer {
       }
     }
     // Paragraph-level run properties (w:pPr/w:rPr) describe the paragraph mark, not the text; ignore them.
-    return para;
+    return { para, run };
   }
 
   // --- Content -------------------------------------------------------------------------------------
@@ -329,8 +383,10 @@ class Importer {
     // Links have their own look; Word's explicit blue on link text would fight it.
     if (p.color && isColor(p.color) && !href) out.push(m.color.create({ color: p.color }));
     if (p.highlight && isColor(p.highlight)) out.push(m.highlight.create({ color: p.highlight }));
-    if (p.font && p.font !== this.defaultRun.font) out.push(m.font.create({ family: p.font }));
-    if (p.size !== undefined && p.size !== this.defaultRun.size) out.push(m.size.create({ size: p.size }));
+    const defaultFont = this.defaultRun.font ?? DEFAULT_DOC_STYLE.font;
+    const defaultSize = this.defaultRun.size ?? DEFAULT_DOC_STYLE.size;
+    if (p.font && p.font !== defaultFont) out.push(m.font.create({ family: p.font }));
+    if (p.size !== undefined && p.size !== defaultSize) out.push(m.size.create({ size: p.size }));
     return out;
   }
 
@@ -442,9 +498,9 @@ class Importer {
 
   /** A paragraph's blocks: its textblock (if it has any content) and any pictures it held. */
   private async paragraph(p: XNode, rels: Rel[]): Promise<{ blocks: PMNode[]; list?: { numId: string; ilvl: number; bullet: boolean } }> {
-    const para = this.paraProps(child(p, 'w:pPr'));
-    const { inline, images } = await this.inline(p, {}, rels);
-    const attrsOf = { align: para.align ?? null };
+    const { para, run } = this.paraProps(child(p, 'w:pPr'));
+    const { inline, images } = await this.inline(p, run, rels);
+    const attrsOf = { align: para.align ?? null, spacing: Object.keys(para.spacing).length ? para.spacing : null };
     let block: PMNode | null = null;
     if (para.kind === 'code') {
       const text = inline.map((x) => (x.isText ? x.text : '\n')).join('');
@@ -497,7 +553,7 @@ class Importer {
             open.push(cur);
           }
           const [first, ...rest] = blocks;
-          cur.items.push([first.type === n.heading ? n.paragraph.create({ align: first.attrs.align }, first.content) : first, ...rest]);
+          cur.items.push([first.type === n.heading ? n.paragraph.create({ align: first.attrs.align, spacing: first.attrs.spacing }, first.content) : first, ...rest]);
           this.blockCount++;
         } else {
           closeTo(0);
@@ -534,7 +590,7 @@ class Importer {
     const rels = await this.rels('word/document.xml');
     if (rels.some((r) => /\/(header|footer)$/.test(r.type))) this.note('Headers and footers were dropped.');
     const blocks = await this.blocks(body, rels);
-    const node = n.doc.create({ page: this.pageSetup(child(body, 'w:sectPr')) }, blocks.length ? blocks : n.paragraph.create());
+    const node = n.doc.create({ page: this.pageSetup(child(body, 'w:sectPr')), style: this.docStyle() }, blocks.length ? blocks : n.paragraph.create());
     const doc = docFromNode(node);
     const problem = validateDoc(doc);
     if (problem) throw new ImportError(`The imported document is not valid: ${problem}`);

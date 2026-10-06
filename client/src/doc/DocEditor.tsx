@@ -8,7 +8,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
 import { EditorView, type NodeView } from 'prosemirror-view';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { PAGE_GAP, pageMetrics, pageText, type PageSetup } from '../../../shared/doc.ts';
+import { docStyleCss, docStyleOf, PAGE_GAP, pageMetrics, pageText, type PageSetup } from '../../../shared/doc.ts';
 import { CELL_IMAGE_TYPES } from '../../../shared/types.ts';
 import type { DocController } from './controller.ts';
 
@@ -147,7 +147,7 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
       dispatchTransaction: (tr) => ctl.dispatch(tr),
       plugins: [dropCursor({ color: '#1a73e8', width: 2 }), gapCursor()],
       nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos) },
-      attributes: { class: 'doc-content', spellcheck: 'true', 'aria-label': 'Document text' },
+      attributes: (state) => ({ class: 'doc-content', spellcheck: 'true', 'aria-label': 'Document text', style: docStyleCss(docStyleOf(state.doc)) }),
       handlePaste: (_v, event) => {
         const files = imageFiles(event.clipboardData);
         if (!files.length) return false;

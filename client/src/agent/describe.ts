@@ -119,6 +119,8 @@ export function toolLabel(name: string, i: Input): string {
       return `${typeof i.type === 'string' ? `Changed ${blocks(i)} to ${String(i.type).replace('_', ' ')}` : `Aligned ${blocks(i)}`}`;
     case 'insert_image':
       return 'Added an image to the document';
+    case 'set_doc_style':
+      return 'Changed the document’s default style';
     case 'set_page_setup':
       return i.mode === 'pageless' ? 'Switched the document to pageless' : 'Changed the page setup';
     case 'list_docs':
