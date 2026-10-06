@@ -48,6 +48,8 @@ export class DeckController {
   tool: { kind: LineKind; arrow: boolean } | null = null;
   /** Presenting (full-screen) mode. */
   presenting = false;
+  /** How many times replaceWith brought in a version saved elsewhere (the page can tell the user). */
+  externalChanges = 0;
   version = 0;
   private clipboard: SlideElement[] = [];
   private listeners = new Set<() => void>();
@@ -120,6 +122,24 @@ export class DeckController {
     const changed = this.store.transact(fn, { before }, group);
     if (changed) this.store.amendLastMeta(this.meta());
     this.emit();
+    return changed;
+  }
+
+  /**
+   * Swap in another version of the presentation (saved elsewhere, e.g. by the assistant in ChatGPT) as one
+   * undoable step, slide by slide, so the current slide and selection survive where they still exist.
+   */
+  replaceWith(next: Deck): boolean {
+    const cur = this.deck;
+    if (JSON.stringify(cur) === JSON.stringify(next)) return false;
+    const changed = this.run((tx) => {
+      if (cur.theme !== next.theme) tx.setTheme(next.theme);
+      const shared = Math.min(cur.slides.length, next.slides.length);
+      for (let i = 0; i < shared; i++) if (JSON.stringify(cur.slides[i]) !== JSON.stringify(next.slides[i])) tx.replaceSlide(i, next.slides[i]);
+      for (let i = cur.slides.length - 1; i >= shared; i--) tx.removeSlide(i);
+      for (let i = shared; i < next.slides.length; i++) tx.insertSlide(i, next.slides[i]);
+    });
+    if (changed) this.externalChanges++;
     return changed;
   }
 

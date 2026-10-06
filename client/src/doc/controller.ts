@@ -8,7 +8,7 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirr
 import { EditorState, NodeSelection, TextSelection, type Command, type Plugin, type Transaction } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { useSyncExternalStore } from 'react';
-import { docSchema, docStyleOf, pageSetupOf, type Alignment, type BlockType, type Doc, type DocStyle, type HeadingLevel, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
+import { docNode, docSchema, docStyleOf, pageSetupOf, type Alignment, type BlockType, type Doc, type DocStyle, type HeadingLevel, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
 import { AutoSaver } from '../state/store.ts';
 import { autoLinkOnEnter, autoLinkRule } from './autolink.ts';
 import { paginationOf, paginationPlugin, type Pagination } from './pagination.ts';
@@ -26,6 +26,8 @@ export class DocController {
   onLinkPrompt: (() => void) | null = null;
   /** Zoom of the page view: a percentage, or fit the page to the window width. */
   zoom: number | 'fit' = 'fit';
+  /** How many times replaceWith brought in a version saved elsewhere (the page can tell the user). */
+  externalChanges = 0;
   version = 0;
   private view: EditorView | null = null;
   private listeners = new Set<() => void>();
@@ -538,6 +540,32 @@ export class DocController {
       tr.setNodeMarkup(img.pos, undefined, { ...img.node.attrs, ...attrs });
       tr.setSelection(NodeSelection.create(tr.doc, img.pos));
     });
+  }
+
+  /**
+   * Swap in another version of the document (saved elsewhere, e.g. by the assistant in ChatGPT) as one
+   * undoable step, keeping the cursor in the same block where possible. Bumps `externalChanges`.
+   */
+  replaceWith(doc: Doc): boolean {
+    const node = docNode(doc);
+    if (node.eq(this.doc) && JSON.stringify(node.attrs) === JSON.stringify(this.doc.attrs)) return false;
+    const $head = this.state.selection.$head;
+    const block = $head.depth ? $head.index(0) : 0;
+    const offset = $head.depth ? $head.pos - $head.start(1) : 0;
+    const changed = this.run((tr) => {
+      tr.replaceWith(0, tr.doc.content.size, node.content);
+      tr.setDocAttribute('page', node.attrs.page);
+      tr.setDocAttribute('style', node.attrs.style);
+      const count = tr.doc.childCount;
+      if (!count) return;
+      const i = Math.min(block, count - 1);
+      let pos = 0;
+      for (let k = 0; k < i; k++) pos += tr.doc.child(k).nodeSize;
+      const child = tr.doc.child(i);
+      tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(pos + 1 + Math.min(offset, child.content.size), tr.doc.content.size))));
+    });
+    if (changed) this.externalChanges++;
+    return changed;
   }
 
   /** Start a fresh undo step (e.g. when the editor loses focus). */

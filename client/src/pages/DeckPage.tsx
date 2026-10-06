@@ -58,8 +58,18 @@ export function DeckPage() {
       .getDeck(id!)
       .then(({ meta, deck }) => {
         if (cancelled) return;
+        // Saves name the revision loaded; when something else (another tab, the ChatGPT plugin) saved first,
+        // the server refuses and the editor takes that version instead of overwriting it.
+        let rev = meta.updatedAt;
         ctl = new DeckController(deck, async (d) => {
-          await api.saveDeck(meta.id, d);
+          try {
+            rev = (await api.saveDeck(meta.id, d, rev)).meta.updatedAt;
+          } catch (e) {
+            if (!(e instanceof ApiError && e.status === 409)) throw e;
+            const latest = await api.getDeck(meta.id);
+            rev = latest.meta.updatedAt;
+            ctl?.replaceWith(latest.deck);
+          }
         });
         setState({ meta, ctl });
       })
@@ -147,6 +157,11 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  // A save was refused because the presentation changed elsewhere; the editor now shows that version.
+  const externalChanges = ctl.externalChanges;
+  useEffect(() => {
+    if (externalChanges) notify('Updated with changes saved elsewhere (for example by the assistant in ChatGPT).');
+  }, [externalChanges, notify]);
 
   const addImageFiles = useCallback(
     async (files: File[]) => {

@@ -1,7 +1,6 @@
 // One document open in the app's own editor (DocController, DocEditor, DocToolbar and dialogs), loaded and
 // saved through the plugin's tools. Edits the model makes arrive by polling the revision; the user's cursor
 // and selection go to the model as context, so "make this shorter" in the composer means the selection.
-import { TextSelection } from 'prosemirror-state';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickImageFile, uploadImageFile } from '../../client/src/cellImage.ts';
 import { MOD } from '../../client/src/commands.ts';
@@ -16,7 +15,7 @@ import { useDocFonts } from '../../client/src/doc/fonts.ts';
 import { PageSetupDialog } from '../../client/src/doc/PageSetupDialog.tsx';
 import { PageThumbnails } from '../../client/src/doc/PageThumbnails.tsx';
 import { DOC_TRAY } from '../../client/src/panelSize.ts';
-import { docFromNode, docNode, PAGE_SIZES, type BlockType, type Doc } from '../../shared/doc.ts';
+import { PAGE_SIZES, type BlockType, type Doc } from '../../shared/doc.ts';
 import { safeLinkUrl } from '../../shared/links.ts';
 import type { Host, OpenFile } from './host.ts';
 
@@ -34,26 +33,6 @@ const LINE_SPACINGS: [string, number | null][] = [['Default', null], ['Single', 
 const ZOOMS = [50, 75, 100, 125, 150] as const;
 const MAX_CONTEXT_TEXT = 500;
 
-/** Swap the whole content for the stored version, keeping the cursor in the same block where possible. */
-function replaceContent(ctl: DocController, doc: Doc): void {
-  const node = docNode(doc);
-  const $head = ctl.state.selection.$head;
-  const block = $head.depth ? $head.index(0) : 0;
-  const offset = $head.depth ? $head.pos - $head.start(1) : 0;
-  ctl.run((tr) => {
-    tr.replaceWith(0, tr.doc.content.size, node.content);
-    tr.setDocAttribute('page', node.attrs.page);
-    tr.setDocAttribute('style', node.attrs.style);
-    const count = tr.doc.childCount;
-    if (!count) return;
-    const i = Math.min(block, count - 1);
-    let pos = 0;
-    for (let k = 0; k < i; k++) pos += tr.doc.child(k).nodeSize;
-    const child = tr.doc.child(i);
-    tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(pos + 1 + Math.min(offset, child.content.size), tr.doc.content.size))));
-  });
-}
-
 export function Editor({ host, id, remote, onBack }: { host: Host; id: string; remote: OpenFile | null; onBack(): void }) {
   const [state, setState] = useState<{ meta: DocSummary; ctl: DocController } | { error: string } | null>(null);
   const rev = useRef('');
@@ -70,7 +49,7 @@ export function Editor({ host, id, remote, onBack }: { host: Host; id: string; r
         if (!force && ctl.saver.hasUnsavedChanges()) return; // Our save will conflict and come back here with force.
         rev.current = r.rev;
         setState((s) => (s && 'ctl' in s ? { ...s, meta: r.meta } : s));
-        if (JSON.stringify(r.data) !== JSON.stringify(docFromNode(ctl.doc))) replaceContent(ctl, r.data);
+        ctl.replaceWith(r.data);
       } finally {
         syncing.current = false;
       }

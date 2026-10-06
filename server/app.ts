@@ -8,7 +8,7 @@ import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { importDocx } from './docxImport.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type Workbook } from '../shared/types.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { AgentStore } from './agent/store.ts';
@@ -98,6 +98,16 @@ export async function buildApp(opts: AppOptions) {
   };
   const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
+  /**
+   * A save may name the revision (updatedAt) the editor loaded. When it does and the file has been saved
+   * since, by another editor or the ChatGPT plugin, the current metadata is returned so the save is refused
+   * instead of silently overwriting that change.
+   */
+  const staleRev = (ownerId: string, id: string, kind: DocKind, rev: unknown): SheetMeta | null => {
+    if (typeof rev !== 'string') return null;
+    const cur = sheets.get(ownerId, id, kind);
+    return cur && cur.updatedAt !== rev ? cur : null;
+  };
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
   await images.init();
   auth.purgeExpiredSessions();
@@ -452,9 +462,12 @@ export async function buildApp(opts: AppOptions) {
 
     r.put('/api/docs/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const doc = (req.body as { doc?: unknown } | undefined)?.doc;
+      const body = req.body as { doc?: unknown; rev?: unknown } | undefined;
+      const doc = body?.doc;
       const problem = validateDoc(doc);
       if (problem) return reply.code(400).send({ error: problem });
+      const stale = staleRev(req.user!.id, id, 'doc', body?.rev);
+      if (stale) return reply.code(409).send({ error: 'The document was changed elsewhere since you loaded it.', meta: stale });
       const meta = await sheets.saveDoc(req.user!.id, id, doc as Doc);
       if (!meta) return reply.code(404).send({ error: 'Document not found' });
       return { meta };
@@ -532,9 +545,12 @@ export async function buildApp(opts: AppOptions) {
 
     r.put('/api/decks/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const deck = (req.body as { deck?: unknown } | undefined)?.deck;
+      const body = req.body as { deck?: unknown; rev?: unknown } | undefined;
+      const deck = body?.deck;
       const problem = validateDeck(deck);
       if (problem) return reply.code(400).send({ error: problem });
+      const stale = staleRev(req.user!.id, id, 'deck', body?.rev);
+      if (stale) return reply.code(409).send({ error: 'The presentation was changed elsewhere since you loaded it.', meta: stale });
       const meta = await sheets.saveDeck(req.user!.id, id, deck as Deck);
       if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
       return { meta };

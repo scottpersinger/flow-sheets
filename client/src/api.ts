@@ -94,8 +94,9 @@ export const api = {
   listDecks: () => request<{ decks: SheetMeta[] }>('GET', '/api/decks'),
   createDeck: (title: string, deck?: Deck) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck }),
   getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck }>('GET', `/api/decks/${encodeURIComponent(id)}`),
-  saveDeck: (id: string, deck: Deck, keepalive = false) =>
-    request<{ meta: SheetMeta }>('PUT', `/api/decks/${encodeURIComponent(id)}`, { deck }, keepalive ? { keepalive: true } : undefined),
+  /** rev is the updatedAt the editor loaded; the server refuses (409) when the presentation changed since. */
+  saveDeck: (id: string, deck: Deck, rev?: string, keepalive = false) =>
+    request<{ meta: SheetMeta }>('PUT', `/api/decks/${encodeURIComponent(id)}`, { deck, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import a PowerPoint file (.pptx) as a new presentation. */
   importPptx: (file: File, title: string) => uploadExcel<{ deck: SheetMeta; warnings: string[] }>(`/api/decks/import?title=${encodeURIComponent(title)}`, file),
   /** Convert a PowerPoint file (.pptx) to slides without creating a presentation. */
@@ -106,8 +107,9 @@ export const api = {
   listDocs: () => request<{ docs: SheetMeta[] }>('GET', '/api/docs'),
   createDoc: (title: string, doc?: Doc) => request<{ doc: SheetMeta }>('POST', '/api/docs', { title, doc }),
   getDoc: (id: string) => request<{ meta: SheetMeta; doc: Doc }>('GET', `/api/docs/${encodeURIComponent(id)}`),
-  saveDoc: (id: string, doc: Doc, keepalive = false) =>
-    request<{ meta: SheetMeta }>('PUT', `/api/docs/${encodeURIComponent(id)}`, { doc }, keepalive ? { keepalive: true } : undefined),
+  /** rev is the updatedAt the editor loaded; the server refuses (409) when the document changed since. */
+  saveDoc: (id: string, doc: Doc, rev?: string, keepalive = false) =>
+    request<{ meta: SheetMeta }>('PUT', `/api/docs/${encodeURIComponent(id)}`, { doc, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import a Word file (.docx) as a new document. */
   importDocx: (file: File, title: string) => uploadExcel<{ doc: SheetMeta; warnings: string[] }>(`/api/docs/import?title=${encodeURIComponent(title)}`, file),
   /** Convert a Word file (.docx) to document blocks without creating a document. */

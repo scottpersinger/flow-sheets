@@ -39,18 +39,6 @@ function imageSize(src: string): Promise<{ w: number; h: number } | undefined> {
   });
 }
 
-/** Bring the editor's deck up to date with the stored one, slide by slide, as one undoable step. */
-function applyDeck(ctl: DeckController, next: Deck): void {
-  ctl.run((tx) => {
-    const cur = ctl.deck;
-    if (cur.theme !== next.theme) tx.setTheme(next.theme);
-    const shared = Math.min(cur.slides.length, next.slides.length);
-    for (let i = 0; i < shared; i++) if (JSON.stringify(cur.slides[i]) !== JSON.stringify(next.slides[i])) tx.replaceSlide(i, next.slides[i]);
-    for (let i = cur.slides.length - 1; i >= shared; i--) tx.removeSlide(i);
-    for (let i = shared; i < next.slides.length; i++) tx.insertSlide(i, next.slides[i]);
-  });
-}
-
 export function DeckWorkbench({ host, id, remote, onBack }: { host: Host; id: string; remote: OpenFile | null; onBack(): void }) {
   const [state, setState] = useState<{ meta: FileSummary; ctl: DeckController } | { error: string } | null>(null);
   const rev = useRef('');
@@ -66,7 +54,7 @@ export function DeckWorkbench({ host, id, remote, onBack }: { host: Host; id: st
         if (!force && ctl.saver.hasUnsavedChanges()) return;
         rev.current = r.rev;
         setState((s) => (s && 'ctl' in s ? { ...s, meta: r.meta } : s));
-        if (JSON.stringify(r.data) !== JSON.stringify(ctl.deck)) applyDeck(ctl, r.data);
+        ctl.replaceWith(r.data);
       } finally {
         syncing.current = false;
       }

@@ -58,8 +58,18 @@ export function DocPage() {
       .getDoc(id!)
       .then(({ meta, doc }) => {
         if (cancelled) return;
+        // Saves name the revision loaded; when something else (another tab, the ChatGPT plugin) saved first,
+        // the server refuses and the editor takes that version instead of overwriting it.
+        let rev = meta.updatedAt;
         ctl = new DocController(doc, async (d) => {
-          await api.saveDoc(meta.id, d);
+          try {
+            rev = (await api.saveDoc(meta.id, d, rev)).meta.updatedAt;
+          } catch (e) {
+            if (!(e instanceof ApiError && e.status === 409)) throw e;
+            const latest = await api.getDoc(meta.id);
+            rev = latest.meta.updatedAt;
+            ctl?.replaceWith(latest.doc);
+          }
         });
         setState({ meta, ctl });
       })
@@ -168,6 +178,11 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  // A save was refused because the document changed elsewhere; the editor now shows that version.
+  const externalChanges = ctl.externalChanges;
+  useEffect(() => {
+    if (externalChanges) notify('Updated with changes saved elsewhere (for example by the assistant in ChatGPT).');
+  }, [externalChanges, notify]);
 
   const addImageFiles = useCallback(
     async (files: File[]) => {
