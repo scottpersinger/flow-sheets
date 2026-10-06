@@ -35,6 +35,7 @@ export interface FileSummary {
   id: string;
   title: string;
   updated_at: string;
+  created_at: string;
 }
 
 /** Where the user is in the open file, as reported by the app's editor. */
@@ -79,7 +80,7 @@ export interface SlideSpec extends SlideContent {
   layout?: LayoutId;
 }
 
-const summary = (m: SheetMeta): FileSummary => ({ kind: m.kind as FileKind, id: m.id, title: m.title, updated_at: m.updatedAt });
+const summary = (m: SheetMeta): FileSummary => ({ kind: m.kind as FileKind, id: m.id, title: m.title, updated_at: m.updatedAt, created_at: m.createdAt });
 
 const noun = (kind: FileKind) => (kind === 'doc' ? 'document' : 'presentation');
 
