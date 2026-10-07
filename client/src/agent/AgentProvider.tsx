@@ -10,6 +10,7 @@ import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { DocController } from '../doc/controller.ts';
+import { deckToPdf } from '../deck/pdf.ts';
 import { renderSlideImage } from '../deck/renderSlide.ts';
 import type { SheetController } from '../state/controller.ts';
 import { confirmationFor, runClientTool, ToolError } from './clientTools.ts';
@@ -400,6 +401,17 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           deckId: deckRef.current?.meta.id ?? null,
           loadDeck: async (id) => (await api.getDeck(id)).deck,
           renderSlide: renderSlideImage,
+          deckTitle: deckRef.current?.meta.title ?? null,
+          loadDeckTitle: async (id) => (await api.getDeck(id)).meta.title,
+          makePdf: deckToPdf,
+          saveFile: (name, file) => {
+            const url = URL.createObjectURL(file);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            a.click();
+            return url;
+          },
           attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
           group,
           openSheet: openSheetById,

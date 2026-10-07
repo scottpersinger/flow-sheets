@@ -13,7 +13,7 @@ import type { DeckController } from '../deck/controller.ts';
 import type { SheetController } from '../state/controller.ts';
 import * as ops from '../state/ops.ts';
 import type { WorkbookStore } from '../state/store.ts';
-import { DECK_TOOLS, deckConfirmationFor, renderSlideTool, runDeckTool, type RenderSlideEnv } from './deckTools.ts';
+import { DECK_TOOLS, deckConfirmationFor, exportDeckTool, renderSlideTool, runDeckTool, type RenderSlideEnv } from './deckTools.ts';
 import { DOC_TOOLS, docConfirmationFor, runDocTool } from './docTools.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
 import type { DocController } from '../doc/controller.ts';
@@ -168,6 +168,7 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     return JSON.stringify({ opened: true, ...deckOutline(deck.deck, deck.current) });
   }
   if (call.name === 'render_slide') return renderSlideTool(call, env);
+  if (call.name === 'export_deck') return exportDeckTool(call, env);
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
   if (call.name === 'open_doc') {
     const doc = await env.openDoc(String(i.doc_id));

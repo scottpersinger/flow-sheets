@@ -222,6 +222,35 @@ describe('agent deck tools', () => {
     expect(deck.deck.slides).toHaveLength(2);
   });
 
+  it('exports the deck as a PDF download named after its title', async () => {
+    const { env, call } = setup();
+    await call('add_slides', { slides: [{ title: 'Two' }] });
+    const saved: { name: string; size: number }[] = [];
+    env.deckTitle = 'BizTrip: Business Risk Review';
+    env.makePdf = async (d) => new Blob([`pages:${d.slides.length}`]);
+    env.saveFile = (name, file) => (saved.push({ name, size: file.size }), 'blob:x');
+    expect(await call('export_deck', {})).toMatchObject({ filename: 'BizTrip_Business_Risk_Review.pdf', pages: 2, download_url: 'blob:x' });
+    expect(saved).toEqual([{ name: 'BizTrip_Business_Risk_Review.pdf', size: 7 }]);
+
+    env.loadDeck = async (id) => {
+      if (id !== 'other') throw new Error('404');
+      return newDeck();
+    };
+    env.loadDeckTitle = async () => 'Other deck';
+    expect(await call('export_deck', { deck_id: 'other', format: 'pdf' })).toMatchObject({ filename: 'Other_deck.pdf', pages: 1 });
+    await expect(call('export_deck', { deck_id: 'missing' })).rejects.toThrow(/No presentation with id "missing"/);
+  });
+
+  it('builds a PDF with one page per slide', async () => {
+    const { buildPdf } = await import('../deck/pdf.ts');
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    const text = await buildPdf([1, 2, 3].map(() => ({ jpeg, width: 1920, height: 1080 }))).text();
+    expect(text.startsWith('%PDF-1.4')).toBe(true);
+    expect(text).toContain('/Count 3');
+    expect(text.match(/\/Type \/Page /g)).toHaveLength(3);
+    expect(text).toContain('/MediaBox [0 0 960 540]');
+  });
+
   it('deletes and moves slides, asking first and keeping one slide', async () => {
     const { deck, call } = setup();
     await call('add_slides', { slides: [{ title: 'Two' }, { title: 'Three' }] });

@@ -198,6 +198,14 @@ export interface RenderSlideEnv {
   /** Draw a slide with the app's renderer (client/src/deck/renderSlide.ts). */
   renderSlide?(slide: Slide, theme: ThemeId, scale: number): Promise<SlideRender>;
   uploadImage(file: Blob): Promise<string>;
+  /** Title of the open presentation. */
+  deckTitle?: string | null;
+  /** Title of a saved presentation by id. */
+  loadDeckTitle?(id: string): Promise<string>;
+  /** Assemble a PDF of every slide (client/src/deck/pdf.ts). */
+  makePdf?(deck: Deck): Promise<Blob>;
+  /** Start a browser download; returns a URL the user can open if the browser blocks it. */
+  saveFile?(name: string, file: Blob): string;
   /** Attach a picture to the message that carries the tool results back to Claude; false if no room is left. */
   attachImage?(image: AgentImage): boolean;
 }
@@ -249,6 +257,32 @@ export async function renderSlideTool(call: ClientToolCall, env: RenderSlideEnv)
     overflow: r.overflow,
     ...(r.missingImages.length ? { images_not_rendered: r.missingImages } : {}),
   });
+}
+
+/** export_deck: download the deck as a PDF, one slide per page. */
+export async function exportDeckTool(call: ClientToolCall, env: RenderSlideEnv): Promise<string> {
+  const i = call.input;
+  if (!env.makePdf || !env.saveFile) throw new ToolError('Exporting presentations is not available here.');
+  const deckId = typeof i.deck_id === 'string' && i.deck_id ? i.deck_id : null;
+  let deck: Deck;
+  let title: string;
+  if (env.deck && (!deckId || deckId === env.deckId)) {
+    deck = env.deck.deck;
+    title = env.deckTitle ?? 'Presentation';
+  } else if (deckId) {
+    if (!env.loadDeck) throw new ToolError('Only the open presentation can be exported here.');
+    try {
+      deck = await env.loadDeck(deckId);
+      title = (await env.loadDeckTitle?.(deckId)) ?? 'Presentation';
+    } catch {
+      throw new ToolError(`No presentation with id "${deckId}". Use list_decks to find ids.`);
+    }
+  } else throw new ToolError('No presentation is open. Pass deck_id, or open one with open_deck.');
+  const pdf = await env.makePdf(deck);
+  const base = title.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') || 'Presentation';
+  const filename = `${base}.pdf`;
+  const url = env.saveFile(filename, pdf);
+  return JSON.stringify({ filename, pages: deck.slides.length, download_url: url, note: 'The browser download has started. If it was blocked, the user can open download_url.' });
 }
 
 /** A question to ask before a destructive deck call, or null. */

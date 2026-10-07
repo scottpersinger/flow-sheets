@@ -245,6 +245,14 @@ export const schemas = {
     .describe(
       'Take a picture of a slide drawn exactly as the editor and present mode draw it (same fonts, theme, images, wrapping), to check your work. The PNG is attached to the message right after the tool results for you to look at. Returns its stored /api/images/... address, its size in pixels, and "overflow": text boxes and shape labels whose rendered text is taller or wider than their box (box and rendered sizes in points).',
     ),
+  export_deck: z
+    .object({
+      deck_id: z.string().optional().describe('Presentation to export. Defaults to the open presentation (including edits not yet saved).'),
+      format: z.enum(['pdf']).default('pdf').describe('File format. Only "pdf" is supported.'),
+    })
+    .describe(
+      "Download a presentation to the user's computer as a PDF: every slide drawn exactly as present mode draws it, one 960×540 page per slide, in order. The browser starts the download. Returns the filename, page count and a download URL in case the browser blocks the automatic download.",
+    ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),
