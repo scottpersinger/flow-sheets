@@ -258,16 +258,23 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     ta.focus({ preventScroll: true });
   }, [ctl]);
 
+  // Reclaiming focus is only right while the user is in this document. Inside ChatGPT the grid is an
+  // iframe beside the composer: taking focus from there on a re-render (the revision poll) would pull the
+  // user's typing into a cell.
+  const reclaimFocus = useCallback(() => {
+    if (document.hasFocus()) focusSink();
+  }, [focusSink]);
+
   useEffect(() => {
     // Return focus to the grid when menus/dialogs close.
     if (!ctl.menu && !ctl.filterMenu && !ctl.renamingTabId && (document.activeElement === document.body || !document.activeElement)) {
-      focusSink();
+      reclaimFocus();
     }
   });
 
   useEffect(() => {
-    focusSink();
-  }, [focusSink]);
+    reclaimFocus();
+  }, [reclaimFocus]);
 
   // Keep the textarea caret in sync with controller-driven text changes (autocomplete, pointing).
   useLayoutEffect(() => {

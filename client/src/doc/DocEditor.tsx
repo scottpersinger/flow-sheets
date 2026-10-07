@@ -218,7 +218,8 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
     });
     ctl.attachView(view);
     if (import.meta.env.DEV) (window as unknown as { __docView?: EditorView }).__docView = view; // for poking at pagination in dev tools
-    view.focus();
+    // Not when the user is typing elsewhere (inside ChatGPT, a document the model opens must not take the composer's focus).
+    if (document.hasFocus()) view.focus();
     return () => {
       ctl.attachView(null);
       view.destroy();
