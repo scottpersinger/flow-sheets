@@ -156,9 +156,9 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
   useEffect(() => {
-    document.title = `${meta.title} - Sheets`;
+    document.title = `${meta.title} - FreeFlow Docs`;
     return () => {
-      document.title = 'Sheets';
+      document.title = 'FreeFlow Docs';
     };
   }, [meta.title]);
 

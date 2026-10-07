@@ -2,6 +2,22 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Show "FreeFlow Docs" branding in the PDF file preview header
+
+I renamed the app branding from "Sheets" to "FreeFlow Docs" in the file preview header and in every other page I found. The edits cover the browser tab titles, including `client/index.html` and the spreadsheet, presentation and document editor tab titles. They also cover the Connectors and Changes back links, the sign-in, password-reset and verify-email headers, and the sign-in page's diagram text. The file preview link still goes back to the home page.
+
+I did not add tests because there are no page-level tests in the repo, and I didn't check the rendered pages in a browser. `npm run typecheck` and `npm test` both pass. No new assistant tool was added.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+When a stored PDF file is opened in the file preview tab (route /f/:id, e.g. "temp_drivers_license_persinger.pdf"), the top-left header still shows the green logo with the title "Sheets" (underlined link back to home). The home page was already renamed to "FreeFlow Docs". Change the file preview page header branding from "Sheets" to "FreeFlow Docs" so it is consistent. Also check the other pages (spreadsheet, presentation and document editors, connectors, changes pages, and the browser tab titles) for any remaining visible "Sheets" app-name branding that refers to the whole app rather than to spreadsheets specifically, and rename those to "FreeFlow Docs" too. Do not rename things that genuinely mean spreadsheets (e.g. a "Spreadsheets" list heading or "New spreadsheet" actions). The link should still navigate back to the home page.
+
+Files: client/index.html, client/src/pages/AuthPage.tsx, client/src/pages/ChangesPage.tsx, client/src/pages/ConnectorsPage.tsx, client/src/pages/DeckPage.tsx, client/src/pages/DocPage.tsx, client/src/pages/FilePage.tsx, client/src/pages/PasswordResetPages.tsx, client/src/pages/SpreadsheetPage.tsx, client/src/pages/VerifyEmailPage.tsx
+
+Job: 33421e07-70a7-488d-a41c-5a23ae0e5d21
+
 ## 2026-10-07 — Import PDFs as stored PDF files, not converted docs
 
 Importing a PDF (file picker or drag and drop) now only stores it as a PDF file in the user's files, with no text extraction and no new document. I added `POST /api/import/pdf?filename=…` in `server/app.ts`. It rejects anything that isn't a valid PDF with "This file is not a valid PDF." and keeps the 20 MB limit. After import the home page opens the file's preview tab (`/f/:id`), and the file shows in the list. I removed the PDF branch from `/api/docs/import`, so `importPdf` is unused on import, and Word, Excel and PowerPoint import are unchanged. I updated the server test to check the stored file, that no document is created, and that invalid content is rejected. Typecheck and all tests pass. I didn't add a new assistant tool.

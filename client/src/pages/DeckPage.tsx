@@ -135,9 +135,9 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
   useEffect(() => {
-    document.title = `${meta.title} - Sheets`;
+    document.title = `${meta.title} - FreeFlow Docs`;
     return () => {
-      document.title = 'Sheets';
+      document.title = 'FreeFlow Docs';
     };
   }, [meta.title]);
 
