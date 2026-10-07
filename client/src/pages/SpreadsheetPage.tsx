@@ -143,9 +143,9 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
   }, [ctl, meta.id, meta.branch]);
 
   useEffect(() => {
-    document.title = `${meta.title} - Sheets`;
+    document.title = `${meta.title} - FreeFlow Docs`;
     return () => {
-      document.title = 'Sheets';
+      document.title = 'FreeFlow Docs';
     };
   }, [meta.title]);
 

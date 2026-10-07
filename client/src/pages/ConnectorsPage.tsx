@@ -59,7 +59,7 @@ export function ConnectorsPage() {
       <header className="home-header">
         <div className="home-brand">
           <Link to="/" className="home-back">
-            ‹ Sheets
+            ‹ FreeFlow Docs
           </Link>
           <span>Connectors</span>
         </div>

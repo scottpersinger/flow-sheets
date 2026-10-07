@@ -30,7 +30,7 @@ export function FilePage() {
       <header className="home-header">
         <Link to="/" className="home-brand" title="Back to your files">
           <Logo />
-          <span>Sheets</span>
+          <span>FreeFlow Docs</span>
         </Link>
         <span className="file-page-title">{file?.filename ?? ''}</span>
         <div className="home-user">

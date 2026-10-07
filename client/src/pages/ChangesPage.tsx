@@ -63,7 +63,7 @@ export function ChangesPage() {
       <header className="home-header">
         <div className="home-brand">
           <Link to="/" className="home-back">
-            ‹ Sheets
+            ‹ FreeFlow Docs
           </Link>
           <span>Changes</span>
         </div>

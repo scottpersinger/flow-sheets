@@ -44,7 +44,7 @@ export function VerifyEmailPage() {
       <div className="auth-card">
         <div className="auth-brand">
           <Logo size={36} />
-          <span>Sheets</span>
+          <span>FreeFlow Docs</span>
         </div>
         <h1>{error ? 'Link not valid' : 'Verifying your email…'}</h1>
         {error ? (
