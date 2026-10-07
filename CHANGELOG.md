@@ -2,6 +2,22 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Link popover in slide editor
+
+Clicking or placing the caret inside a link while editing a slide text box now shows a small floating menu under the link. It shows the URL with "Open link" (new tab, noopener), "Edit" (prompts for URL and label) and "Remove link" (keeps the text). It hides when the caret leaves the link, the selection becomes a range, or you press Escape. Typecheck and tests pass, but the tests cover only the URL helpers; I didn't try the popover in a browser, including on slide 4 of "Supercog Ops Map".
+
+Present mode already opened links in a new tab, so I left it alone. Edited link URLs are now saved when the text box commits. The change is in `client/src/deck/SlideView.tsx`, with the helper tests in `client/src/deck/linkMenu.test.ts`. No new assistant tool was added.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+In the presentation editor, text boxes can contain hyperlinks (created via "[label](https://...)" in body/text). Currently clicking into a link while editing a slide text box does nothing special. Add the same behavior the text document editor and spreadsheet have (if present): when the user clicks or places the caret inside a link in a slide text box (edit mode), show a small floating hyperlink menu next to the link showing the URL, with actions "Open link" (opens URL in a new browser tab, rel noopener), "Edit" (change URL/label) and "Remove link". The menu should disappear when the caret leaves the link, on Escape, or when selection changes to a non-link. In present mode, clicking a link should simply open it in a new tab. Example: slide 4 of the deck "Supercog Ops Map" contains a text box with a link; clicking into it should show the popover with its URL and an Open button.
+
+Files: client/src/deck/SlideView.tsx, client/src/deck/linkMenu.test.ts
+
+Job: c9f25ca3-1316-48c0-9229-61cb73e405b9
+
 ## 2026-10-06 — Proper line/arrow/connector tool in the slide editor
 
 The slide editor now has a proper line tool and a new `line` element. It covers the toolbar menu, the line formatting controls, connectors that snap to shapes, the data model, PowerPoint import/export and the assistant. `npm run typecheck` and `npm test` pass. I haven't run the editor in a browser, so the drawing, dragging and snapping interactions are untested beyond the unit tests.

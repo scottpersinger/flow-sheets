@@ -1,7 +1,7 @@
 // Renders one slide at a scale. The same component draws the editor canvas, the thumbnails, the present mode
 // and the print layout, so a slide always looks the same. Elements are absolutely positioned in a 960×540 box
 // that is scaled with a CSS transform.
-import { memo, useEffect, useLayoutEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import {
   ROLE_SIZE,
   SLIDE_H,
@@ -17,6 +17,7 @@ import {
   type Theme,
   type ThemeId,
 } from '../../../shared/deck.ts';
+import { createPortal } from 'react-dom';
 import { dashArray, DEFAULT_LINE_WIDTH, lineGeometry as routeGeometry } from '../../../shared/lines.ts';
 import { arcPath, isDrawn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
@@ -307,7 +308,8 @@ function editedRuns(block: HTMLElement, source: Paragraph | undefined): TextRun[
     if (node instanceof HTMLElement && node.dataset.r !== undefined) {
       const text = (node.textContent ?? '').replace(/​/g, '');
       const orig = source?.runs?.[Number(node.dataset.r)];
-      if (text) runs.push({ ...(orig ?? {}), text });
+      const link = node.tagName === 'A' ? (node.getAttribute('href') ?? undefined) : undefined;
+      if (text) runs.push({ ...(orig ?? {}), text, ...(link ? { link } : {}) });
       return;
     }
     if (node instanceof HTMLElement && node.tagName === 'BR') {
@@ -367,10 +369,80 @@ function overridesOf(p: Paragraph | undefined): Partial<Paragraph> {
 
 const PLACEHOLDERS = new Set(['Presentation title', 'Subtitle', 'Section title', 'Slide title', 'Click to add text', 'Left column', 'Right column', 'Title', 'Text']);
 
+/** A link URL as typed: bare domains get https://; empty or script-like input is rejected (null). */
+export function normalizeLinkUrl(input: string): string | null {
+  const v = input.trim();
+  if (!v) return null;
+  if (/^(https?:|mailto:)/i.test(v)) return v;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v) && !/^[^/\s]+:\d+/.test(v)) return null;
+  return `https://${v}`;
+}
+
+/** A URL shortened for the link menu. */
+export function linkLabel(href: string): string {
+  return href.replace(/^mailto:/, '').replace(/^https?:\/\//, '');
+}
+
+/** A small card under the link at the caret: open it in a new tab, edit it, or remove it. */
+function LinkBubble({ anchor, onChange }: { anchor: HTMLAnchorElement; onChange(): void }) {
+  const href = anchor.getAttribute('href') ?? '';
+  const r = anchor.getBoundingClientRect();
+  const width = 360;
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+  return createPortal(
+    <div className="doc-link-bubble" style={{ left, top: r.bottom + 6, maxWidth: width }} onMouseDown={(e) => e.preventDefault()} role="dialog" aria-label="Link">
+      <span title={href}>{linkLabel(href)}</span>
+      <button className="link" title="Open the link in a new tab" onClick={() => window.open(href, '_blank', 'noopener,noreferrer')}>
+        Open link
+      </button>
+      <button
+        className="link"
+        title="Change the link"
+        onClick={() => {
+          const url = window.prompt('Link URL', href);
+          if (url === null) return;
+          const next = normalizeLinkUrl(url);
+          if (!next) return;
+          const label = window.prompt('Link text', anchor.textContent ?? '');
+          anchor.setAttribute('href', next);
+          if (label) anchor.textContent = label;
+          onChange();
+        }}
+      >
+        Edit
+      </button>
+      <button
+        className="link"
+        title="Remove the link, keeping the text"
+        onClick={() => {
+          anchor.replaceWith(document.createTextNode(anchor.textContent ?? ''));
+          onChange();
+        }}
+      >
+        Remove link
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
 /** Inline editor for a text element. Uncontrolled: the DOM is the draft; the text is committed on blur. */
 function TextEditor({ initial, onCommit, onStop, style }: { initial: Paragraph[]; onCommit(p: Paragraph[]): void; onStop(): void; style: CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   const committed = useRef(false);
+  const [anchor, setAnchor] = useState<HTMLAnchorElement | null>(null);
+  // Show the link menu while the caret is inside a link; it hides when the caret leaves or on Escape.
+  useEffect(() => {
+    const check = () => {
+      const sel = window.getSelection();
+      const node = sel?.anchorNode;
+      const el = node instanceof Element ? node : (node?.parentElement ?? null);
+      const a = el?.closest('a[data-r]') ?? null;
+      setAnchor(a && ref.current?.contains(a) && sel?.isCollapsed !== false ? (a as HTMLAnchorElement) : null);
+    };
+    document.addEventListener('selectionchange', check);
+    return () => document.removeEventListener('selectionchange', check);
+  }, []);
   const commit = () => {
     if (committed.current || !ref.current) return;
     committed.current = true;
@@ -407,6 +479,7 @@ function TextEditor({ initial, onCommit, onStop, style }: { initial: Paragraph[]
         e.stopPropagation();
         if (e.key === 'Escape') {
           e.preventDefault();
+          setAnchor(null);
           commit();
           onStop();
         } else if (e.key === 'Tab') {
@@ -441,6 +514,7 @@ function TextEditor({ initial, onCommit, onStop, style }: { initial: Paragraph[]
       }}
     >
       <Paragraphs paragraphs={initial} />
+      {anchor && anchor.isConnected && <LinkBubble anchor={anchor} onChange={() => setAnchor(null)} />}
     </div>
   );
 }
