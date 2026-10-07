@@ -34,6 +34,8 @@ interface Drag {
   ratios: Record<string, number | null>;
   preview: Record<string, BoxPreview>;
   moved: boolean;
+  /** Set when the press began on an already-selected text box: a click without movement edits it at the click point. */
+  clickEdit?: string;
 }
 
 const MIN_SIZE = 10;
@@ -72,6 +74,7 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
   const [size, setSize] = useState({ w: 800, h: 450 });
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
+  const caretRef = useRef<{ x: number; y: number } | null>(null); // where a click-to-edit landed, for the caret
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -220,10 +223,14 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       dragRef.current = next;
       setDrag(next);
     };
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
       const d = dragRef.current;
       dragRef.current = null;
       setDrag(null);
+      if (d && !d.moved && d.clickEdit && e.detail < 2) {
+        caretRef.current = { x: e.clientX, y: e.clientY };
+        ctl.startEditing(d.clickEdit);
+      }
       if (!d?.moved) return;
       if (d.kind === 'move') {
         const to: Record<string, { x: number; y: number }> = {};
@@ -248,6 +255,8 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       return;
     }
     if (ctl.editing === el.id) return;
+    const wasSelected = ctl.selection.length === 1 && ctl.selection[0] === el.id;
+    caretRef.current = null;
     if (ctl.editing) ctl.stopEditing();
     // The default is prevented below (so a drag doesn't select text), which would leave focus in whatever
     // field had it; take it so Delete, arrows and ⌘Z reach the editor.
@@ -261,7 +270,11 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       if (ids !== ctl.selection) ctl.select(ids);
     }
     e.preventDefault();
-    if (ids.length) beginDrag(e, 'move', ids);
+    if (ids.length) {
+      beginDrag(e, 'move', ids);
+      // Clicking the text of an already-selected box (a link instead shows its menu) enters edit mode on release.
+      if (wasSelected && !e.shiftKey && (el.type === 'text' || el.type === 'shape') && !(e.target as Element).closest?.('a.sl-link')) dragRef.current!.clickEdit = el.id;
+    }
   };
 
   const onElementDoubleClick = (_e: ReactMouseEvent, el: SlideElement) => {
@@ -271,6 +284,7 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
   const editing = ctl.editing
     ? {
         id: ctl.editing,
+        caret: caretRef.current ?? undefined,
         onCommit: (paragraphs: { text: string; bullet?: boolean; level?: number }[]) => {
           const id = ctl.editing!;
           ctl.updateElements([id], (el) => {

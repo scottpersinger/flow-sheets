@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { linkLabel, normalizeLinkUrl } from './SlideView.tsx';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { caretAt, linkLabel, normalizeLinkUrl } from './SlideView.tsx';
 
 describe('slide link menu helpers', () => {
   it('normalizes typed URLs', () => {
@@ -21,5 +21,21 @@ describe('slide link menu helpers', () => {
   it('shortens the label', () => {
     expect(linkLabel('https://example.com/x')).toBe('example.com/x');
     expect(linkLabel('mailto:a@b.c')).toBe('a@b.c');
+  });
+});
+
+describe('caretAt', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('uses caretPositionFromPoint, falling back to caretRangeFromPoint', () => {
+    const node = {} as Node;
+    const range = { setStart: vi.fn() };
+    vi.stubGlobal('document', { createRange: () => range, caretPositionFromPoint: () => ({ offsetNode: node, offset: 3 }) });
+    expect(caretAt(1, 2)).toBe(range);
+    expect(range.setStart).toHaveBeenCalledWith(node, 3);
+    const other = {} as Range;
+    vi.stubGlobal('document', { caretRangeFromPoint: () => other });
+    expect(caretAt(1, 2)).toBe(other);
+    vi.stubGlobal('document', {});
+    expect(caretAt(1, 2)).toBeNull();
   });
 });
