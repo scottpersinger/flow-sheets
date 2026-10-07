@@ -163,6 +163,15 @@ describe('MCP server', () => {
     expect(put.data?.image_in).toBe('Sheet1!B2');
     const read = await call('read_range', { range: 'B2' });
     expect((read.data?.values as string[][])[0][0]).toBe('[image]');
+    // A web address is fetched and stored too, so the cell points at this server, not the web.
+    const fromWeb = await call('set_cell_image', { range: 'C2', url: 'https://files.example/cat.png' });
+    expect(fromWeb.isError, fromWeb.text).toBe(false);
+    const stored = await svc.sheets.load('u1', (fromWeb.data?.sheet_id as string));
+    expect(stored!.workbook.tabs[0].cells.C2.img).toMatch(/^\/api\/images\//);
+    attachments.set('https://files.example/page.html', Buffer.from('<html>not an image</html>'));
+    const page = await call('set_cell_image', { range: 'C3', url: 'https://files.example/page.html' });
+    expect(page.isError).toBe(true);
+    expect(page.text).toMatch(/not of a page/);
     const neither = await call('set_cell_image', { range: 'B3' });
     expect(neither.isError).toBe(true);
     expect(neither.text).toMatch(/attach the image/);

@@ -217,6 +217,11 @@ export class FileHub {
   }
 
   /** A stored image by id, whoever owns it: the iframe fetches images without credentials, so the id is the secret. */
+  /** True for an image address this server stores (either form). */
+  isOwnImage(src: string): boolean {
+    return src.startsWith('/api/images/') || (!!this.publicUrl && src.startsWith(`${this.publicUrl}/plugin/img/`));
+  }
+
   imageFile(id: string): { file: string; type: string } | null {
     const row = this.db.prepare('SELECT owner_id FROM images WHERE id = ?').get(id) as { owner_id: string } | undefined;
     return row ? this.images.get(row.owner_id, id) : null;
@@ -492,6 +497,11 @@ export class FileService {
     if (!CELL_IMAGE_TYPES.includes(type)) throw new ToolError('Please choose a PNG, JPEG, GIF or WebP image.');
     if (data.length > MAX_CELL_IMAGE_BYTES) throw new ToolError(`Images must be under ${Math.round(MAX_CELL_IMAGE_BYTES / 1e6)} MB.`);
     return this.publicSrc(await this.images.create(this.userId, type, data));
+  }
+
+  /** True for an image address this server stores (either form). */
+  isOwnImage(src: string): boolean {
+    return src.startsWith('/api/images/') || (!!this.publicUrl && src.startsWith(`${this.publicUrl}/plugin/img/`));
   }
 
   imageFile(id: string): { file: string; type: string } | null {

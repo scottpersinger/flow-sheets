@@ -407,11 +407,19 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     const field = IMAGE_TOOLS[name];
     if (!field) return input;
     const { file, ...rest } = input as Record<string, unknown> & { file?: z.infer<typeof attachedFile> };
+    const url = typeof rest[field] === 'string' ? rest[field].trim() : '';
     if (file?.download_url) {
       const bytes = await download(file.download_url, opts.fetchFn ?? fetch);
       const type = sniffImageType(bytes) ?? file.mime_type ?? '';
       rest[field] = await service.storeImage(type, bytes);
-    } else if (!rest[field]) throw new ToolError(`Give ${field} (an https image address) or attach the image as file.`);
+    } else if (/^https?:/i.test(url) && !service.isOwnImage(url)) {
+      // A web image is fetched and stored too: the app runs under a CSP that only allows our own origin,
+      // and the model should hear now if the address is not an image.
+      const bytes = await download(url, opts.fetchFn ?? fetch);
+      const type = sniffImageType(bytes);
+      if (!type) throw new ToolError(`${url} is not a PNG, JPEG, GIF or WebP image. Give the address of the image file itself, not of a page that shows it.`);
+      rest[field] = await service.storeImage(type, bytes);
+    } else if (!url) throw new ToolError(`Give ${field} (an https image address) or attach the image as file.`);
     return rest;
   };
 
