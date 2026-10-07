@@ -51,7 +51,7 @@ describe('MCP server', () => {
   it('lists tools with the app entrypoint and hides app-only tools from the model', async () => {
     const { tools } = await client.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-    expect(byName.docs_app._meta).toMatchObject({ ui: { resourceUri: APP_URI, visibility: ['app'] }, 'openai/ui': { entrypoints: [{ type: 'global' }] } });
+    expect(byName.docs_app._meta).toMatchObject({ ui: { resourceUri: APP_URI, visibility: ['app'] }, 'openai/ui': { entrypoints: [{ type: 'global' }, { type: 'thread' }] } });
     expect(byName.open_file._meta).toMatchObject({ ui: { resourceUri: APP_URI } });
     expect(byName.save_file._meta).toMatchObject({ ui: { visibility: ['app'] } });
     expect(byName.read_doc.annotations?.readOnlyHint).toBe(true);

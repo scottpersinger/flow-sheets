@@ -224,7 +224,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         description: 'Open the Docs app.',
         inputSchema: {},
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-        _meta: { ...rendersApp({ visibility: ['app'] }), 'openai/widgetAccessible': true, ...(entrypoint ? { 'openai/ui': { entrypoints: [{ type: 'global' }] } } : {}) },
+        _meta: { ...rendersApp({ visibility: ['app'] }), 'openai/widgetAccessible': true, ...(entrypoint ? { 'openai/ui': { entrypoints: [{ type: 'global' }, { type: 'thread' }] } } : {}) },
       },
       async () => ok({ ...service.state() }),
     );
