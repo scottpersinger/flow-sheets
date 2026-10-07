@@ -2,6 +2,24 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Add a tool to download a deck as PDF
+
+I added an `export_deck` assistant tool. It renders every slide of a presentation with the same renderer as `render_slide` and present mode. It assembles them into one PDF with one 960×540 page per slide, in order, and starts a browser download. Typecheck and tests pass. The tests use a stand-in for the slide renderer, and I haven't run the real browser export, so the fonts, theme and images in an actual PDF are unchecked.
+
+Inputs are `deck_id` (optional, defaults to the open presentation) and `format` (`"pdf"` only). The filename comes from the deck title, e.g. `BizTrip_Business_Risk_Review.pdf`. The tool returns the filename, page count and a `download_url`, which is a browser-local `blob:` link to use if the automatic download is blocked.
+
+Slides are rasterised as images in the PDF, so the text isn't selectable. The PDF is built by a small new writer in `client/src/deck/pdf.ts`, and PPTX isn't included. I didn't add anything to `SYSTEM_PROMPT`.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+The user wants to ask the chat assistant to download a presentation as a PDF (e.g. "download this deck as a pdf"). Today the assistant has no tool that exports or downloads files. Add a tool named export_deck with inputs: deck_id (string, optional, defaults to the open presentation) and format (enum: "pdf", default "pdf"). Behavior: render every slide of the deck exactly as render_slide / present mode draws them (960x540 pages, same fonts, theme, images), assemble them into a single PDF with one slide per page in order, and trigger a browser download in the user's app (filename based on the deck title, e.g. "BizTrip_Business_Risk_Review.pdf"). Return the filename, page count and a download URL in case the browser blocks the automatic download. Example: the open deck "BizTrip: Business Risk Review" (id 41c695f3-58ee-4fed-86bb-85385cf7abeb) with 10 slides should produce a 10-page PDF. Optionally also support PPTX later, but PDF is the requirement.
+
+Files: client/src/agent/AgentProvider.tsx, client/src/agent/clientTools.ts, client/src/agent/deckTools.test.ts, client/src/agent/deckTools.ts, client/src/agent/describe.ts, client/src/deck/pdf.ts, server/agent/tools.ts, shared/agent/protocol.ts
+
+Job: 7a9f088f-ebb7-4520-8630-f8f000049bba
+
 ## 2026-10-07 — Second click on selected slide text box enters edit mode with caret
 
 A click without movement on an already-selected text or shape box now enters edit mode with the caret at the click point. I couldn't run it in a browser, so I haven't tried the "Salesforce" example. Typecheck and all 264 tests pass.

@@ -186,6 +186,8 @@ export const CLIENT_TOOLS = new Set([
   'set_deck_theme',
   // Drawn by the browser with the app's own slide renderer; the picture is attached to the resumed turn.
   'render_slide',
+  // Rendered like render_slide, assembled into a file and downloaded by the browser.
+  'export_deck',
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',
