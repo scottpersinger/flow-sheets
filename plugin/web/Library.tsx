@@ -3,7 +3,7 @@
 // imports go through a one-time ticket, and opening a file tells the server so the model acts on it.
 import { useEffect, useState } from 'react';
 import { FileLibrary, type LibraryItem } from '../../client/src/components/FileLibrary.tsx';
-import { Logo } from '../../client/src/components/Logo.tsx';
+import { HomeIcon } from '../../client/src/components/Logo.tsx';
 import { Modal } from '../../client/src/components/Modal.tsx';
 import { DOCX_ACCEPT, EXCEL_ACCEPT, PPTX_ACCEPT } from '../../client/src/importFile.ts';
 import type { FileKind, Host } from './host.ts';
@@ -66,7 +66,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
       <FileLibrary
         brand={
           <>
-            <Logo />
+            <HomeIcon />
             <span>FreeFlow Docs</span>
           </>
         }
@@ -84,7 +84,9 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
         }
         items={items}
         error={error}
+        createKinds={['sheet', 'deck', 'doc']}
         onCreate={async (kind, title) => {
+          if (kind === 'markdown') return;
           const r = await host.call<{ file: FileSummary }>(CREATE_TOOLS[kind], { title });
           onOpen({ kind, id: r.file.id });
         }}

@@ -15,6 +15,14 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   `DocEditor` view, toolbar) and `client/src/pages/DocPage.tsx`, behind `/api/docs`. The schema and
   file format are in `shared/doc.ts`; `shared/docMarkdown.ts` converts documents to and from the Markdown
   the assistant reads and writes.
+- Markdown documents live in `client/src/markdown` (`MarkdownController` over the plain text with autosave,
+  the GitHub-flavored `MarkdownPreview` built on react-markdown + remark-gfm) and
+  `client/src/pages/MarkdownPage.tsx` (a textarea editor with a resizable preview panel), behind
+  `/api/markdown`. The stored format is `shared/markdown.ts`. The assistant's content tools (`read_doc`,
+  `insert_content`, `replace_blocks`, `delete_blocks`, `replace_text`, plus `open_doc`, `list_docs`,
+  `create_doc`, `read_other_doc`) work on them too, through `client/src/agent/markdownTools.ts` and
+  `shared/agent/markdownBlocks.ts` (blocks are the top-level Markdown constructs, edits are text ranges
+  applied through the editor so they are undoable); the formatting and page tools do not.
 
 Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a change is finished.
 

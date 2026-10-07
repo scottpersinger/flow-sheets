@@ -27,6 +27,7 @@ const MAX_REPLACEMENTS = 1000;
 
 function requireDoc(env: DocToolEnv): DocController {
   if (!env.doc) throw new ToolError('No document is open. Use list_docs to find one and open_doc to open it, or create_doc.');
+  // (A Markdown document is routed to markdownTools.ts before this is reached.)
   return env.doc;
 }
 

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
-import { Logo } from '../components/Logo.tsx';
+import { HomeIcon } from '../components/Logo.tsx';
 
 export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const auth = useAuth();
@@ -63,7 +63,7 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
       <div className="auth-page">
         <div className="auth-card">
           <div className="auth-brand">
-            <Logo size={36} />
+            <HomeIcon size={36} />
             <span>FreeFlow Docs</span>
           </div>
           <h1>Check your email</h1>
@@ -95,7 +95,7 @@ export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         }}
       >
         <div className="auth-brand">
-          <Logo size={36} />
+          <HomeIcon size={36} />
           <span>FreeFlow Docs</span>
         </div>
         <h1>{isLogin ? 'Sign in' : 'Create your account'}</h1>

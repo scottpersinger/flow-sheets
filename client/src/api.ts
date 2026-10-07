@@ -2,6 +2,7 @@ import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../sha
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import type { Deck } from '../../shared/deck.ts';
 import type { Doc } from '../../shared/doc.ts';
+import type { MarkdownDoc } from '../../shared/markdown.ts';
 import { CELL_IMAGE_TOO_LARGE, type DeletedFile, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 
 export interface User {
@@ -134,6 +135,16 @@ export const api = {
   convertDocx: (file: File) => uploadExcel<{ doc: Doc; warnings: string[] }>('/api/import/docx', file),
   renameDoc: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/docs/${encodeURIComponent(id)}`, { title }),
   deleteDoc: (id: string) => request<{ ok: true }>('DELETE', `/api/docs/${encodeURIComponent(id)}`),
+
+  listMarkdown: () => request<{ docs: SheetMeta[] }>('GET', '/api/markdown'),
+  /** Create a Markdown document, empty or from the text of an uploaded .md file. */
+  createMarkdown: (title: string, text = '') => request<{ doc: SheetMeta }>('POST', '/api/markdown', { title, text }),
+  getMarkdown: (id: string) => request<{ meta: SheetMeta; doc: MarkdownDoc }>('GET', `/api/markdown/${encodeURIComponent(id)}`),
+  /** `rev` is the revision loaded; the server answers 409 when the document was saved elsewhere since. */
+  saveMarkdown: (id: string, doc: MarkdownDoc, rev?: string, keepalive = false) =>
+    request<{ meta: SheetMeta }>('PUT', `/api/markdown/${encodeURIComponent(id)}`, { doc, rev }, keepalive ? { keepalive: true } : undefined),
+  renameMarkdown: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/markdown/${encodeURIComponent(id)}`, { title }),
+  deleteMarkdown: (id: string) => request<{ ok: true }>('DELETE', `/api/markdown/${encodeURIComponent(id)}`),
   listTrash: () => request<{ files: DeletedFile[]; available: boolean }>('GET', '/api/trash'),
   restoreFromTrash: (id: string) => request<{ file: SheetMeta }>('POST', `/api/trash/${encodeURIComponent(id)}/restore`),
 

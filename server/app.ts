@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
+import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
@@ -565,6 +566,58 @@ export async function buildApp(opts: AppOptions) {
       const result = await convertDocx(req, reply);
       if (!result) return reply;
       return result;
+    });
+  });
+
+  // --- Markdown documents --------------------------------------------------------
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    r.get('/api/markdown', async (req) => ({ docs: sheets.list(req.user!.id, 'markdown') }));
+
+    // Create: empty, or from text (an uploaded .md file, read by the browser).
+    r.post('/api/markdown', async (req, reply) => {
+      const body = (req.body ?? {}) as { title?: unknown; text?: unknown };
+      const title = cleanTitle(body.title) ?? 'Untitled Markdown';
+      const text = body.text === undefined ? '' : body.text;
+      if (typeof text !== 'string') return reply.code(400).send({ error: 'Text must be a string' });
+      if (text.length > MAX_MARKDOWN_CHARS) return reply.code(400).send({ error: 'This file is too large to import (5 MB maximum).' });
+      return { doc: await sheets.createMarkdown(req.user!.id, title, newMarkdownDoc(text)) };
+    });
+
+    r.get('/api/markdown/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const res = await sheets.loadMarkdown(req.user!.id, id);
+      if (!res) return reply.code(404).send({ error: 'Document not found' });
+      return { meta: res.meta, doc: res.doc };
+    });
+
+    r.put('/api/markdown/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { doc?: unknown; rev?: unknown } | undefined;
+      const doc = body?.doc;
+      const problem = validateMarkdownDoc(doc);
+      if (problem) return reply.code(400).send({ error: problem });
+      const stale = staleRev(req.user!.id, id, 'markdown', body?.rev);
+      if (stale) return reply.code(409).send({ error: 'The document was changed elsewhere since you loaded it.', meta: stale });
+      const meta = await sheets.saveMarkdown(req.user!.id, id, doc as MarkdownDoc);
+      if (!meta) return reply.code(404).send({ error: 'Document not found' });
+      return { meta };
+    });
+
+    r.patch('/api/markdown/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
+      if (!title) return reply.code(400).send({ error: 'Title is required' });
+      const meta = sheets.rename(req.user!.id, id, title, 'markdown');
+      if (!meta) return reply.code(404).send({ error: 'Document not found' });
+      return { meta };
+    });
+
+    r.delete('/api/markdown/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (!(await sheets.delete(req.user!.id, id, 'markdown'))) return reply.code(404).send({ error: 'Document not found' });
+      return { ok: true };
     });
   });
 

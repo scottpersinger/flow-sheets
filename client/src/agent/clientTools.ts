@@ -15,11 +15,16 @@ import * as ops from '../state/ops.ts';
 import type { WorkbookStore } from '../state/store.ts';
 import { DECK_TOOLS, deckConfirmationFor, exportDeckTool, renderSlideTool, runDeckTool, type RenderSlideEnv } from './deckTools.ts';
 import { DOC_TOOLS, docConfirmationFor, runDocTool } from './docTools.ts';
+import { markdownConfirmationFor, markdownOutline, markdownToolProblem, runMarkdownTool } from './markdownTools.ts';
+import type { MarkdownController } from '../markdown/controller.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
 import type { DocController } from '../doc/controller.ts';
 import { ToolError } from './toolError.ts';
 
 export { ToolError };
+
+/** What open_doc resolves with: the controller of the text or Markdown document now open. */
+export type OpenedDoc = { kind: 'doc'; ctl: DocController } | { kind: 'markdown'; ctl: MarkdownController };
 
 export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImage'> {
   /** The open spreadsheet, or null on other pages. */
@@ -28,14 +33,16 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   deck: DeckController | null;
   /** The open text document, or null on other pages. */
   doc: DocController | null;
+  /** The open Markdown document, or null on other pages (the content tools act on it as on a text document). */
+  markdown?: MarkdownController | null;
   /** Undo group for this agent request. */
   group: string;
   /** Navigate to a spreadsheet and resolve once it has loaded. */
   openSheet(id: string): Promise<SheetController>;
   /** Navigate to a presentation and resolve once it has loaded. */
   openDeck(id: string): Promise<DeckController>;
-  /** Navigate to a text document and resolve once it has loaded. */
-  openDoc(id: string): Promise<DocController>;
+  /** Navigate to a text or Markdown document and resolve once it has loaded. */
+  openDoc(id: string): Promise<OpenedDoc>;
   /** The user's stored files, most recent first. */
   listFiles?(): Promise<StoredFile[]>;
   /** Navigate to a stored file's preview tab; resolves with the file once it is shown. */
@@ -60,7 +67,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : und
 
 function requireSheet(env: ClientToolEnv): SheetController {
   if (!env.ctl) {
-    const open = env.deck ? 'A presentation' : env.doc ? 'A document' : null;
+    const open = env.deck ? 'A presentation' : env.doc || env.markdown ? 'A document' : null;
     throw new ToolError(open ? `${open} is open, not a spreadsheet. Use list_sheets to find one and open_sheet to open it.` : 'No spreadsheet is open. Use list_sheets to find one and open_sheet to open it.');
   }
   return env.ctl;
@@ -107,13 +114,13 @@ function nonEmptyCount(tab: Tab, rg: Range): number {
 }
 
 /** A question to ask the user before running a destructive call, or null if it can run straight away. */
-export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null): string | null {
+export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null, markdown: MarkdownController | null = null): string | null {
   const i = call.input;
   if (call.name === 'request_app_change') {
     return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.`;
   }
   if (DECK_TOOLS.has(call.name)) return deckConfirmationFor(call, deck);
-  if (DOC_TOOLS.has(call.name)) return docConfirmationFor(call, doc);
+  if (DOC_TOOLS.has(call.name)) return markdown ? markdownConfirmationFor(call, markdown) : docConfirmationFor(call, doc);
   if (!ctl) return null;
   try {
     switch (call.name) {
@@ -189,10 +196,18 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
   }
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
   if (call.name === 'open_doc') {
-    const doc = await env.openDoc(String(i.doc_id));
-    return JSON.stringify({ opened: true, ...docOutline(doc.doc, { cursorBlock: doc.cursorBlock() }) });
+    const opened = await env.openDoc(String(i.doc_id));
+    if (opened.kind === 'markdown') return JSON.stringify({ opened: true, format: 'markdown', ...markdownOutline(opened.ctl.text, { cursor: opened.ctl.cursor }) });
+    return JSON.stringify({ opened: true, ...docOutline(opened.ctl.doc, { cursorBlock: opened.ctl.cursorBlock() }) });
   }
-  if (DOC_TOOLS.has(call.name)) return runDocTool(call, env);
+  if (DOC_TOOLS.has(call.name)) {
+    if (env.markdown && !env.doc) {
+      const problem = markdownToolProblem(call.name);
+      if (problem) throw new ToolError(problem);
+      return runMarkdownTool(call, env.markdown);
+    }
+    return runDocTool(call, env);
+  }
 
   const ctl = requireSheet(env);
   const run = (fn: Parameters<SheetController['runAgent']>[1]) => ctl.runAgent(env.group, fn);

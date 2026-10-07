@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
-import { Logo } from '../components/Logo.tsx';
+import { HomeIcon } from '../components/Logo.tsx';
 
 export function VerifyEmailPage() {
   const [params] = useSearchParams();
@@ -43,7 +43,7 @@ export function VerifyEmailPage() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-brand">
-          <Logo size={36} />
+          <HomeIcon size={36} />
           <span>FreeFlow Docs</span>
         </div>
         <h1>{error ? 'Link not valid' : 'Verifying your email…'}</h1>

@@ -9,6 +9,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import type { Deck } from '../shared/deck.ts';
 import { docSchema, type Doc } from '../shared/doc.ts';
 import { docToMarkdown } from '../shared/docMarkdown.ts';
+import type { MarkdownDoc } from '../shared/markdown.ts';
 import { cellKey } from '../shared/cellref.ts';
 import { Engine } from '../shared/formula/engine.ts';
 import { buildPptx } from '../shared/pptxExport.ts';
@@ -22,6 +23,7 @@ export type ExportFormat = 'json' | 'md' | 'pptx' | 'csv' | 'xlsx';
 /** Formats each kind can export to; the first is the readable default. */
 export const EXPORT_FORMATS: Record<DocKind, ExportFormat[]> = {
   doc: ['md', 'json'],
+  markdown: ['md', 'json'],
   deck: ['pptx', 'json'],
   sheet: ['xlsx', 'csv', 'json'],
 };
@@ -243,7 +245,7 @@ export async function deckPptx(deck: Deck, title: string, source: ImageSource): 
 
 // --- One file ---------------------------------------------------------------------------
 
-export type FileData = { kind: 'doc'; doc: Doc } | { kind: 'deck'; deck: Deck } | { kind: 'sheet'; workbook: Workbook };
+export type FileData = { kind: 'doc'; doc: Doc } | { kind: 'markdown'; markdown: MarkdownDoc } | { kind: 'deck'; deck: Deck } | { kind: 'sheet'; workbook: Workbook };
 
 export async function loadFile(sheets: SheetStore, ownerId: string, id: string): Promise<{ meta: SheetMeta; data: FileData } | null> {
   const meta = sheets.get(ownerId, id);
@@ -251,6 +253,10 @@ export async function loadFile(sheets: SheetStore, ownerId: string, id: string):
   if (meta.kind === 'doc') {
     const d = await sheets.loadDoc(ownerId, id);
     return d && { meta, data: { kind: 'doc', doc: d.doc } };
+  }
+  if (meta.kind === 'markdown') {
+    const d = await sheets.loadMarkdown(ownerId, id);
+    return d && { meta, data: { kind: 'markdown', markdown: d.doc } };
   }
   if (meta.kind === 'deck') {
     const d = await sheets.loadDeck(ownerId, id);
@@ -262,14 +268,14 @@ export async function loadFile(sheets: SheetStore, ownerId: string, id: string):
 
 /** One file in one format. `tab` picks the spreadsheet tab for CSV (by name or index; the first by default). */
 export async function exportFile(meta: SheetMeta, data: FileData, format: ExportFormat, source: ImageSource, tab?: string): Promise<ExportedFile> {
-  if (!EXPORT_FORMATS[meta.kind].includes(format)) throw new ExportError(`A ${meta.kind === 'sheet' ? 'spreadsheet' : meta.kind === 'deck' ? 'presentation' : 'document'} cannot be exported as ${format}`);
-  const raw = data.kind === 'doc' ? data.doc : data.kind === 'deck' ? data.deck : data.workbook;
+  if (!EXPORT_FORMATS[meta.kind].includes(format)) throw new ExportError(`A ${NOUN[meta.kind]} cannot be exported as ${format}`);
+  const raw = data.kind === 'doc' ? data.doc : data.kind === 'markdown' ? data.markdown : data.kind === 'deck' ? data.deck : data.workbook;
   const type = MIME[format];
   switch (format) {
     case 'json':
       return { name: safeName(meta.title, 'json'), type, body: Buffer.from(JSON.stringify(raw, null, 2)) };
     case 'md':
-      return { name: safeName(meta.title, 'md'), type, body: Buffer.from(docMarkdown((data as { doc: Doc }).doc)) };
+      return { name: safeName(meta.title, 'md'), type, body: Buffer.from(data.kind === 'markdown' ? data.markdown.text : docMarkdown((data as { doc: Doc }).doc)) };
     case 'pptx':
       return { name: safeName(meta.title, 'pptx'), type, body: await deckPptx((data as { deck: Deck }).deck, meta.title, source) };
     case 'xlsx':
@@ -286,7 +292,8 @@ export async function exportFile(meta: SheetMeta, data: FileData, format: Export
 
 // --- Everything -------------------------------------------------------------------------
 
-const FOLDER: Record<DocKind, string> = { doc: 'Documents', deck: 'Presentations', sheet: 'Spreadsheets' };
+const FOLDER: Record<DocKind, string> = { doc: 'Documents', markdown: 'Markdown', deck: 'Presentations', sheet: 'Spreadsheets' };
+const NOUN: Record<DocKind, string> = { doc: 'document', markdown: 'Markdown document', deck: 'presentation', sheet: 'spreadsheet' };
 
 /**
  * Every file of the account as a zip: per kind a folder with each file in its readable format and as JSON,
@@ -321,14 +328,14 @@ export async function exportAll(sheets: SheetStore, ownerId: string, source: Ima
     return name;
   };
 
-  const metas = (['doc', 'deck', 'sheet'] as DocKind[]).flatMap((k) => sheets.list(ownerId, k));
+  const metas = (['doc', 'markdown', 'deck', 'sheet'] as DocKind[]).flatMap((k) => sheets.list(ownerId, k));
   for (const meta of metas) {
     try {
       const loaded = await loadFile(sheets, ownerId, meta.id);
       if (!loaded) continue;
       const { data } = loaded;
       const folder = FOLDER[meta.kind];
-      const srcs = data.kind === 'doc' ? docImages(data.doc) : data.kind === 'deck' ? deckImages(data.deck) : sheetImages(data.workbook);
+      const srcs = data.kind === 'doc' ? docImages(data.doc) : data.kind === 'deck' ? deckImages(data.deck) : data.kind === 'sheet' ? sheetImages(data.workbook) : [];
       for (const src of srcs) await addImage(src);
       const json = await exportFile(meta, data, 'json', source);
       zip.file(unique(folder, json.name), json.body);

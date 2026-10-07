@@ -8,6 +8,8 @@ import { ARROW_STYLE_IDS, buildSlide, LAYOUT_IDS, newId, THEME_IDS, type Deck } 
 import { ALIGNMENTS, BLOCK_TYPES, docNode, MAX_FONT_SIZE, MAX_HEADER_CHARS, MAX_LINE_HEIGHT, MAX_MARGIN, MAX_PARAGRAPH_SPACE, MIN_FONT_SIZE, MIN_LINE_HEIGHT, MIN_MARGIN, PAGE_NUMBER_POSITIONS, PAGE_SIZE_IDS } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
 import { docOutline } from '../../shared/agent/docRead.ts';
+import { markdownBlocks, markdownOutline } from '../../shared/agent/markdownBlocks.ts';
+import { newMarkdownDoc } from '../../shared/markdown.ts';
 import { SHAPE_KINDS } from '../../shared/shapes.ts';
 import { Engine } from '../../shared/formula/engine.ts';
 import type { ConnectorService } from '../connectors/service.ts';
@@ -262,7 +264,7 @@ export const schemas = {
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),
 
   // --- Open text document (run in the browser) ---
-  open_doc: z.object({ doc_id: z.string() }).describe('Open a text document in the app (the user navigates to it; any open spreadsheet or presentation closes). Returns its blocks. Document tools then act on it.'),
+  open_doc: z.object({ doc_id: z.string() }).describe('Open a text document or Markdown document in the app (the user navigates to it; any open spreadsheet or presentation closes). Returns its blocks. Document tools then act on it.'),
   read_doc: z
     .object({
       from: blockNumber.optional().describe('First block to list. Defaults to 1.'),
@@ -415,16 +417,17 @@ export const schemas = {
     .describe('Create a new presentation, optionally with its slides. Open it with open_deck so the user sees it.'),
   list_docs: z
     .object({ query: z.string().optional().describe('Only documents whose title contains this text (case-insensitive).') })
-    .describe("List the user's text documents, most recently edited first (at most 50)."),
+    .describe("List the user's text documents and Markdown documents (kind \"doc\" or \"markdown\"), most recently edited first (at most 50)."),
   create_doc: z
     .object({
       title: z.string().min(1).max(200),
       markdown: docMarkdown.optional().describe('Initial content. Without it the document is empty.'),
+      kind: z.enum(['doc', 'markdown']).optional().describe('"doc" (the default) is a rich text document built from the Markdown; "markdown" is a plain Markdown file holding it verbatim.'),
     })
-    .describe('Create a new text document, optionally with its content written as Markdown. Open it with open_doc so the user sees it.'),
+    .describe('Create a new text document or Markdown document, optionally with its content written as Markdown. Open it with open_doc so the user sees it.'),
   read_other_doc: z
     .object({ doc_id: z.string(), from: blockNumber.optional(), to: blockNumber.optional() })
-    .describe('Read another document in the account without opening it, as numbered Markdown blocks. Not for the open document; use read_doc for that.'),
+    .describe('Read another text or Markdown document in the account without opening it, as numbered Markdown blocks. Not for the open document; use read_doc for that.'),
 
   // --- Connectors: external data sources such as Brex ---
   list_connections: z
@@ -571,28 +574,40 @@ export async function runServerTool(name: string, input: Record<string, unknown>
     }
     case 'list_docs': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
-      const all = env.sheets.list(env.userId, 'doc').filter((s) => !q || s.title.toLowerCase().includes(q));
+      const all = [...env.sheets.list(env.userId, 'doc'), ...env.sheets.list(env.userId, 'markdown')]
+        .filter((s) => !q || s.title.toLowerCase().includes(q))
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
+      const openId = env.context.page === 'doc' || env.context.page === 'markdown' ? env.context.docId : null;
       return JSON.stringify({
         total: all.length,
         docs: all.slice(0, 50).map((s) => ({
           id: s.id,
+          kind: s.kind,
           title: s.title,
           updated_at: s.updatedAt,
-          ...(env.context.page === 'doc' && env.context.docId === s.id ? { open_now: true } : {}),
+          ...(openId === s.id ? { open_now: true } : {}),
         })),
       });
     }
     case 'create_doc': {
-      const doc = markdownToDoc(typeof input.markdown === 'string' ? input.markdown : '');
+      const markdown = typeof input.markdown === 'string' ? input.markdown : '';
+      if (input.kind === 'markdown') {
+        const meta = await env.sheets.createMarkdown(env.userId, String(input.title).trim(), newMarkdownDoc(markdown));
+        return JSON.stringify({ id: meta.id, kind: 'markdown', title: meta.title, block_count: markdownBlocks(markdown).length, note: 'Call open_doc to show it to the user.' });
+      }
+      const doc = markdownToDoc(markdown);
       const meta = await env.sheets.createDoc(env.userId, String(input.title).trim(), doc);
-      return JSON.stringify({ id: meta.id, title: meta.title, block_count: doc.content.content?.length ?? 0, note: 'Call open_doc to show it to the user.' });
+      return JSON.stringify({ id: meta.id, kind: 'doc', title: meta.title, block_count: doc.content.content?.length ?? 0, note: 'Call open_doc to show it to the user.' });
     }
     case 'read_other_doc': {
       const id = input.doc_id as string;
-      if (env.context.page === 'doc' && env.context.docId === id) throw new ToolFailure('That document is open right now; use read_doc so you see unsaved edits.');
+      if ((env.context.page === 'doc' || env.context.page === 'markdown') && env.context.docId === id) throw new ToolFailure('That document is open right now; use read_doc so you see unsaved edits.');
+      const range = { from: input.from as number | undefined, to: input.to as number | undefined };
       const res = await env.sheets.loadDoc(env.userId, id);
-      if (!res) throw new ToolFailure(`No document with id "${id}". Use list_docs to find ids.`);
-      return JSON.stringify({ title: res.meta.title, ...docOutline(docNode(res.doc), { from: input.from as number | undefined, to: input.to as number | undefined }) });
+      if (res) return JSON.stringify({ title: res.meta.title, ...docOutline(docNode(res.doc), range) });
+      const md = await env.sheets.loadMarkdown(env.userId, id);
+      if (!md) throw new ToolFailure(`No document with id "${id}". Use list_docs to find ids.`);
+      return JSON.stringify({ title: md.meta.title, format: 'markdown', ...markdownOutline(md.doc.text, range) });
     }
     case 'list_connections': {
       const svc = connectorService(env);

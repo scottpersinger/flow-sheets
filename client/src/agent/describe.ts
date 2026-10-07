@@ -132,7 +132,7 @@ export function toolLabel(name: string, i: Input): string {
     case 'list_docs':
       return typeof i.query === 'string' && i.query ? `Searched your documents for “${i.query}”` : 'Listed your documents';
     case 'create_doc':
-      return `Created document “${i.title}”`;
+      return `Created ${i.kind === 'markdown' ? 'Markdown document' : 'document'} “${i.title}”`;
     case 'read_other_doc':
       return 'Read another document';
     case 'list_decks':

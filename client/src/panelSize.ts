@@ -16,6 +16,8 @@ export const KEY_STEP = 16;
 
 export const SLIDE_TRAY: PanelSpec = { key: 'ui.slideTrayWidth', def: 200, min: 120, max: 400 };
 export const DOC_TRAY: PanelSpec = { key: 'ui.docTrayWidth', def: 180, min: 100, max: 360 };
+/** The rendered preview beside a Markdown editor. */
+export const MARKDOWN_PREVIEW: PanelSpec = { key: 'ui.markdownPreviewWidth', def: 520, min: 240, max: 1400 };
 export const ASSISTANT_PANEL: PanelSpec = { key: 'ui.assistantPanelWidth', def: 380, min: 280, max: 800 };
 
 /**

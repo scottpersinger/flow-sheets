@@ -13,7 +13,7 @@ function setup(markdown = '') {
     group: 'agent-1',
     openSheet: async () => Promise.reject(new Error('No sheet in this test.')),
     openDeck: async () => Promise.reject(new Error('No deck in this test.')),
-    openDoc: async () => doc,
+    openDoc: async () => ({ kind: 'doc', ctl: doc }),
     requestAppChange: async () => ({ id: 'job-1' }),
     requestResearch: async () => ({ id: 'job-2', sheetIncluded: false }),
     uploadImage: async () => '/api/images/00000000-0000-0000-0000-000000000001',

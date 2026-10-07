@@ -1,5 +1,5 @@
 // The browser-tab icon follows what is open: the home page's generic mark, or the spreadsheet, presentation
-// or document icon (client/public/favicon-*.svg, the same marks as the logos in components/Logo.tsx).
+// document or Markdown icon (client/public/favicon-*.svg, the same marks as the logos in components/Logo.tsx).
 import { useEffect } from 'react';
 import type { DocKind } from '../../shared/types.ts';
 
@@ -10,6 +10,7 @@ export const FAVICONS: Record<FaviconKind, string> = {
   sheet: '/favicon-sheet.svg',
   deck: '/favicon-deck.svg',
   doc: '/favicon-doc.svg',
+  markdown: '/favicon-markdown.svg',
 };
 
 export function setFavicon(kind: FaviconKind): void {

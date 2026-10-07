@@ -4,10 +4,10 @@
 // each passes its own data source, actions and header controls, so both look and behave the same.
 import { useEffect, useState, type ReactNode } from 'react';
 import type { SheetMeta } from '../../../shared/types.ts';
-import { DeckIcon, DocIcon, Logo } from './Logo.tsx';
+import { DeckIcon, DocIcon, Logo, MarkdownIcon } from './Logo.tsx';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
 
-/** What a row can be: a spreadsheet, presentation or document, or a stored file such as a PDF. */
+/** What a row can be: a spreadsheet, presentation, document or Markdown document, or a stored file such as a PDF. */
 export type LibraryKind = SheetMeta['kind'] | 'file';
 
 export interface LibraryItem {
@@ -25,7 +25,59 @@ export interface LibraryAction {
   danger?: boolean;
 }
 
-export const KIND_NAMES: Record<LibraryKind, string> = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document', file: 'file' };
+export const KIND_NAMES: Record<LibraryKind, string> = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document', markdown: 'Markdown document', file: 'file' };
+
+/** The Type column: a short label per kind (stored files show their file type). */
+export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title'>): string {
+  if (item.kind === 'file') {
+    const ext = /\.([a-z0-9]+)$/i.exec(item.title)?.[1];
+    return ext ? ext.toUpperCase() : 'File';
+  }
+  return { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown' }[item.kind];
+}
+
+export type SortKey = 'title' | 'kind' | 'updatedAt' | 'createdAt';
+export interface SortOrder {
+  key: SortKey;
+  dir: 'asc' | 'desc';
+}
+const DEFAULT_SORT: SortOrder = { key: 'updatedAt', dir: 'desc' };
+const SORT_STORAGE_KEY = 'ui.fileSort';
+
+function loadSort(): SortOrder {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? 'null') as Partial<SortOrder> | null;
+    if (raw && ['title', 'kind', 'updatedAt', 'createdAt'].includes(raw.key as string) && (raw.dir === 'asc' || raw.dir === 'desc')) return raw as SortOrder;
+  } catch {
+    // Fall through to the default.
+  }
+  return DEFAULT_SORT;
+}
+
+function saveSort(sort: SortOrder): void {
+  try {
+    localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort));
+  } catch {
+    // Not remembered, that's all.
+  }
+}
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** Order items by the sort key; ties (same type, same minute) fall back to the title, then to most recent. */
+export function compareItems(a: LibraryItem, b: LibraryItem, sort: SortOrder): number {
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  let c = 0;
+  if (sort.key === 'title') c = collator.compare(a.title, b.title);
+  else if (sort.key === 'kind') c = collator.compare(kindLabel(a), kindLabel(b));
+  else c = a[sort.key] < b[sort.key] ? -1 : a[sort.key] > b[sort.key] ? 1 : 0;
+  if (c) return c * dir;
+  if (sort.key !== 'title') {
+    const t = collator.compare(a.title, b.title);
+    if (t) return t;
+  }
+  return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0;
+}
 
 /** A short icon label for a MIME type (also used by file chips in the chat). */
 export function fileIcon(type: string): string {
@@ -38,6 +90,7 @@ export function fileIcon(type: string): string {
 export function kindIcon(item: Pick<LibraryItem, 'kind' | 'title'>, size = 18): ReactNode {
   if (item.kind === 'deck') return <DeckIcon size={size} />;
   if (item.kind === 'doc') return <DocIcon size={size} />;
+  if (item.kind === 'markdown') return <MarkdownIcon size={size} />;
   if (item.kind === 'file') return <span className="file-chip-icon">{fileIcon(item.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : '')}</span>;
   return <Logo size={size} />;
 }
@@ -80,8 +133,8 @@ export interface FileLibraryProps {
   children?: ReactNode;
 }
 
-const ALL_KINDS: Exclude<LibraryKind, 'file'>[] = ['sheet', 'deck', 'doc'];
-const TILE_CLASS: Record<Exclude<LibraryKind, 'file'>, string> = { sheet: 'new-sheet-tile', deck: 'new-sheet-tile deck-tile', doc: 'new-sheet-tile doc-tile' };
+const ALL_KINDS: Exclude<LibraryKind, 'file'>[] = ['sheet', 'deck', 'doc', 'markdown'];
+const TILE_CLASS: Record<Exclude<LibraryKind, 'file'>, string> = { sheet: 'new-sheet-tile', deck: 'new-sheet-tile deck-tile', doc: 'new-sheet-tile doc-tile', markdown: 'new-sheet-tile markdown-tile' };
 
 function pickFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
@@ -103,6 +156,13 @@ export function FileLibrary(props: FileLibraryProps) {
   const [renaming, setRenaming] = useState<LibraryItem | null>(null);
   const [deleting, setDeleting] = useState<LibraryItem | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [sort, setSortState] = useState<SortOrder>(loadSort);
+  const setSort = (key: SortKey) => {
+    // A new column sorts the natural way (names A–Z, dates newest first); the same column again flips it.
+    const next: SortOrder = sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'title' || key === 'kind' ? 'asc' : 'desc' };
+    setSortState(next);
+    saveSort(next);
+  };
 
   useEffect(() => {
     if (!menuFor) return;
@@ -112,14 +172,16 @@ export function FileLibrary(props: FileLibraryProps) {
   }, [menuFor]);
 
   const q = filter.trim().toLowerCase();
-  // Show each branch right under its original (recursively); searching flattens the list.
+  // Show each branch right under its original (recursively), siblings in the chosen order; searching
+  // flattens the list.
   const visible: { s: LibraryItem; depth: number }[] = [];
   if (items) {
-    if (q) for (const s of items) s.title.toLowerCase().includes(q) && visible.push({ s, depth: 0 });
+    const sorted = [...items].sort((a, b) => compareItems(a, b, sort));
+    if (q) for (const s of sorted) s.title.toLowerCase().includes(q) && visible.push({ s, depth: 0 });
     else {
-      const ids = new Set(items.map((s) => s.id));
+      const ids = new Set(sorted.map((s) => s.id));
       const children = new Map<string, LibraryItem[]>();
-      for (const s of items) {
+      for (const s of sorted) {
         const p = s.branch && ids.has(s.branch.parentId) ? s.branch.parentId : null;
         if (p) children.set(p, [...(children.get(p) ?? []), s]);
       }
@@ -127,7 +189,7 @@ export function FileLibrary(props: FileLibraryProps) {
         visible.push({ s, depth });
         for (const c of children.get(s.id) ?? []) add(c, depth + 1);
       };
-      for (const s of items) if (!(s.branch && ids.has(s.branch.parentId))) add(s, 0);
+      for (const s of sorted) if (!(s.branch && ids.has(s.branch.parentId))) add(s, 0);
     }
   }
 
@@ -202,9 +264,23 @@ export function FileLibrary(props: FileLibraryProps) {
           <table className="sheet-list">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Last modified</th>
-                <th>Created</th>
+                {(
+                  [
+                    ['title', 'Name'],
+                    ['kind', 'Type'],
+                    ['updatedAt', 'Last modified'],
+                    ['createdAt', 'Created'],
+                  ] as [SortKey, string][]
+                ).map(([key, label]) => (
+                  <th key={key} className={key === 'kind' ? 'col-type' : undefined} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                    <button className={`sort-btn${sort.key === key ? ' active' : ''}`} onClick={() => setSort(key)} title={`Sort by ${label.toLowerCase()}`}>
+                      {label}
+                      <span className="sort-arrow" aria-hidden="true">
+                        {sort.key === key ? (sort.dir === 'asc' ? '↑' : '↓') : ''}
+                      </span>
+                    </button>
+                  </th>
+                ))}
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -222,6 +298,7 @@ export function FileLibrary(props: FileLibraryProps) {
                       </>,
                     )}
                   </td>
+                  <td className="col-type">{kindLabel(s)}</td>
                   <td>{formatWhen(s.updatedAt)}</td>
                   <td>{formatWhen(s.createdAt)}</td>
                   <td className="row-actions" onClick={(e) => e.stopPropagation()}>

@@ -21,6 +21,31 @@ export function DocIcon({ size = 28 }: { size?: number }) {
   );
 }
 
+/** Icon for Markdown documents: the "M↓" mark on slate. */
+export function MarkdownIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#455a64" />
+      <path d="M6 22V10h3l3.5 4.5L16 10h3v12h-3v-7l-3.5 4.5L9 15v7z" fill="#fff" />
+      <path d="M23.5 10v8m-3-3 3 3 3-3" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** The app's own mark (all document kinds), for the home page, file previews and sign-in pages. */
+export function HomeIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#3c4043" />
+      <rect x="6" y="6" width="9" height="9" rx="2" fill="#0f9d58" />
+      <rect x="17" y="6" width="9" height="9" rx="2" fill="#f4b400" />
+      <rect x="6" y="17" width="9" height="9" rx="2" fill="#4285f4" />
+      <rect x="17" y="17" width="9" height="9" rx="2" fill="#fff" fillOpacity="0.85" />
+    </svg>
+  );
+}
+
+/** Icon for spreadsheets. */
 export function Logo({ size = 28 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">

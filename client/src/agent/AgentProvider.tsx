@@ -10,10 +10,12 @@ import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { DocController } from '../doc/controller.ts';
+import type { MarkdownController } from '../markdown/controller.ts';
+import { blockAt, markdownBlocks } from '../../../shared/agent/markdownBlocks.ts';
 import { deckToPdf } from '../deck/pdf.ts';
 import { renderSlideImage } from '../deck/renderSlide.ts';
 import type { SheetController } from '../state/controller.ts';
-import { confirmationFor, runClientTool, ToolError } from './clientTools.ts';
+import { confirmationFor, runClientTool, ToolError, type OpenedDoc } from './clientTools.ts';
 
 export interface OpenSheet {
   ctl: SheetController;
@@ -27,6 +29,11 @@ export interface OpenDeck {
 
 export interface OpenDoc {
   ctl: DocController;
+  meta: SheetMeta;
+}
+
+export interface OpenMarkdown {
+  ctl: MarkdownController;
   meta: SheetMeta;
 }
 
@@ -62,6 +69,8 @@ interface AgentState {
   docFailed(id: string, message: string): void;
   /** The open document, or null on other pages. */
   doc: OpenDoc | null;
+  /** The Markdown page reports the open Markdown document (no tools act on it; the assistant only knows it is open). */
+  setOpenMarkdown(doc: OpenMarkdown | null): void;
   /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
   job: AgentJob | null;
   /** Hide a finished job's card. */
@@ -111,6 +120,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const deckRef = useRef<OpenDeck | null>(null);
   const [deck, setDeck] = useState<OpenDeck | null>(null);
   const docRef = useRef<OpenDoc | null>(null);
+  const markdownRef = useRef<OpenMarkdown | null>(null);
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Pending open_sheet / open_deck calls, resolved with the controller once the page has loaded the document.
@@ -258,7 +268,21 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setOpenMarkdown = useCallback((doc: OpenMarkdown | null) => {
+    markdownRef.current = doc;
+    const w = doc && waiters.current.get(doc.meta.id);
+    if (w) {
+      waiters.current.delete(doc.meta.id);
+      w.resolve(doc.ctl);
+    }
+  }, []);
+
   const context = (): AgentContext => {
+    const m = markdownRef.current;
+    if (m) {
+      const blocks = markdownBlocks(m.ctl.text);
+      return { page: 'markdown', docId: m.meta.id, title: m.meta.title, lineCount: m.ctl.lineCount(), blockCount: blocks.length, cursorBlock: blockAt(blocks, m.ctl.cursor) };
+    }
     const t = docRef.current;
     if (t) {
       const selected = t.ctl.selectedText();
@@ -309,6 +333,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
     const doc = docRef.current;
     if (doc) await doc.ctl.saver.flush();
+    const md = markdownRef.current;
+    if (md) await md.ctl.saver.flush();
     const loaded = new Promise<C>((resolve, reject) => {
       waiters.current.set(id, { resolve: resolve as (ctl: unknown) => void, reject });
       setTimeout(() => {
@@ -331,10 +357,26 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return openDocument<DeckController>(id, '/d', 'presentation');
   };
 
-  const openDocById = async (id: string): Promise<DocController> => {
+  /** open_doc takes text and Markdown documents alike; which one it is decides the page to open. */
+  const openDocById = async (id: string): Promise<OpenedDoc> => {
     const cur = docRef.current;
-    if (cur?.meta.id === id) return cur.ctl;
-    return openDocument<DocController>(id, '/doc', 'document');
+    if (cur?.meta.id === id) return { kind: 'doc', ctl: cur.ctl };
+    const md = markdownRef.current;
+    if (md?.meta.id === id) return { kind: 'markdown', ctl: md.ctl };
+    let kind: 'doc' | 'markdown' = 'doc';
+    try {
+      await api.getDoc(id);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) throw e;
+      try {
+        await api.getMarkdown(id);
+        kind = 'markdown';
+      } catch {
+        throw new ToolError(`No document with id "${id}". Use list_docs to find ids.`);
+      }
+    }
+    if (kind === 'markdown') return { kind, ctl: await openDocument<MarkdownController>(id, '/md', 'document') };
+    return { kind, ctl: await openDocument<DocController>(id, '/doc', 'document') };
   };
 
   /** Save whatever is open, then show a stored file's preview tab. */
@@ -404,7 +446,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     for (const call of calls) {
       if (signal.aborted) break;
       setItems((prev) => [...prev, { kind: 'tool', id: call.id, name: call.name, input: call.input, status: 'running' }]);
-      const question = confirmationFor(call, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null);
+      const question = confirmationFor(call, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null, markdownRef.current?.ctl ?? null);
       if (question && !(await ask(question))) {
         const declined = 'The user declined this action.';
         results.push({ id: call.id, content: declined, isError: true });
@@ -417,6 +459,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           ctl: sheetRef.current?.ctl ?? null,
           deck: deckRef.current?.ctl ?? null,
           doc: docRef.current?.ctl ?? null,
+          markdown: markdownRef.current?.ctl ?? null,
           deckId: deckRef.current?.meta.id ?? null,
           loadDeck: async (id) => (await api.getDeck(id)).deck,
           renderSlide: renderSlideImage,
@@ -547,6 +590,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setOpenDoc,
     docFailed: sheetFailed,
     doc,
+    setOpenMarkdown,
     job,
     dismissJob,
   };
@@ -577,6 +621,16 @@ export function useRegisterDoc(ctl: DocController, meta: SheetMeta): void {
     setOpenDoc(doc);
     return () => setOpenDoc(null);
   }, [doc, setOpenDoc]);
+}
+
+/** Report the open Markdown document to the agent while its page is mounted. */
+export function useRegisterMarkdown(ctl: MarkdownController, meta: SheetMeta): void {
+  const { setOpenMarkdown } = useAgent();
+  const doc = useMemo(() => ({ ctl, meta }), [ctl, meta]);
+  useEffect(() => {
+    setOpenMarkdown(doc);
+    return () => setOpenMarkdown(null);
+  }, [doc, setOpenMarkdown]);
 }
 
 /** Report the open presentation to the agent while a deck page is mounted. */

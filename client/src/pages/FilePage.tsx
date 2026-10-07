@@ -4,7 +4,7 @@ import { PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { fileIcon, formatFileSize } from '../components/FileChip.tsx';
-import { Logo } from '../components/Logo.tsx';
+import { HomeIcon } from '../components/Logo.tsx';
 import { useFavicon } from '../favicon.ts';
 
 /** A stored file in its own tab: an in-app preview for PDFs and images, or just its details, with a Download button. */
@@ -29,7 +29,7 @@ export function FilePage() {
     <div className="file-page">
       <header className="home-header">
         <Link to="/" className="home-brand" title="Back to your files">
-          <Logo />
+          <HomeIcon />
           <span>FreeFlow Docs</span>
         </Link>
         <span className="file-page-title">{file?.filename ?? ''}</span>

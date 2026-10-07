@@ -428,6 +428,71 @@ describe('documents', () => {
   });
 });
 
+describe('markdown documents', () => {
+  it('creates from text, saves with revision checks, lists, exports, renames and deletes, kept apart from other kinds', async () => {
+    const { cookie } = await signUp(app, box, 'md@x.com');
+    const { cookie: other } = await signUp(app, box, 'md2@x.com');
+    let res;
+
+    res = await app.inject({ method: 'POST', url: '/api/markdown', headers: { cookie }, payload: { title: 'README', text: '# Hello\n\n- [x] done' } });
+    expect(res.statusCode).toBe(200);
+    const { doc: meta } = res.json();
+    expect(meta).toMatchObject({ title: 'README', kind: 'markdown' });
+    expect(readdirSync(path.join(dir, 'sheets'))).toContain(`${meta.id}.json`);
+
+    res = await app.inject({ method: 'GET', url: `/api/markdown/${meta.id}`, headers: { cookie } });
+    expect(res.json().doc).toEqual({ version: 1, text: '# Hello\n\n- [x] done' });
+
+    // Saves carry the revision loaded; a stale one is refused with the current metadata.
+    res = await app.inject({ method: 'PUT', url: `/api/markdown/${meta.id}`, headers: { cookie }, payload: { doc: { version: 1, text: '# Hi' }, rev: meta.updatedAt } });
+    expect(res.statusCode).toBe(200);
+    const rev = res.json().meta.updatedAt;
+    res = await app.inject({ method: 'PUT', url: `/api/markdown/${meta.id}`, headers: { cookie }, payload: { doc: { version: 1, text: '# Stale' }, rev: meta.updatedAt } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().meta.updatedAt).toBe(rev);
+    res = await app.inject({ method: 'GET', url: `/api/markdown/${meta.id}`, headers: { cookie } });
+    expect(res.json().doc.text).toBe('# Hi');
+
+    // Invalid documents are rejected; the document is not a text document, spreadsheet or deck and vice versa.
+    res = await app.inject({ method: 'PUT', url: `/api/markdown/${meta.id}`, headers: { cookie }, payload: { doc: { version: 1, text: 5 } } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'POST', url: '/api/markdown', headers: { cookie }, payload: { title: 'Bad', text: {} } });
+    expect(res.statusCode).toBe(400);
+    for (const url of [`/api/docs/${meta.id}`, `/api/sheets/${meta.id}`, `/api/decks/${meta.id}`]) {
+      res = await app.inject({ method: 'GET', url, headers: { cookie } });
+      expect(res.statusCode).toBe(404);
+    }
+    res = await app.inject({ method: 'POST', url: '/api/docs', headers: { cookie }, payload: { title: 'Notes' } });
+    res = await app.inject({ method: 'GET', url: `/api/markdown/${res.json().doc.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'GET', url: '/api/markdown', headers: { cookie } });
+    expect(res.json().docs.map((d: { title: string }) => d.title)).toEqual(['README']);
+    res = await app.inject({ method: 'GET', url: '/api/docs', headers: { cookie } });
+    expect(res.json().docs.map((d: { title: string }) => d.title)).toEqual(['Notes']);
+    res = await app.inject({ method: 'GET', url: `/api/markdown/${meta.id}`, headers: { cookie: other } });
+    expect(res.statusCode).toBe(404);
+
+    // Exports: the text itself as .md (the default), or the stored JSON.
+    res = await app.inject({ method: 'GET', url: `/api/files/${meta.id}/export`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/markdown');
+    expect(res.headers['content-disposition']).toContain('README.md');
+    expect(res.body).toBe('# Hi');
+    res = await app.inject({ method: 'GET', url: `/api/files/${meta.id}/export?format=xlsx`, headers: { cookie } });
+    expect(res.statusCode).toBe(400);
+
+    res = await app.inject({ method: 'PATCH', url: `/api/markdown/${meta.id}`, headers: { cookie }, payload: { title: 'README 2026' } });
+    expect(res.json().meta.title).toBe('README 2026');
+    res = await app.inject({ method: 'DELETE', url: `/api/markdown/${meta.id}`, headers: { cookie: other } });
+    expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: 'DELETE', url: `/api/markdown/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/markdown/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${meta.id}.json`);
+  });
+});
+
 describe('presentations', () => {
   it('creates, saves, lists, renames and deletes decks, kept apart from spreadsheets', async () => {
     const { cookie } = await signUp(app, box, 'deck@x.com');

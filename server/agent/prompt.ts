@@ -35,6 +35,7 @@ Documents (text):
 - get_doc_info answers questions about the document itself: its default font, size, line and paragraph spacing (text without a font or size mark uses them; set_doc_style changes them for the whole document), which fonts, sizes and colors are in use, the fonts you can set, and word counts. format_blocks also sets a block's own spacing (space_before, space_after, line_spacing).
 - Pictures: insert_image (or ![alt](src) on its own line) with an address from image_search, <attached_images> or render_slide.
 - To write a new document, create_doc with the whole content as Markdown in one call, then open_doc so the user sees it. Match the user's tone and keep the document's existing structure and style when adding to it.
+- Markdown documents are plain Markdown files the user edits as text (list_docs shows kind "markdown"). read_doc, insert_content, replace_blocks, delete_blocks and replace_text work on them the same way, with blocks being the top-level Markdown constructs (front matter, headings, paragraphs, lists, tables, code blocks); what you write goes into the file verbatim, so write the Markdown syntax you want. The formatting and page tools (format_text, format_blocks, insert_image, set_doc_style, set_page_setup, get_doc_info) do not apply to them. create_doc with kind "markdown" makes a new one.
 - Deleting blocks, and replacing ten or more at once, asks the user to confirm.
 
 Connectors (external data such as Brex):
@@ -68,6 +69,13 @@ export function renderContext(ctx: AgentContext): string {
       `Open document: "${ctx.title}" (id ${ctx.docId}), ${ctx.blockCount} block${ctx.blockCount === 1 ? '' : 's'}. No spreadsheet or presentation is open.`,
       `Cursor in block: ${ctx.cursorBlock}`,
       ...(ctx.selectedText ? [`Selected text: ${JSON.stringify(ctx.selectedText)}`] : []),
+    ];
+    return `<app_context>\n${lines.join('\n')}\n</app_context>`;
+  }
+  if (ctx.page === 'markdown') {
+    const lines = [
+      `Open Markdown document: "${ctx.title}" (id ${ctx.docId}), ${ctx.blockCount} block${ctx.blockCount === 1 ? '' : 's'} (${ctx.lineCount} line${ctx.lineCount === 1 ? '' : 's'} of Markdown text). No spreadsheet, presentation or text document is open.`,
+      `Cursor in block: ${ctx.cursorBlock}`,
     ];
     return `<app_context>\n${lines.join('\n')}\n</app_context>`;
   }

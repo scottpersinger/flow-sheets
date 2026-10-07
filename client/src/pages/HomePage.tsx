@@ -6,12 +6,13 @@ import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { FileLibrary, formatWhen, kindIcon, type LibraryItem } from '../components/FileLibrary.tsx';
-import { Logo } from '../components/Logo.tsx';
+import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { useFavicon } from '../favicon.ts';
-import { checkImportFile, DOCX_ACCEPT, EXCEL_ACCEPT, isPdfFile, isPowerPointFile, isWordFile, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName } from '../importFile.ts';
+import { checkImportFile, DOCX_ACCEPT, EXCEL_ACCEPT, isMarkdownFile, isPdfFile, isPowerPointFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName } from '../importFile.ts';
+import { markdownTitle } from '../../../shared/markdown.ts';
 
-const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : s.kind === 'file' ? `/f/${s.id}` : `/s/${s.id}`);
+const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : s.kind === 'markdown' ? `/md/${s.id}` : s.kind === 'file' ? `/f/${s.id}` : `/s/${s.id}`);
 
 export function HomePage() {
   const { user, logout } = useAuth();
@@ -48,6 +49,12 @@ export function HomePage() {
         navigate(`/doc/${doc.id}`, { state: { importWarnings: warnings } });
         return;
       }
+      if (isMarkdownFile(file)) {
+        const text = await file.text();
+        const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text);
+        navigate(`/md/${doc.id}`);
+        return;
+      }
       const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name));
       navigate(`/s/${sheet.id}`, { state: { importWarnings: warnings } });
     } catch (e) {
@@ -56,12 +63,12 @@ export function HomePage() {
     }
   };
 
-  // Spreadsheets, presentations, documents and stored files in one list, most recently edited first.
+  // Spreadsheets, presentations, documents, Markdown documents and stored files in one list, most recently edited first.
   const load = () =>
-    Promise.all([api.listSheets(), api.listDecks(), api.listDocs(), api.listFiles()])
-      .then(([s, d, t, f]) =>
+    Promise.all([api.listSheets(), api.listDecks(), api.listDocs(), api.listMarkdown(), api.listFiles()])
+      .then(([s, d, t, m, f]) =>
         setItems(
-          [...s.sheets, ...d.decks, ...t.docs, ...f.files.map((x): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', createdAt: x.createdAt, updatedAt: x.createdAt }))].sort((a, b) =>
+          [...s.sheets, ...d.decks, ...t.docs, ...m.docs, ...f.files.map((x): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', createdAt: x.createdAt, updatedAt: x.createdAt }))].sort((a, b) =>
             a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0,
           ),
         ),
@@ -113,7 +120,7 @@ export function HomePage() {
     <FileLibrary
       brand={
         <>
-          <Logo />
+          <HomeIcon />
           <span>FreeFlow Docs</span>
         </>
       }
@@ -159,11 +166,12 @@ export function HomePage() {
       onCreate={async (kind, title) => {
         if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title)).sheet.id}`);
         else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title)).deck.id}`);
+        else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title)).doc.id}`);
         else navigate(`/doc/${(await api.createDoc(title)).doc.id}`);
       }}
-      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT}`}
-      importLabel="Import Excel, PowerPoint, Word or PDF"
-      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx) or PDF (.pdf) file anywhere on this page."
+      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT}`}
+      importLabel="Import Excel, PowerPoint, Word, PDF or Markdown"
+      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf) or Markdown (.md) file anywhere on this page."
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => navigate(pathOf(s))}
@@ -175,17 +183,17 @@ export function HomePage() {
       rowActions={(s) => [
         { label: 'Open in new tab', onClick: () => void window.open(pathOf(s), '_blank') },
         {
-          label: s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' ? 'Download as Markdown' : s.kind === 'file' ? 'Download' : 'Download as Excel',
+          label: s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' || s.kind === 'markdown' ? 'Download as Markdown' : s.kind === 'file' ? 'Download' : 'Download as Excel',
           onClick: () => window.location.assign(s.kind === 'file' ? `/api/files/${s.id}/download` : `/api/files/${s.id}/export`),
         },
         ...(s.kind === 'sheet' ? [{ label: 'Create branch', onClick: () => setBranching(s) }] : []),
       ]}
       onRename={async (s, title) => {
-        await (s.kind === 'deck' ? api.renameDeck(s.id, title) : s.kind === 'doc' ? api.renameDoc(s.id, title) : api.renameSheet(s.id, title));
+        await (s.kind === 'deck' ? api.renameDeck(s.id, title) : s.kind === 'doc' ? api.renameDoc(s.id, title) : s.kind === 'markdown' ? api.renameMarkdown(s.id, title) : api.renameSheet(s.id, title));
         await load();
       }}
       onDelete={async (s) => {
-        await (s.kind === 'deck' ? api.deleteDeck(s.id) : s.kind === 'doc' ? api.deleteDoc(s.id) : s.kind === 'file' ? api.deleteFile(s.id) : api.deleteSheet(s.id));
+        await (s.kind === 'deck' ? api.deleteDeck(s.id) : s.kind === 'doc' ? api.deleteDoc(s.id) : s.kind === 'markdown' ? api.deleteMarkdown(s.id) : s.kind === 'file' ? api.deleteFile(s.id) : api.deleteSheet(s.id));
         await load();
       }}
     >

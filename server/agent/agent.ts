@@ -90,7 +90,7 @@ export class AgentService {
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || !['home', 'sheet', 'deck', 'doc'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (this.store.requestsToday(userId) >= this.dailyLimit) {
       throw new AgentError(429, "You've reached today's limit for the assistant. Try again tomorrow.");
     }

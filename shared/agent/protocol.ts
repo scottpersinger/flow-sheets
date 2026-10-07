@@ -33,6 +33,17 @@ export type AgentContext =
       cursorBlock: number;
       /** The selected text, if any (shortened). */
       selectedText?: string;
+    }
+  | {
+      page: 'markdown';
+      docId: string;
+      title: string;
+      /** Number of lines of Markdown text. */
+      lineCount: number;
+      /** Top-level Markdown blocks (what read_doc numbers). */
+      blockCount: number;
+      /** 1-based number of the block holding the cursor (0 when the document is empty). */
+      cursorBlock: number;
     };
 
 /** A tool call the browser must run (sheet tools and navigation), forwarded by the server. */

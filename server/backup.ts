@@ -30,7 +30,7 @@ export interface BackupOptions {
 
 export const DEFAULT_RETRY_DELAYS = [1_000, 5_000, 30_000, 120_000, 600_000];
 const DAY_MS = 24 * 60 * 60 * 1000;
-const FILE_KINDS: DocKind[] = ['sheet', 'deck', 'doc'];
+const FILE_KINDS: DocKind[] = ['sheet', 'deck', 'doc', 'markdown'];
 
 /** Keys in the store. Revisions are ISO timestamps, which sort chronologically as strings. */
 export const keys = {
