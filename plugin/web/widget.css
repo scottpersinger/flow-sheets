@@ -1,19 +1,40 @@
 /* Adjustments for running the Docs workbench inside ChatGPT's app frame. */
-/* The host measures the document to size the iframe: give the app an explicit height (set by host.ts). */
+
+/* The host measures the document to size the iframe and may lay the page out as a centered column: the app
+   decides its own height (set by host.ts) and always takes the full width. */
 html,
 body {
   height: auto;
+  width: 100%;
 }
 #root {
   height: var(--app-height, 720px);
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
 }
 #root > .workbench,
-#root > .docs-plugin .wb-back {
+#root > .home {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+#root > .home {
+  overflow: auto;
+}
+
+/* Header: a "back to the library" button where the app has its logo, and prompt buttons where it has the user. */
+.docs-plugin .wb-back {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
   border-radius: 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
   color: var(--text, #1f1f1f);
   text-decoration: none;
 }
@@ -24,13 +45,11 @@ body {
   display: flex;
   gap: 6px;
 }
-.docs-library {
-  height: 100%;
-  overflow: auto;
-  padding: 24px;
-  box-sizing: border-box;
-  background: var(--chrome, #f8f9fa);
+
+.docs-library .sheet-list tbody tr {
+  cursor: pointer;
 }
+
 .docs-toast {
   position: fixed;
   left: 50%;
@@ -42,14 +61,4 @@ body {
   border-radius: 8px;
   font-size: 13px;
   z-index: 50;
-}
-
-/* The library scrolls inside the frame like the home page does inside the window. */
-#root > .home.docs-library {
-  height: 100%;
-  overflow: auto;
-  box-sizing: border-box;
-}
-.docs-library .sheet-list tbody tr {
-  cursor: pointer;
 }
