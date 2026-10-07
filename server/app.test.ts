@@ -405,16 +405,19 @@ describe('documents', () => {
     expect(res.json().doc).toMatchObject({ title: 'Memo', kind: 'doc' });
     res = await app.inject({ method: 'GET', url: `/api/docs/${res.json().doc.id}`, headers: { cookie } });
     expect(res.json().doc.content.content[0]).toMatchObject({ type: 'heading', attrs: { level: 1 } });
-    // PDF import: a new document, with the original kept in the user's files.
+    // PDF import: stored as a file only; no document is created.
+    const docsBefore = (await app.inject({ method: 'GET', url: '/api/docs', headers: { cookie } })).json().docs.length;
     const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Length 40 >>\nstream\nBT /F1 12 Tf 72 700 Td (Hello PDF) Tj ET\nendstream\nendobj\n%%EOF');
-    res = await app.inject({ method: 'POST', url: '/api/docs/import?title=Scan', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: pdf });
+    res = await app.inject({ method: 'POST', url: '/api/import/pdf?filename=Scan.pdf', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: pdf });
     expect(res.statusCode).toBe(200);
-    expect(res.json().doc).toMatchObject({ title: 'Scan', kind: 'doc' });
+    expect(res.json().file).toMatchObject({ filename: 'Scan.pdf', type: 'application/pdf' });
     res = await app.inject({ method: 'GET', url: '/api/files', headers: { cookie } });
     expect(res.json().files[0]).toMatchObject({ filename: 'Scan.pdf', type: 'application/pdf' });
-    res = await app.inject({ method: 'POST', url: '/api/docs/import', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('%PDF-1.4\n%%EOF') });
+    res = await app.inject({ method: 'GET', url: '/api/docs', headers: { cookie } });
+    expect(res.json().docs.length).toBe(docsBefore);
+    res = await app.inject({ method: 'POST', url: '/api/import/pdf?filename=x.pdf', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('garbage') });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/No text/);
+    expect(res.json().error).toMatch(/not a valid PDF/);
     res = await app.inject({ method: 'POST', url: '/api/import/docx', headers: { cookie, 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }, payload: docx });
     expect(res.json().doc.content.content).toHaveLength(2);
     res = await app.inject({ method: 'POST', url: '/api/import/docx', headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('garbage') });

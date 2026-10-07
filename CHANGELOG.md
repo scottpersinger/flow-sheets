@@ -2,6 +2,20 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Import PDFs as stored PDF files, not converted docs
+
+Importing a PDF (file picker or drag and drop) now only stores it as a PDF file in the user's files, with no text extraction and no new document. I added `POST /api/import/pdf?filename=…` in `server/app.ts`. It rejects anything that isn't a valid PDF with "This file is not a valid PDF." and keeps the 20 MB limit. After import the home page opens the file's preview tab (`/f/:id`), and the file shows in the list. I removed the PDF branch from `/api/docs/import`, so `importPdf` is unused on import, and Word, Excel and PowerPoint import are unchanged. I updated the server test to check the stored file, that no document is created, and that invalid content is rejected. Typecheck and all tests pass. I didn't add a new assistant tool.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+Previously we made the home page "Import doc" button accept .pdf files and convert them to a new text document by extracting text (POST /api/docs/import, server/pdfImport.ts) while also saving the original PDF to the user's files. The user does not want conversion: PDFs should be left as PDFs. Change the behavior so that when a PDF is imported (file picker or drag and drop), the app only stores it as a PDF file in the user's files (same storage as generated PDFs, listed by list_files, previewable with a Download button in the file preview tab) and does NOT create a text document or extract text. Keep the 20 MB limit and reject invalid/non-PDF content with a clear error. After import, show the file in the home page list (or open its preview tab) the same way stored files appear today. Leave the text-extraction code unused on import; do not break other import formats. Example: importing "1685 13th st estimate.pdf" should result in a stored file "1685 13th st estimate.pdf" and no new document. Leave any doc already created from an earlier PDF import alone.
+
+Files: client/src/api.ts, client/src/pages/HomePage.tsx, server/app.test.ts, server/app.ts
+
+Job: 8b357cb3-0ab6-4f7b-8414-24a9dfc3dd65
+
 ## 2026-10-07 — Support importing PDF files in the Import doc button
 
 "Import doc" on the home page now accepts `.pdf` files, from the file picker and from drag and drop. Typecheck and all tests pass; I didn't run the app in a browser, and the extractor has only been tried on PDFs built in the tests, not real-world ones.
