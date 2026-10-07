@@ -7,7 +7,8 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import type { FileHub } from './files.ts';
-import { createMcpServer, INSTRUCTIONS, SERVER_CAPABILITIES, SERVER_INFO, type Bundle, type McpOptions } from './mcp.ts';
+import { createMcpServer, INSTRUCTIONS, MAX_IMPORT_BYTES, SERVER_CAPABILITIES, SERVER_INFO, type Bundle, type McpOptions } from './mcp.ts';
+import { ToolError } from './files.ts';
 import { OAuthError, type OAuthServer } from './oauth.ts';
 import { adaptTransport, discoverResult, isDiscover, presentAsSdkVersion, readJson } from './stateless.ts';
 
@@ -195,6 +196,40 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
         await mcp.connect(transport);
         await transport.handleRequest(req, res, body);
         return;
+      }
+
+      // --- Imports from the app: the bytes come straight from the iframe with a ticket from upload_ticket ---
+      if (p === '/plugin/import') {
+        // The app runs on an opaque origin inside ChatGPT, so this one route answers any origin.
+        res.setHeader('access-control-allow-origin', '*');
+        res.setHeader('access-control-allow-headers', 'content-type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204).end();
+          return;
+        }
+        if (req.method !== 'POST') {
+          res.writeHead(405).end();
+          return;
+        }
+        const userId = hub.redeemTicket(url.searchParams.get('ticket'));
+        if (!userId) return json(res, 401, { error: 'The upload ticket is missing, used or expired. Try again.' });
+        if (Number(req.headers['content-length'] ?? 0) > MAX_IMPORT_BYTES) return json(res, 413, { error: `Files must be under ${MAX_IMPORT_BYTES / 1024 / 1024} MB.` });
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const c of req) {
+          size += (c as Buffer).length;
+          if (size > MAX_IMPORT_BYTES) return json(res, 413, { error: `Files must be under ${MAX_IMPORT_BYTES / 1024 / 1024} MB.` });
+          chunks.push(c as Buffer);
+        }
+        try {
+          const service = hub.forUser(userId);
+          const r = await service.importFile(Buffer.concat(chunks), url.searchParams.get('name') ?? undefined, url.searchParams.get('title') ?? undefined);
+          service.setOpen({ kind: r.file.kind, id: r.file.id });
+          return json(res, 200, r);
+        } catch (e) {
+          if (e instanceof ToolError) return json(res, 400, { error: e.message });
+          throw e;
+        }
       }
 
       // --- Images and the app's assets ---

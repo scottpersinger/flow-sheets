@@ -30,7 +30,9 @@ plugin/
   on the server, then save. Annotations mark reads read-only and deletions destructive, which drives ChatGPT's
   "ask before changes" setting.
 - **Tools for the app only** (`_meta.ui.visibility: ["app"]`, hidden from the model): `app_state`, `get_file`,
-  `save_file`, `set_open_file`, `upload_image`. The app never calls the REST API; the iframe has no cookies.
+  `save_file`, `set_open_file`, `upload_image`, `upload_ticket`. The app never calls the REST API; the iframe
+  has no cookies. The library's Import tile posts the file's bytes to `/plugin/import` with a one-time ticket
+  from `upload_ticket` (the only route the app reaches directly, which is why it answers any origin).
 - **The app** is one UI resource (`ui://freeflow-docs/app.html`, `text/html;profile=mcp-app`) with the built
   bundle inlined. `docs_app` is the sidebar entrypoint (`openai/ui.entrypoints: [{type: "global"}]`);
   `open_doc` renders the same resource, so "open my Q3 plan" in any chat shows the editor.

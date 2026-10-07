@@ -13,7 +13,7 @@ import type { Doc } from '../../shared/doc.ts';
 import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, ToolError, type DeckEditTool, type DocEditTool, type FileKind, type SlideSpec } from './files.ts';
 
 // Hosts cache UI resources by URI: bump the version whenever the app changes shape.
-export const APP_URI = 'ui://freeflow-docs/app-v5.html';
+export const APP_URI = 'ui://freeflow-docs/app-v6.html';
 export const SERVER_INFO = { name: 'freeflow-docs', version: '0.2.0' };
 /** What the server advertises: tools, resources, and MCP Apps UI resources. */
 export const SERVER_CAPABILITIES = {
@@ -409,6 +409,12 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           throw e;
         }
       }),
+  );
+
+  server.registerTool(
+    'upload_ticket',
+    { description: 'A one-time ticket and URL for the app to upload a Word or PowerPoint file to import.', inputSchema: {}, ...appOnly(false) },
+    async () => guard(() => ok({ ticket: service.hub.issueTicket(service.userId), url: `${opts.publicUrl ?? ''}/plugin/import` })),
   );
 
   server.registerTool(

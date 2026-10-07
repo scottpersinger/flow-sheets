@@ -2,6 +2,7 @@
 // files the app uses, scoped to one account, plus the headless editing the model's tools need. Edits run the
 // app's own tools (client/src/agent/docTools.ts and deckTools.ts) against a controller that has no editor
 // view, so a tool behaves exactly as it does inside the app, then the result is saved.
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { runDeckTool } from '../../client/src/agent/deckTools.ts';
 import { importDocx, isDocx } from '../../server/docxImport.ts';
@@ -111,6 +112,8 @@ export class FileHub {
   readonly images: ImageStore;
   readonly publicUrl: string | null;
   private readonly byUser = new Map<string, FileService>();
+  /** One-time tickets letting the app upload a file for import without a bearer token (it has none). */
+  private readonly tickets = new Map<string, { userId: string; expires: number }>();
 
   constructor(opts: FileHubOptions) {
     this.db = opts.db;
@@ -150,6 +153,23 @@ export class FileHub {
   profile(userId: string): { id: string; email: string } | null {
     const row = this.db.prepare('SELECT id, email FROM users WHERE id = ?').get(userId) as { id: string; email: string } | undefined;
     return row ?? null;
+  }
+
+  /** A ticket the app presents when posting a file to /plugin/import; good for one upload within five minutes. */
+  issueTicket(userId: string): string {
+    const now = Date.now();
+    for (const [k, v] of this.tickets) if (v.expires < now) this.tickets.delete(k);
+    const ticket = randomBytes(24).toString('base64url');
+    this.tickets.set(ticket, { userId, expires: now + 5 * 60 * 1000 });
+    return ticket;
+  }
+
+  /** The account a ticket was issued to, consuming it; null when unknown or expired. */
+  redeemTicket(ticket: string | null | undefined): string | null {
+    if (!ticket) return null;
+    const t = this.tickets.get(ticket);
+    this.tickets.delete(ticket);
+    return t && t.expires >= Date.now() ? t.userId : null;
   }
 
   /** A stored image by id, whoever owns it: the iframe fetches images without credentials, so the id is the secret. */
