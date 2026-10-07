@@ -9,6 +9,15 @@ describe('slide link menu helpers', () => {
     expect(normalizeLinkUrl('javascript:alert(1)')).toBeNull();
     expect(normalizeLinkUrl('  ')).toBeNull();
   });
+  it('renders links as sl-link anchors that open in a new tab', async () => {
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { createElement } = await import('react');
+    const { Paragraphs } = await import('./SlideView.tsx');
+    const html = renderToStaticMarkup(createElement(Paragraphs, { paragraphs: [{ text: 'go', runs: [{ text: 'go', link: 'https://example.com/' }] }] }));
+    expect(html).toContain('class="sl-link"');
+    expect(html).toContain('href="https://example.com/"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
   it('shortens the label', () => {
     expect(linkLabel('https://example.com/x')).toBe('example.com/x');
     expect(linkLabel('mailto:a@b.c')).toBe('a@b.c');

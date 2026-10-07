@@ -2,6 +2,24 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Fix link popup not appearing on slide link click
+
+A plain click on a link in a slide text box now opens the link menu in the editor, but I haven't checked it in a browser. Playwright and a browser aren't installed here, so there is no Playwright test and I didn't confirm that "Open link" opens a new tab. Typecheck and `npm test` pass, but the one test I added only checks that links render as `sl-link` anchors that open in a new tab; it doesn't click anything.
+
+In `client/src/deck/SlideView.tsx`, `SlideView` now handles clicks on links itself. In the editor (not present mode or thumbnails), a plain click on a link in a text box that isn't being edited shows the existing menu (URL, Open link, Edit, Remove link) under the link. The menu hides on Escape, on a click elsewhere, or when the edited box changes.
+
+The existing caret-in-link behaviour is unchanged, so entering edit mode with the caret in a link should still show the menu. No new assistant tool.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+Follow-up to the earlier "Link popover in slide editor" change in client/src/deck/SlideView.tsx. The user reports that on slide 4 of deck "Supercog Ops Map" (id e1bdbda5-6778-42b4-8b14-642c7f4f078f), text box id muvwzwxj0w99 contains real hyperlinks (e.g. https://llmonster.atlassian.net/ ) which show underlined and give a hand cursor, but clicking on them shows NO link menu. Expected: in the editor (not present mode), a single click on a link in a slide text box, whether or not the box is already in text-edit mode, shows the floating menu under the link with the URL and actions "Open link" (new tab, noopener), "Edit", "Remove link". Currently the popover appears to require the caret to be inside the link in an active edit session; make it also appear on a plain click on a link in a selected, non-editing text box (and on first click when the box is not yet selected), and on entering edit mode with the caret in a link. Hide it on Escape, click elsewhere, or when the caret leaves the link. Please actually verify in a browser (e.g. with a Playwright test) that clicking the link on a slide opens the popup, and that clicking Open link opens the URL in a new tab.
+
+Files: client/src/deck/SlideView.tsx, client/src/deck/linkMenu.test.ts
+
+Job: ab57ed70-3f3d-42e5-a4ac-21908eb4dd53
+
 ## 2026-10-07 — Link popover in slide editor
 
 Clicking or placing the caret inside a link while editing a slide text box now shows a small floating menu under the link. It shows the URL with "Open link" (new tab, noopener), "Edit" (prompts for URL and label) and "Remove link" (keeps the text). It hides when the caret leaves the link, the selection becomes a range, or you press Escape. Typecheck and tests pass, but the tests cover only the URL helpers; I didn't try the popover in a browser, including on slide 4 of "Supercog Ops Map".

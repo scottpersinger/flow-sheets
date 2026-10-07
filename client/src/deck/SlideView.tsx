@@ -521,8 +521,34 @@ function TextEditor({ initial, onCommit, onStop, style }: { initial: Paragraph[]
 
 export function SlideView({ slide, theme: themeId, scale, preview, editing, onElementMouseDown, onElementDoubleClick, children, className }: SlideViewProps) {
   const theme = THEMES[themeId];
+  // On the editor canvas (not present mode or thumbnails) a plain click on a link of a non-editing box shows the link menu.
+  const [linkAnchor, setLinkAnchor] = useState<HTMLAnchorElement | null>(null);
+  useEffect(() => {
+    if (!linkAnchor) return;
+    const down = (e: globalThis.MouseEvent) => {
+      const t = e.target as Element | null;
+      if (!t?.closest?.('.doc-link-bubble') && !linkAnchor.contains(t)) setLinkAnchor(null);
+    };
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setLinkAnchor(null);
+    document.addEventListener('mousedown', down, true);
+    document.addEventListener('keydown', key, true);
+    return () => {
+      document.removeEventListener('mousedown', down, true);
+      document.removeEventListener('keydown', key, true);
+    };
+  }, [linkAnchor]);
+  useEffect(() => setLinkAnchor(null), [editing?.id]);
   return (
-    <div className={`slide-scaler${className ? ` ${className}` : ''}`} style={{ width: SLIDE_W * scale, height: SLIDE_H * scale }}>
+    <div
+      className={`slide-scaler${className ? ` ${className}` : ''}`}
+      style={{ width: SLIDE_W * scale, height: SLIDE_H * scale }}
+      onClick={(e) => {
+        if (!onElementMouseDown || e.metaKey || e.ctrlKey) return;
+        const a = (e.target as Element).closest?.('a.sl-link');
+        if (a && !a.closest('.sl-editing')) setLinkAnchor(a as HTMLAnchorElement);
+      }}
+    >
+      {linkAnchor && linkAnchor.isConnected && <LinkBubble anchor={linkAnchor} onChange={() => setLinkAnchor(null)} />}
       <div className="slide" style={{ ...themeVars(theme), width: SLIDE_W, height: SLIDE_H, transform: `scale(${scale})`, background: slide.bg ?? theme.bg }}>
         {slide.elements.map((el) => {
           const box = boxStyle(el, preview?.[el.id]);
