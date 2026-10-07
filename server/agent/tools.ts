@@ -251,8 +251,12 @@ export const schemas = {
       format: z.enum(['pdf']).default('pdf').describe('File format. Only "pdf" is supported.'),
     })
     .describe(
-      "Download a presentation to the user's computer as a PDF: every slide drawn exactly as present mode draws it, one 960×540 page per slide, in order. The browser starts the download. Returns the filename, page count and a download URL in case the browser blocks the automatic download.",
+      "Export a presentation as a PDF: every slide drawn exactly as present mode draws it, one 960×540 page per slide, in order. The PDF is stored in the user's files and shown in the chat as a file button that opens a preview tab (with a Download button). Returns file_id, filename, pages, url (inline) and download_url; open_file shows the preview.",
     ),
+  list_files: z
+    .object({ query: z.string().optional().describe('Only files whose name contains this text (case-insensitive).') })
+    .describe("List the user's stored files (generated PDFs and uploads), most recent first (at most 50): id, filename, type, size, created_at."),
+  open_file: z.object({ file_id: z.string() }).describe('Open a stored file in the app (the user navigates to a tab that previews it, with a Download button; any open spreadsheet, presentation or document closes). Find ids with list_files.'),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),

@@ -51,6 +51,17 @@ export function openDb(file: string): DB {
       created_at TEXT NOT NULL
     );
 
+    -- Stored files (generated PDFs, uploads); the bytes are files on disk (see server/files.ts).
+    CREATE TABLE IF NOT EXISTS stored_files (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS stored_files_owner ON stored_files(owner_id, created_at);
+
     -- Agent chat. Each user has one active conversation (ended_at IS NULL); resetting ends it and starts a new one.
     CREATE TABLE IF NOT EXISTS agent_conversations (
       id TEXT PRIMARY KEY,

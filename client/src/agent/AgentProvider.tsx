@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
 import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, type AgentContext, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
-import type { SheetMeta } from '../../../shared/types.ts';
+import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
@@ -337,6 +337,25 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return openDocument<DocController>(id, '/doc', 'document');
   };
 
+  /** Save whatever is open, then show a stored file's preview tab. */
+  const openFileById = async (id: string): Promise<StoredFile> => {
+    let file: StoredFile;
+    try {
+      file = (await api.getFile(id)).file;
+    } catch {
+      throw new ToolError(`No file with id "${id}". Use list_files to find ids.`);
+    }
+    await sheetRef.current?.ctl.saver.flush();
+    const deck = deckRef.current;
+    if (deck) {
+      deck.ctl.stopEditing();
+      await deck.ctl.saver.flush();
+    }
+    await docRef.current?.ctl.saver.flush();
+    navigate(`/f/${encodeURIComponent(id)}`);
+    return file;
+  };
+
   const requestAppChange = async (title: string, spec: string): Promise<{ id: string }> => {
     try {
       const { job } = await api.createJob(title, spec);
@@ -404,14 +423,9 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           deckTitle: deckRef.current?.meta.title ?? null,
           loadDeckTitle: async (id) => (await api.getDeck(id)).meta.title,
           makePdf: deckToPdf,
-          saveFile: (name, file) => {
-            const url = URL.createObjectURL(file);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = name;
-            a.click();
-            return url;
-          },
+          uploadFile: api.uploadFile,
+          listFiles: async () => (await api.listFiles()).files,
+          openFile: openFileById,
           attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
           group,
           openSheet: openSheetById,
@@ -423,7 +437,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           fetchConnectorData: api.fetchConnectorData,
         });
         results.push({ id: call.id, content });
-        updateTool(call.id, { status: 'ok' });
+        updateTool(call.id, { status: 'ok', ...(call.name === 'export_deck' ? { result: content } : {}) });
       } catch (e) {
         const message = e instanceof ToolError ? e.message : `The tool failed: ${e instanceof Error ? e.message : String(e)}`;
         if (!(e instanceof ToolError)) console.error(e);

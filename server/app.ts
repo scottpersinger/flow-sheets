@@ -8,7 +8,8 @@ import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { importDocx } from './docxImport.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
+import { FileStore } from './files.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, PREVIEW_FILE_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { AgentStore } from './agent/store.ts';
@@ -35,6 +36,7 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
+const MAX_STORED_FILE_BYTES = 50 * 1024 * 1024;
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -124,6 +126,8 @@ export async function buildApp(opts: AppOptions) {
   };
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
   await images.init();
+  const storedFiles = new FileStore(db, path.join(opts.dataDir, 'files'));
+  await storedFiles.init();
   // Every save and upload also goes to the object store, and a daily pass snapshots the database and
   // re-uploads anything missing (backup.ts). Restore with `npm run r2 restore <dir>`.
   const blob = opts.blob === undefined ? (() => { const cfg = r2FromEnv(); return cfg ? new S3ObjectStore(cfg) : null; })() : opts.blob;
@@ -153,6 +157,7 @@ export async function buildApp(opts: AppOptions) {
   );
   // Raw cell image uploads. Images are stored as files and cells only reference them, so workbook saves
   // (JSON, under the default body limit) stay small however large the images are.
+  app.addContentTypeParser('application/pdf', { parseAs: 'buffer', bodyLimit: MAX_STORED_FILE_BYTES }, (_req, body, done) => done(null, body));
   app.addContentTypeParser(CELL_IMAGE_TYPES, { parseAs: 'buffer', bodyLimit: MAX_CELL_IMAGE_BYTES }, (_req, body, done) => done(null, body));
 
   app.decorate('connectors', connectors);
@@ -682,6 +687,55 @@ export async function buildApp(opts: AppOptions) {
         if (e instanceof ExportError) return reply.code(400).send({ error: e.message });
         throw e;
       }
+    });
+
+    // --- Stored files (generated PDFs, uploads; server/files.ts) ----------------------------------
+    // Upload: the raw bytes as the body with their content type; the name in the x-filename header (URL-encoded).
+    r.post('/api/files', async (req, reply) => {
+      const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: 'Send the file as the request body.' });
+      let name = '';
+      try {
+        name = decodeURIComponent(String(req.headers['x-filename'] ?? ''));
+      } catch {
+        // Malformed name: fall back to the default below.
+      }
+      name = name.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'file';
+      return { file: await storedFiles.create(req.user!.id, name, type, body) };
+    });
+
+    r.get('/api/files', async (req) => ({ files: storedFiles.list(req.user!.id) }));
+
+    const storedFile = (req: { user?: { id: string } | null; params: unknown }) => {
+      const { id } = req.params as { id: string };
+      return /^[0-9a-f-]{36}$/.test(id) ? storedFiles.get(req.user!.id, id) : null;
+    };
+
+    r.get('/api/files/:id/meta', async (req, reply) => {
+      const f = storedFile(req);
+      return f ? { file: f.meta } : reply.code(404).send({ error: 'File not found' });
+    });
+
+    // Inline: only PDFs and images are served with their own type; anything else is a plain download.
+    r.get('/api/files/:id', async (req, reply) => {
+      const f = storedFile(req);
+      if (!f) return reply.code(404).send({ error: 'File not found' });
+      if (!PREVIEW_FILE_TYPES.includes(f.meta.type)) return attachment(reply, f.meta.filename, 'application/octet-stream').send(createReadStream(f.file));
+      reply.header('Content-Type', f.meta.type).header('Content-Disposition', 'inline').header('Cache-Control', 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff');
+      return reply.send(createReadStream(f.file));
+    });
+
+    r.get('/api/files/:id/download', async (req, reply) => {
+      const f = storedFile(req);
+      if (!f) return reply.code(404).send({ error: 'File not found' });
+      return attachment(reply, f.meta.filename, f.meta.type || 'application/octet-stream').send(createReadStream(f.file));
+    });
+
+    r.delete('/api/files/:id', async (req, reply) => {
+      const f = storedFile(req);
+      if (!f || !(await storedFiles.delete(req.user!.id, f.meta.id))) return reply.code(404).send({ error: 'File not found' });
+      return { ok: true };
     });
 
     // --- Trash: files deleted in the last 30 days, kept in the off-box copy (server/backup.ts) ---------

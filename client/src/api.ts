@@ -2,7 +2,7 @@ import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../sha
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import type { Deck } from '../../shared/deck.ts';
 import type { Doc } from '../../shared/doc.ts';
-import { CELL_IMAGE_TOO_LARGE, type DeletedFile, type SheetMeta, type Workbook } from '../../shared/types.ts';
+import { CELL_IMAGE_TOO_LARGE, type DeletedFile, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 
 export interface User {
   id: string;
@@ -63,8 +63,25 @@ async function uploadImage(file: Blob): Promise<string> {
   return (data as { url: string }).url;
 }
 
+/** Store a file (generated PDF, upload) on the server. */
+async function uploadFile(name: string, file: Blob): Promise<StoredFile> {
+  const res = await fetch('/api/files', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(name) },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `File upload failed (${res.status})`);
+  return (data as { file: StoredFile }).file;
+}
+
 export const api = {
   uploadImage,
+  uploadFile,
+  listFiles: () => request<{ files: StoredFile[] }>('GET', '/api/files'),
+  getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
+  deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
   me: () => request<{ user: User | null; googleLogin: boolean }>('GET', '/api/auth/me'),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
   register: (email: string, password: string) => request<{ pending: true; email: string }>('POST', '/api/auth/register', { email, password }),

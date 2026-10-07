@@ -228,8 +228,11 @@ describe('agent deck tools', () => {
     const saved: { name: string; size: number }[] = [];
     env.deckTitle = 'BizTrip: Business Risk Review';
     env.makePdf = async (d) => new Blob([`pages:${d.slides.length}`]);
-    env.saveFile = (name, file) => (saved.push({ name, size: file.size }), 'blob:x');
-    expect(await call('export_deck', {})).toMatchObject({ filename: 'BizTrip_Business_Risk_Review.pdf', pages: 2, download_url: 'blob:x' });
+    env.uploadFile = async (name, file) => {
+      saved.push({ name, size: file.size });
+      return { id: 'f1', filename: name, type: file.type, size: file.size, createdAt: '', url: '/api/files/f1', downloadUrl: '/api/files/f1/download' };
+    };
+    expect(await call('export_deck', {})).toMatchObject({ file_id: 'f1', filename: 'BizTrip_Business_Risk_Review.pdf', pages: 2, url: '/api/files/f1', download_url: '/api/files/f1/download' });
     expect(saved).toEqual([{ name: 'BizTrip_Business_Risk_Review.pdf', size: 7 }]);
 
     env.loadDeck = async (id) => {
