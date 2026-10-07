@@ -12,7 +12,7 @@ import type { ThemeId } from '../../shared/deck.ts';
 import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, SHEET_EDIT_TOOLS, ToolError, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 // Hosts cache UI resources by URI: bump the version whenever the app changes shape.
-export const APP_URI = 'ui://freeflow-docs/app-v8.html';
+export const APP_URI = 'ui://freeflow-docs/app-v9.html';
 export const SERVER_INFO = { name: 'freeflow-docs', version: '0.2.0' };
 /** What the server advertises: tools, resources, and MCP Apps UI resources. */
 export const SERVER_CAPABILITIES = {
