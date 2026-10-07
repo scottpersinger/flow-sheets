@@ -2,6 +2,27 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Support importing PDF files in the Import doc button
+
+"Import doc" on the home page now accepts `.pdf` files, from the file picker and from drag and drop. Typecheck and all tests pass; I didn't run the app in a browser, and the extractor has only been tried on PDFs built in the tests, not real-world ones.
+
+- **What it does:** `POST /api/docs/import` detects a PDF, extracts its text, and creates a new document named after the filename without the extension. Lines are grouped into paragraphs by vertical gaps, and larger text becomes heading blocks. The original is also saved in the user's files as `<title>.pdf`.
+- **Errors and limits:** the 20 MB limit applies. Files with no extractable text (scanned images), invalid files and password-protected PDFs return a clear 400 error. The other import formats are unchanged.
+- **No library installed:** I couldn't install `pdf-parse` or `pdfjs-dist` here because `npm install` needs approval I didn't have. Instead I wrote a small extractor, `server/pdfImport.ts`, that uses `node:zlib` to read page content streams. It works on ordinary text PDFs. PDFs with custom font encodings, or text stored in object streams, may come out garbled or fail with the no-text error. Swapping in `unpdf` or `pdfjs-dist` for `readContent` would fix that.
+- **New assistant tool:** none.
+
+I added `server/pdfImport.test.ts` and an endpoint case in `server/app.test.ts`.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+On the home page of the app (list of spreadsheets, presentations and documents), there is an "Import doc" button that imports a file as a new text document. Requested: it should also accept a PDF file (.pdf, application/pdf) in the file picker (and drag/drop if supported today), and create a new text document from it. Extract the PDF's text server-side (use an existing dependency if present, otherwise a lightweight PDF text-extraction library such as pdf-parse/pdfjs-dist), preserve paragraph breaks, and turn obvious headings into heading blocks where feasible. Title the new doc from the PDF filename without the extension. Show a clear error if the PDF has no extractable text (e.g. scanned images) or fails to parse, and enforce a sensible size limit. Keep existing import formats working unchanged. After import, open the new doc or show it in the list, matching how current imports behave. Also keep the original PDF stored in the user's files if that is easy within the existing file storage.
+
+Files: client/src/importFile.ts, client/src/pages/HomePage.tsx, server/app.test.ts, server/app.ts, server/pdfImport.test.ts, server/pdfImport.ts
+
+Job: 7a70c199-a0f3-431e-8aae-503567480321
+
 ## 2026-10-07 — Rename home to FreeFlow Docs; move links into overflow menu
 
 The home header now says "FreeFlow Docs", and the browser tab title on the home page is set to "FreeFlow Docs" too. Export all, Trash, Connectors and Changes are gone from the header row. They now sit in a "⋯" button (aria-label "More") next to Assistant. The dropdown items use the same targets as before: the `/api/export.zip` link, the Trash modal, `/connectors` and `/changes`. The menu closes on outside click, Escape, or after you pick an item.
