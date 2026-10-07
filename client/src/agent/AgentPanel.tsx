@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
+import { FileChip, fileOfResult } from '../components/FileChip.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { ASSISTANT_PANEL } from '../panelSize.ts';
 import { useAgent } from './AgentProvider.tsx';
@@ -260,6 +261,8 @@ function ToolRow({ item }: { item: ToolItem }) {
     if (sheet.ctl.activeTabId !== target.tabId) sheet.ctl.switchTab(target.tabId);
     sheet.ctl.selectRange(target.range);
   };
+  const file = item.status === 'ok' ? fileOfResult(item.result) : null;
+  if (file) return <FileChip file={file} />;
   return (
     <div className={`agent-tool ${item.status}`} title={item.error}>
       <span className="agent-tool-icon" aria-hidden="true">

@@ -23,7 +23,7 @@ import {
   type ThemeId,
 } from '../../../shared/deck.ts';
 import { boxFromEnds, lineEnds, lineFromShape } from '../../../shared/lines.ts';
-import { checkCellImage } from '../../../shared/types.ts';
+import { checkCellImage, type StoredFile } from '../../../shared/types.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { SlideRender } from '../deck/renderSlide.ts';
 import { ToolError } from './toolError.ts';
@@ -204,8 +204,8 @@ export interface RenderSlideEnv {
   loadDeckTitle?(id: string): Promise<string>;
   /** Assemble a PDF of every slide (client/src/deck/pdf.ts). */
   makePdf?(deck: Deck): Promise<Blob>;
-  /** Start a browser download; returns a URL the user can open if the browser blocks it. */
-  saveFile?(name: string, file: Blob): string;
+  /** Store a file on the server (the chat shows it as a file button). */
+  uploadFile?(name: string, file: Blob): Promise<StoredFile>;
   /** Attach a picture to the message that carries the tool results back to Claude; false if no room is left. */
   attachImage?(image: AgentImage): boolean;
 }
@@ -262,7 +262,7 @@ export async function renderSlideTool(call: ClientToolCall, env: RenderSlideEnv)
 /** export_deck: download the deck as a PDF, one slide per page. */
 export async function exportDeckTool(call: ClientToolCall, env: RenderSlideEnv): Promise<string> {
   const i = call.input;
-  if (!env.makePdf || !env.saveFile) throw new ToolError('Exporting presentations is not available here.');
+  if (!env.makePdf || !env.uploadFile) throw new ToolError('Exporting presentations is not available here.');
   const deckId = typeof i.deck_id === 'string' && i.deck_id ? i.deck_id : null;
   let deck: Deck;
   let title: string;
@@ -281,8 +281,15 @@ export async function exportDeckTool(call: ClientToolCall, env: RenderSlideEnv):
   const pdf = await env.makePdf(deck);
   const base = title.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') || 'Presentation';
   const filename = `${base}.pdf`;
-  const url = env.saveFile(filename, pdf);
-  return JSON.stringify({ filename, pages: deck.slides.length, download_url: url, note: 'The browser download has started. If it was blocked, the user can open download_url.' });
+  const file = await env.uploadFile(filename, pdf.type ? pdf : new Blob([pdf], { type: 'application/pdf' }));
+  return JSON.stringify({
+    file_id: file.id,
+    filename,
+    pages: deck.slides.length,
+    url: file.url,
+    download_url: file.downloadUrl,
+    note: 'The PDF is stored and shown in the chat as a file button; clicking it opens a preview tab with a Download button.',
+  });
 }
 
 /** A question to ask before a destructive deck call, or null. */

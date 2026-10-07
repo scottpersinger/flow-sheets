@@ -95,6 +95,8 @@ export type ChatItem =
       input: Record<string, unknown>;
       status: 'running' | 'ok' | 'error';
       error?: string;
+      /** The result text of a tool that produces a file (export_deck), so the chat can show a file button. */
+      result?: string;
     };
 
 /**
@@ -188,6 +190,9 @@ export const CLIENT_TOOLS = new Set([
   'render_slide',
   // Rendered like render_slide, assembled into a file and downloaded by the browser.
   'export_deck',
+  // Stored files: list them, or open one in a preview tab.
+  'list_files',
+  'open_file',
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',

@@ -6,7 +6,7 @@ import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { toCellInput, type FetchResult } from '../../../shared/connectors.ts';
 import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '../../../shared/agent/sheetRead.ts';
 import { hyperlinkFormula, safeLinkUrl } from '../../../shared/links.ts';
-import { checkCellImage, hasContent, isDataImage, type CellStyle, type Tab } from '../../../shared/types.ts';
+import { checkCellImage, hasContent, isDataImage, type CellStyle, type StoredFile, type Tab } from '../../../shared/types.ts';
 import { CellError } from '../../../shared/values.ts';
 import { deckOutline } from '../../../shared/deck.ts';
 import type { DeckController } from '../deck/controller.ts';
@@ -36,6 +36,10 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   openDeck(id: string): Promise<DeckController>;
   /** Navigate to a text document and resolve once it has loaded. */
   openDoc(id: string): Promise<DocController>;
+  /** The user's stored files, most recent first. */
+  listFiles?(): Promise<StoredFile[]>;
+  /** Navigate to a stored file's preview tab; resolves with the file once it is shown. */
+  openFile?(id: string): Promise<StoredFile>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
   /** Queue a background research task; resolves with the job id. */
@@ -169,6 +173,20 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
   }
   if (call.name === 'render_slide') return renderSlideTool(call, env);
   if (call.name === 'export_deck') return exportDeckTool(call, env);
+  if (call.name === 'list_files') {
+    if (!env.listFiles) throw new ToolError('Stored files are not available here.');
+    const q = typeof i.query === 'string' ? i.query.trim().toLowerCase() : '';
+    const all = (await env.listFiles()).filter((f) => !q || f.filename.toLowerCase().includes(q));
+    return JSON.stringify({
+      total: all.length,
+      files: all.slice(0, 50).map((f) => ({ id: f.id, filename: f.filename, type: f.type, size: f.size, created_at: f.createdAt, url: f.url, download_url: f.downloadUrl })),
+    });
+  }
+  if (call.name === 'open_file') {
+    if (!env.openFile) throw new ToolError('Stored files are not available here.');
+    const f = await env.openFile(String(i.file_id));
+    return JSON.stringify({ opened: true, file_id: f.id, filename: f.filename, type: f.type, size: f.size });
+  }
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
   if (call.name === 'open_doc') {
     const doc = await env.openDoc(String(i.doc_id));

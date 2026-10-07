@@ -2,6 +2,37 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — File chips in chat, stored PDF files with preview tab and download
+
+Stored files are in, and `export_deck` now uploads its PDF and shows a file chip in the chat. `npm run typecheck` and `npm test` both pass. I didn't run the app, so the chip, the preview tab and the home list haven't been tried in a browser.
+
+- **Server:** stored files with `GET/POST /api/files`, `/api/files/<id>` (inline), `/api/files/<id>/download`, `/api/files/<id>/meta` and `DELETE /api/files/<id>`. Only the owner can read a file.
+- **Client:** a `/f/:id` page previews PDFs in an iframe and images in the page, with a Download button in the toolbar. Other types get an info page with just Download. Files also appear in the home list, newest first.
+- **Chat chip:** it shows an icon, the filename and the page count, for example "BizTrip_Business_Risk_Review.pdf · 10 pages". Clicking it opens the preview tab, and its ↓ button downloads the file.
+- **Chip after reload:** the chip only shows for the current chat session, because the transcript the server rebuilds on reload doesn't carry tool results. The file stays in the home list. Fixing it needs a change in `server/agent/agent.ts`, which I left alone.
+- **Download:** `export_deck` no longer starts an automatic browser download; the chip and the tab's Download button replace it.
+- **Context:** the assistant's context treats the file tab as the home page.
+- **Tools:**
+  - `export_deck(deck_id?, format?)` now uploads the PDF and returns `{file_id, filename, pages, url, download_url}`.
+  - `list_files(query?)` lists stored files, newest first (at most 50): id, filename, type, size, created_at, urls.
+  - `open_file(file_id)` opens that file's preview tab.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+Context: the assistant now has an export_deck tool (client/src/deck/pdf.ts builds a PDF of a deck, one 960x540 page per slide) that triggers a browser download and returns {filename, pages, download_url (blob: URL)}. The user wants two improvements.
+
+1) Chat file button: when a tool produces a file (starting with export_deck), render a file "chip"/button in the assistant chat message representing the file (icon by type, filename, size/page count). Clicking it downloads the file (re-download works any time, so the blob must not be a throwaway; persist it, see 2). export_deck should still not require the user to hunt for a blocked download: the chip is the primary affordance, and the automatic browser download may be kept or made optional.
+
+2) Stored files with preview: add server-side storage for generated/uploaded files (like the existing stored /api/images/... addresses): store the PDF bytes, with id, filename, mime type, size, created_at, owner, and an /api/files/<id> URL (inline) plus /api/files/<id>/download (Content-Disposition: attachment). Add a "file" item type that can be opened in an app tab: for known previewable types (PDF first; images could follow) opening the file shows an in-app preview (e.g. embedded PDF viewer/iframe) in a tab, with a raw "Download" button in the tab toolbar. For unknown types, show a file info page with just the Download button. Clicking the chat chip should open the file in a tab (preview) and also offer download; the tab's Download button gives the raw file. Files should appear in the user's home list alongside sheets/decks/docs (list of files, most recent first).
+
+Assistant tool changes: export_deck should upload the generated PDF to file storage and return {file_id, filename, pages, url, download_url}; the chat renders the chip from that result. Also add list_files and open_file tools (open_file opens the file's tab) so the assistant can open stored files for the user. Example: exporting "BizTrip: Business Risk Review" (10 slides) yields a chip "BizTrip_Business_Risk_Review.pdf · 10 pages"; clicking it opens a PDF preview tab with a Download button.
+
+Files: client/src/agent/AgentPanel.tsx, client/src/agent/AgentProvider.tsx, client/src/agent/clientTools.test.ts, client/src/agent/clientTools.ts, client/src/agent/deckTools.test.ts, client/src/agent/deckTools.ts, client/src/agent/describe.ts, client/src/api.ts, client/src/components/FileChip.tsx, client/src/main.tsx, client/src/pages/FilePage.tsx, client/src/pages/HomePage.tsx, client/src/styles.css, server/agent/prompt.ts, server/agent/tools.ts, server/app.test.ts, server/app.ts, server/db.ts, server/files.ts, shared/agent/protocol.ts, shared/types.ts
+
+Job: 985796be-376b-461d-a12b-76b74d534459
+
 ## 2026-10-07 — Add a tool to download a deck as PDF
 
 I added an `export_deck` assistant tool. It renders every slide of a presentation with the same renderer as `render_slide` and present mode. It assembles them into one PDF with one 960×540 page per slide, in order, and starts a browser download. Typecheck and tests pass. The tests use a stand-in for the slide renderer, and I haven't run the real browser export, so the fonts, theme and images in an actual PDF are unchecked.

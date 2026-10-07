@@ -98,7 +98,11 @@ export function toolLabel(name: string, i: Input): string {
     case 'set_deck_theme':
       return `Changed the theme to ${i.theme}`;
     case 'export_deck':
-      return 'Downloaded the presentation as a PDF';
+      return 'Exported the presentation as a PDF';
+    case 'list_files':
+      return 'Looked through the stored files';
+    case 'open_file':
+      return 'Opened a file';
     case 'render_slide':
       return `Checked how slide ${i.slide} looks`;
     case 'open_doc':

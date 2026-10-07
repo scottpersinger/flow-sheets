@@ -248,6 +248,20 @@ describe('agent sheet tools', () => {
   });
 });
 
+describe('stored files', () => {
+  it('lists files and opens one', async () => {
+    const { env, call } = setup();
+    const f = (id: string, filename: string) => ({ id, filename, type: 'application/pdf', size: 10, createdAt: '2026-01-01', url: `/api/files/${id}`, downloadUrl: `/api/files/${id}/download` });
+    const opened: string[] = [];
+    env.listFiles = async () => [f('a', 'Report.pdf'), f('b', 'Other.pdf')];
+    env.openFile = async (id) => (opened.push(id), f(id, 'Report.pdf'));
+    const listed = await call('list_files', { query: 'report' });
+    expect(listed).toMatchObject({ total: 1, files: [{ id: 'a', filename: 'Report.pdf', download_url: '/api/files/a/download' }] });
+    expect(await call('open_file', { file_id: 'a' })).toMatchObject({ opened: true, file_id: 'a', filename: 'Report.pdf' });
+    expect(opened).toEqual(['a']);
+  });
+});
+
 describe('ingest_connector_data', () => {
   const result = (rows: FetchResult['rows'], truncated = false): FetchResult => ({
     handle: 'h1',

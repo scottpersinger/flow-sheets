@@ -482,6 +482,42 @@ describe('presentations', () => {
   });
 });
 
+describe('stored files', () => {
+  it('stores PDFs per owner, serves them inline and as downloads, and lists them newest first', async () => {
+    const { cookie } = await signUp(app, box, 'files@x.com');
+    const { cookie: other } = await signUp(app, box, 'files2@x.com');
+    const pdf = Buffer.from('%PDF-1.4 test');
+    let res = await app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'application/pdf', 'x-filename': encodeURIComponent('BizTrip Review.pdf') }, payload: pdf });
+    expect(res.statusCode).toBe(200);
+    const { file } = res.json();
+    expect(file).toMatchObject({ filename: 'BizTrip Review.pdf', type: 'application/pdf', size: pdf.length, url: `/api/files/${file.id}`, downloadUrl: `/api/files/${file.id}/download` });
+    res = await app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'application/octet-stream', 'x-filename': 'a.bin' }, payload: Buffer.from('xyz') });
+    const second = res.json().file;
+
+    res = await app.inject({ method: 'GET', url: file.url, headers: { cookie } });
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toBe('inline');
+    expect(res.rawPayload.equals(pdf)).toBe(true);
+    res = await app.inject({ method: 'GET', url: file.downloadUrl, headers: { cookie } });
+    expect(res.headers['content-disposition']).toContain('attachment; filename="BizTrip Review.pdf"');
+    // Unknown types are never served inline.
+    res = await app.inject({ method: 'GET', url: second.url, headers: { cookie } });
+    expect(res.headers['content-disposition']).toContain('attachment');
+
+    res = await app.inject({ method: 'GET', url: '/api/files', headers: { cookie } });
+    expect(res.json().files.map((f: { id: string }) => f.id)).toEqual([second.id, file.id]);
+    expect(res.json().files).toHaveLength(2);
+
+    // Other users and signed-out requests can't see it.
+    expect((await app.inject({ method: 'GET', url: file.url, headers: { cookie: other } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/api/files', headers: { cookie: other } })).json().files).toEqual([]);
+    expect((await app.inject({ method: 'GET', url: file.url })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'DELETE', url: file.url, headers: { cookie: other } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'DELETE', url: file.url, headers: { cookie } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `${file.url}/meta`, headers: { cookie } })).statusCode).toBe(404);
+  });
+});
+
 describe('cell images', () => {
   it('stores large images as files referenced from cells, readable only by their owner', async () => {
     const { cookie } = await signUp(app, box, 'img@x.com');

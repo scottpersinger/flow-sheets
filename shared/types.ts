@@ -165,3 +165,20 @@ export function newTab(id: string, name: string): Tab {
 export function newWorkbook(firstTabId: string): Workbook {
   return { version: 1, tabs: [newTab(firstTabId, 'Sheet1')] };
 }
+
+/** A stored file (generated PDF, upload): metadata only; the bytes are served from `url` / `downloadUrl`. */
+export interface StoredFile {
+  id: string;
+  filename: string;
+  /** MIME type. */
+  type: string;
+  size: number;
+  createdAt: string;
+  /** Inline address (for previews). */
+  url: string;
+  /** Address that downloads the raw file (Content-Disposition: attachment). */
+  downloadUrl: string;
+}
+
+/** Types the app can preview in a tab; everything else gets an info page with a Download button. */
+export const PREVIEW_FILE_TYPES = ['application/pdf', ...['image/png', 'image/jpeg', 'image/gif', 'image/webp']];

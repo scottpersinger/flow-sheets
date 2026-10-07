@@ -5,10 +5,14 @@ import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
+import { fileIcon } from '../components/FileChip.tsx';
 import { DeckIcon, DocIcon, Logo } from '../components/Logo.tsx';
 import { ConfirmModal, Modal, PromptModal } from '../components/Modal.tsx';
 import { useFavicon } from '../favicon.ts';
 import { checkImportFile, isPowerPointFile, isWordFile, pickImportFile, titleFromFileName } from '../importFile.ts';
+
+/** A row of the home list: a spreadsheet, presentation, document or stored file. */
+type HomeItem = Omit<SheetMeta, 'kind'> & { kind: SheetMeta['kind'] | 'file' };
 
 function formatWhen(iso: string): string {
   const d = new Date(iso);
@@ -21,11 +25,11 @@ export function HomePage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   useFavicon('home');
-  const [sheets, setSheets] = useState<SheetMeta[] | null>(null);
+  const [sheets, setSheets] = useState<HomeItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState<'sheet' | 'deck' | 'doc' | null>(null);
-  const [renaming, setRenaming] = useState<SheetMeta | null>(null);
-  const [deleting, setDeleting] = useState<SheetMeta | null>(null);
+  const [renaming, setRenaming] = useState<HomeItem | null>(null);
+  const [deleting, setDeleting] = useState<HomeItem | null>(null);
   const [filter, setFilter] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
@@ -60,8 +64,8 @@ export function HomePage() {
 
   // Spreadsheets, presentations and documents in one list, most recently edited first.
   const load = () =>
-    Promise.all([api.listSheets(), api.listDecks(), api.listDocs()])
-      .then(([s, d, t]) => setSheets([...s.sheets, ...d.decks, ...t.docs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))))
+    Promise.all([api.listSheets(), api.listDecks(), api.listDocs(), api.listFiles()])
+      .then(([s, d, t, f]) => setSheets([...s.sheets, ...d.decks, ...t.docs, ...f.files.map((x): HomeItem => ({ id: x.id, title: x.filename, kind: 'file', createdAt: x.createdAt, updatedAt: x.createdAt }))].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))))
       .catch((e: Error) => setError(e.message));
 
   const openTrash = () => {
@@ -81,8 +85,8 @@ export function HomePage() {
     }
   };
 
-  const pathOf = (s: SheetMeta) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : `/s/${s.id}`);
-  const KIND_NAMES = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document' } as const;
+  const pathOf = (s: HomeItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : s.kind === 'file' ? `/f/${s.id}` : `/s/${s.id}`);
+  const KIND_NAMES = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document', file: 'file' } as const;
 
   // Reload after the assistant finishes a request, in case it created a spreadsheet.
   const { running: agentRunning } = useAgent();
@@ -99,24 +103,24 @@ export function HomePage() {
 
   const q = filter.trim().toLowerCase();
   // Show each branch right under its original (recursively); searching flattens the list.
-  const visible: { s: SheetMeta; depth: number }[] = [];
+  const visible: { s: HomeItem; depth: number }[] = [];
   if (sheets) {
     if (q) for (const s of sheets) s.title.toLowerCase().includes(q) && visible.push({ s, depth: 0 });
     else {
       const ids = new Set(sheets.map((s) => s.id));
-      const children = new Map<string, SheetMeta[]>();
+      const children = new Map<string, HomeItem[]>();
       for (const s of sheets) {
         const p = s.branch && ids.has(s.branch.parentId) ? s.branch.parentId : null;
         if (p) children.set(p, [...(children.get(p) ?? []), s]);
       }
-      const add = (s: SheetMeta, depth: number) => {
+      const add = (s: HomeItem, depth: number) => {
         visible.push({ s, depth });
         for (const c of children.get(s.id) ?? []) add(c, depth + 1);
       };
       for (const s of sheets) if (!(s.branch && ids.has(s.branch.parentId))) add(s, 0);
     }
   }
-  const [branching, setBranching] = useState<SheetMeta | null>(null);
+  const [branching, setBranching] = useState<HomeItem | null>(null);
 
   return (
     <div
@@ -230,7 +234,7 @@ export function HomePage() {
                     <Link to={pathOf(s)} className="sheet-title" onClick={(e) => e.stopPropagation()}>
                       <span style={{ width: depth * 22 }} className="tree-indent" />
                       {depth > 0 ? <span className="tree-elbow">└</span> : null}
-                      {s.kind === 'deck' ? <DeckIcon size={18} /> : s.kind === 'doc' ? <DocIcon size={18} /> : <Logo size={18} />} {s.title}
+                      {s.kind === 'deck' ? <DeckIcon size={18} /> : s.kind === 'doc' ? <DocIcon size={18} /> : s.kind === 'file' ? <span className="file-chip-icon">{fileIcon(s.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : '')}</span> : <Logo size={18} />} {s.title}
                       {s.branch && <span className={`branch-tag${s.branch.detached ? ' detached' : ''}`}>{s.branch.detached ? `branch of deleted “${s.branch.parentTitle}”` : depth ? 'branch' : `branch of ${s.branch.parentTitle}`}</span>}
                     </Link>
                   </td>
@@ -251,10 +255,10 @@ export function HomePage() {
                       <div className="dropdown">
                         <button onClick={() => navigate(pathOf(s))}>Open</button>
                         <button onClick={() => (setMenuFor(null), window.open(pathOf(s), '_blank'))}>Open in new tab</button>
-                        <button onClick={() => (setMenuFor(null), window.location.assign(`/api/files/${s.id}/export`))}>
-                          {s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' ? 'Download as Markdown' : 'Download as Excel'}
+                        <button onClick={() => (setMenuFor(null), window.location.assign(s.kind === 'file' ? `/api/files/${s.id}/download` : `/api/files/${s.id}/export`))}>
+                          {s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' ? 'Download as Markdown' : s.kind === 'file' ? 'Download' : 'Download as Excel'}
                         </button>
-                        <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>
+                        {s.kind !== 'file' && <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>}
                         {s.kind === 'sheet' && <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>}
                         <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
                           Delete
@@ -390,7 +394,7 @@ export function HomePage() {
           confirmText="Delete"
           danger
           onConfirm={async () => {
-            await (deleting.kind === 'deck' ? api.deleteDeck(deleting.id) : deleting.kind === 'doc' ? api.deleteDoc(deleting.id) : api.deleteSheet(deleting.id));
+            await (deleting.kind === 'deck' ? api.deleteDeck(deleting.id) : deleting.kind === 'doc' ? api.deleteDoc(deleting.id) : deleting.kind === 'file' ? api.deleteFile(deleting.id) : api.deleteSheet(deleting.id));
             await load();
           }}
           onClose={() => setDeleting(null)}
