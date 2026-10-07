@@ -2,6 +2,31 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Second click on selected slide text box enters edit mode with caret
+
+A click without movement on an already-selected text or shape box now enters edit mode with the caret at the click point. I couldn't run it in a browser, so I haven't tried the "Salesforce" example. Typecheck and all 264 tests pass.
+
+`DeckEditor.tsx` remembers on mouse-down that the box was already selected. On mouse-up with no movement, it starts editing and passes the click coordinates to the editor in `SlideView.tsx`. The editor places the caret with `caretPositionFromPoint`, falling back to `caretRangeFromPoint`.
+
+The other behaviours you listed:
+- **Drag:** a drag still moves the box.
+- **Double-click:** it still enters edit mode through the existing handler, not the new path.
+- **Links:** clicking a link in a selected box skips the new path, so the link menu still shows.
+
+The new test in `linkMenu.test.ts` covers only the caret-lookup helper, `caretAt`, with a stubbed document. The mouse-down and mouse-up wiring is untested because the project has no DOM test environment.
+
+No new assistant tool was added.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+In the presentation editor (client/src/deck/SlideView.tsx and related), text boxes behave awkwardly: the first click selects the whole element (fine), but it then takes several more clicks before the text box enters text-edit mode. Desired behavior: when a text element is already selected, a single further click inside its text should immediately enter edit mode AND place the insertion caret at the clicked position in the text (use caretPositionFromPoint / caretRangeFromPoint of the click coordinates, then focus the editor and set the selection there). Double-click should still enter edit mode and select the word as usual. A drag on a selected element should still move it (only a click without movement enters edit mode). Clicking a link in a selected-but-not-editing box should keep showing the link menu added earlier. Example: slide 4 of deck "Supercog Ops Map", text box id muvwzwxj0w99: click once to select, click again on the word "Salesforce" -> caret appears inside that word and typing edits it. Please verify the behavior with a test if possible and report honestly if you could not run it in a browser.
+
+Files: client/src/deck/DeckEditor.tsx, client/src/deck/SlideView.tsx, client/src/deck/linkMenu.test.ts
+
+Job: 325cb987-87ee-4952-b4e7-0ac6a52e747c
+
 ## 2026-10-07 — Fix link popup not appearing on slide link click
 
 A plain click on a link in a slide text box now opens the link menu in the editor, but I haven't checked it in a browser. Playwright and a browser aren't installed here, so there is no Playwright test and I didn't confirm that "Open link" opens a new tab. Typecheck and `npm test` pass, but the one test I added only checks that links render as `sl-link` anchors that open in a new tab; it doesn't click anything.

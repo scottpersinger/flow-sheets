@@ -31,7 +31,7 @@ export interface SlideViewProps {
   /** Live positions during a drag, by element id. */
   preview?: Record<string, BoxPreview>;
   /** Element whose text is being edited inline, with the callback that commits the text. */
-  editing?: { id: string; onCommit(paragraphs: Paragraph[]): void; onStop(): void } | null;
+  editing?: { id: string; caret?: { x: number; y: number }; onCommit(paragraphs: Paragraph[]): void; onStop(): void } | null;
   onElementMouseDown?(e: MouseEvent, el: SlideElement): void;
   onElementDoubleClick?(e: MouseEvent, el: SlideElement): void;
   /** Drawn on top of the elements (selection handles). */
@@ -426,8 +426,20 @@ function LinkBubble({ anchor, onChange }: { anchor: HTMLAnchorElement; onChange(
   );
 }
 
+/** The collapsed range under a viewport point, if the browser can tell. */
+export function caretAt(x: number, y: number): Range | null {
+  const d = document as Document & { caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null };
+  const pos = d.caretPositionFromPoint?.(x, y);
+  if (pos) {
+    const r = document.createRange();
+    r.setStart(pos.offsetNode, pos.offset);
+    return r;
+  }
+  return document.caretRangeFromPoint?.(x, y) ?? null;
+}
+
 /** Inline editor for a text element. Uncontrolled: the DOM is the draft; the text is committed on blur. */
-function TextEditor({ initial, onCommit, onStop, style }: { initial: Paragraph[]; onCommit(p: Paragraph[]): void; onStop(): void; style: CSSProperties }) {
+function TextEditor({ initial, onCommit, onStop, style, caret }: { initial: Paragraph[]; onCommit(p: Paragraph[]): void; onStop(): void; style: CSSProperties; caret?: { x: number; y: number } }) {
   const ref = useRef<HTMLDivElement>(null);
   const committed = useRef(false);
   const [anchor, setAnchor] = useState<HTMLAnchorElement | null>(null);
@@ -457,6 +469,12 @@ function TextEditor({ initial, onCommit, onStop, style }: { initial: Paragraph[]
     range.selectNodeContents(el);
     // Placeholder text is replaced by typing; real text gets the caret at the end.
     if (!(initial.length === 1 && PLACEHOLDERS.has(initial[0].text))) range.collapse(false);
+    // A click on the text puts the caret where it landed.
+    const at = caret ? caretAt(caret.x, caret.y) : null;
+    if (at && el.contains(at.startContainer)) {
+      range.setStart(at.startContainer, at.startOffset);
+      range.collapse(true);
+    }
     sel?.removeAllRanges();
     sel?.addRange(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -562,7 +580,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
             if (editing?.id === el.id) {
               return (
                 <div key={el.id} className="sl-el" style={box} data-el={el.id}>
-                  <TextEditor initial={el.paragraphs} onCommit={editing.onCommit} onStop={editing.onStop} style={{ ...textStyleOf(el, theme), width: '100%', height: '100%' }} />
+                  <TextEditor initial={el.paragraphs} onCommit={editing.onCommit} onStop={editing.onStop} caret={editing.caret} style={{ ...textStyleOf(el, theme), width: '100%', height: '100%' }} />
                 </div>
               );
             }
@@ -597,6 +615,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
                   initial={[{ text: el.text ?? '' }]}
                   onCommit={(ps) => editing.onCommit(ps)}
                   onStop={editing.onStop}
+                  caret={editing.caret}
                   style={{ width: '100%', height: '100%', justifyContent: 'center', textAlign: 'center', fontSize: el.textSize ?? 18 }}
                 />
               </div>
