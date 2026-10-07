@@ -59,7 +59,10 @@ describe('MCP server', () => {
     expect(byName.delete_slides.annotations?.destructiveHint).toBe(true);
     expect(byName.read_doc.inputSchema.properties).toHaveProperty('doc_id');
     expect(byName.add_slides.inputSchema.properties).toHaveProperty('deck_id');
+    expect(byName.write_range.inputSchema.properties).toHaveProperty('sheet_id');
+    expect(byName.delete_rows.annotations?.destructiveHint).toBe(true);
     expect(byName).not.toHaveProperty('render_slide');
+    expect(byName).not.toHaveProperty('select_range');
     // ChatGPT checks that every tool has annotations and typed properties.
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -104,6 +107,22 @@ describe('MCP server', () => {
     expect(outline.data?.slide_count).toBe(3);
     const files = await call('list_files', { kind: 'deck' });
     expect((files.data?.files as { title: string }[]).map((f) => f.title)).toEqual(['Pitch']);
+  });
+
+  it('creates and edits a spreadsheet from the composer', async () => {
+    const created = await call('create_sheet', { title: 'Budget' });
+    expect(created.isError).toBe(false);
+    expect((created.data?.open as { kind: string }).kind).toBe('sheet');
+    const noDeck = await call('read_deck');
+    expect(noDeck.isError).toBe(true);
+    const wrote = await call('write_range', { start: 'A1', rows: [['a', 1], ['b', 2], ['sum', '=SUM(B1:B2)']] });
+    expect(wrote.isError).toBe(false);
+    const read = await call('read_range', { range: 'A1:B3' });
+    expect((read.data?.values as string[][])[2]).toEqual(['sum', '3']);
+    const opened = await call('open_file', { kind: 'sheet', id: (created.data?.file as { id: string }).id });
+    expect((opened.data?.tabs as unknown[]).length).toBe(1);
+    const files = await call('list_files', { kind: 'sheet' });
+    expect((files.data?.files as { title: string }[]).map((f) => f.title)).toEqual(['Budget']);
   });
 
   it('imports Word and PowerPoint files the user attached, and refuses other things', async () => {

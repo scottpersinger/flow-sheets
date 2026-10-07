@@ -223,7 +223,11 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
         }
         try {
           const service = hub.forUser(userId);
-          const r = await service.importFile(Buffer.concat(chunks), url.searchParams.get('name') ?? undefined, url.searchParams.get('title') ?? undefined);
+          const bytes = Buffer.concat(chunks);
+          const name = url.searchParams.get('name') ?? undefined;
+          // convert=1: an Excel file's tabs for the open spreadsheet (File → Import), not a new file.
+          if (url.searchParams.get('convert')) return json(res, 200, await service.convertExcel(bytes, name));
+          const r = await service.importFile(bytes, name, url.searchParams.get('title') ?? undefined);
           service.setOpen({ kind: r.file.kind, id: r.file.id });
           return json(res, 200, r);
         } catch (e) {

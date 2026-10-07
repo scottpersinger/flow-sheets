@@ -100,6 +100,8 @@ export class SheetController {
   scrollRequest: { r: number; c: number; seq: number } | null = null;
   /** Number of rows that fit in the viewport; maintained by the grid for PageUp/PageDown. */
   pageRows = 20;
+  /** How many times replaceWith brought in a version saved elsewhere (the page can tell the user). */
+  externalChanges = 0;
   version = 0;
 
   private sels = new Map<string, Selection>();
@@ -872,6 +874,22 @@ export class SheetController {
         this.activeTabId = id;
       },
     );
+  }
+
+  /**
+   * Replace the workbook with a version saved elsewhere (the assistant, another window) as one undoable
+   * step. The active tab and selections survive where they still exist.
+   */
+  replaceWith(next: Workbook): boolean {
+    if (JSON.stringify(this.store.workbook) === JSON.stringify(next)) return false;
+    const changed = this.run(
+      (tx) => tx.setTabs(next.tabs),
+      () => {
+        if (!this.store.workbook.tabs.some((t) => t.id === this.activeTabId)) this.activeTabId = this.store.workbook.tabs[0].id;
+      },
+    );
+    if (changed) this.externalChanges++;
+    return changed;
   }
 
   /** Add tabs from an imported workbook (one undoable step) and show the first of them. */

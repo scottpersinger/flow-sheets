@@ -1,8 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import ExcelJS from 'exceljs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../server/db.ts';
+import type { Workbook } from '../../shared/types.ts';
 import { ConflictError, FileHub, type FileService } from './files.ts';
 
 let dir: string;
@@ -131,5 +133,60 @@ describe('presentations', () => {
     await svc.save('deck', deck.id, pub.data, pub.rev);
     const stored = await svc.sheets.loadDeck('u1', deck.id);
     expect(JSON.stringify(stored!.deck)).toContain('"/api/images/0f4e2d8a-1b2c-4d3e-9f80-123456789abc"');
+  });
+});
+
+describe('spreadsheets', () => {
+  it('creates a spreadsheet, reads and writes it headlessly from the tab the user is on, and lists all kinds', async () => {
+    await svc.createDoc('Notes');
+    await tick();
+    const sheet = await svc.createSheet('Budget');
+    expect(svc.list().map((f) => `${f.kind}:${f.title}`)).toEqual(['sheet:Budget', 'doc:Notes']);
+    const before = (await svc.get('sheet', sheet.id)).rev;
+    await tick();
+    const wrote = await svc.editSheet(sheet.id, 'write_range', { start: 'A1', rows: [['Item', 'Cost'], ['Rent', 1200], ['Food', 400], ['Total', '=SUM(B2:B3)']] });
+    expect(wrote.rev).not.toBe(before);
+    expect(svc.state().open).toBeNull();
+    const read = await svc.editSheet(sheet.id, 'read_range', { range: 'A1:B4' });
+    expect((read.values as unknown[][])[3]).toEqual(['Total', '1600']);
+    expect(read.rev).toBe(wrote.rev);
+
+    await svc.editSheet(sheet.id, 'add_tab', { name: 'Q2' });
+    svc.setOpen({ kind: 'sheet', id: sheet.id }, { tab: 'Q2', selection: ['A1:B2'] });
+    const onQ2 = await svc.editSheet(sheet.id, 'write_range', { start: 'A1', rows: [['on q2']] });
+    expect(onQ2.wrote).toBe('Q2!A1');
+    const overview = await svc.editSheet(sheet.id, 'get_sheet_overview', {});
+    expect((overview.tabs as { name: string }[]).map((t) => t.name)).toEqual(['Sheet1', 'Q2']);
+    expect(overview.selection).toEqual(['A1:B2']);
+    expect(svc.state().open?.rev).toBe(onQ2.rev);
+  });
+
+  it('refuses a stale save and rewrites cell images for the iframe and back', async () => {
+    const sheet = await svc.createSheet('Pics');
+    const { rev, data } = await svc.get('sheet', sheet.id);
+    const wb = data as Workbook;
+    wb.tabs[0].cells.A1 = { v: '', img: 'https://plugin.example.com/plugin/img/0f4e2d8a-1b2c-4d3e-9f80-123456789abc' };
+    await tick();
+    await svc.save('sheet', sheet.id, wb, rev);
+    const stored = await svc.sheets.load('u1', sheet.id);
+    expect(stored!.workbook.tabs[0].cells.A1.img).toBe('/api/images/0f4e2d8a-1b2c-4d3e-9f80-123456789abc');
+    const pub = await svc.get('sheet', sheet.id);
+    expect((pub.data as Workbook).tabs[0].cells.A1.img).toBe('https://plugin.example.com/plugin/img/0f4e2d8a-1b2c-4d3e-9f80-123456789abc');
+    await expect(svc.save('sheet', sheet.id, wb, rev)).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it('imports an Excel workbook as a new spreadsheet, or as tabs for an open one', async () => {
+    const x = new ExcelJS.Workbook();
+    const ws = x.addWorksheet('Sales');
+    ws.addRow(['Region', 'Total']);
+    ws.addRow(['North', 10]);
+    const bytes = Buffer.from(await x.xlsx.writeBuffer());
+    const { file } = await svc.importFile(bytes, 'sales.xlsx', 'Sales');
+    expect(file.kind).toBe('sheet');
+    const read = await svc.editSheet(file.id, 'read_range', { range: 'A1:B2' });
+    expect(read.values).toEqual([['Region', 'Total'], ['North', '10']]);
+    const converted = await svc.convertExcel(bytes, 'sales.xlsx');
+    expect(converted.workbook.tabs.map((t) => t.name)).toEqual(['Sales']);
+    await expect(svc.convertExcel(Buffer.from('nope'), 'notes.txt')).rejects.toThrow(/Excel/);
   });
 });

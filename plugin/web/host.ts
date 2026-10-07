@@ -4,7 +4,7 @@
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 import { OpenAIExtensions } from '@openai/mcp-extensions/app';
 
-export type FileKind = 'doc' | 'deck';
+export type FileKind = 'doc' | 'deck' | 'sheet';
 
 export interface OpenFile {
   kind: FileKind;

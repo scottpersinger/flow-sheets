@@ -1,6 +1,6 @@
 # Docs in ChatGPT (plugin proof of concept)
 
-The Docs app (text documents and slide presentations) as a ChatGPT **sidebar app**: it opens in ChatGPT, and
+The Docs app (text documents, slide presentations and spreadsheets) as a ChatGPT **sidebar app**: it opens in ChatGPT, and
 the ChatGPT composer edits the open file through the plugin's tools. It is built beside the app, not inside it: its own server
 process, its own Vite build, and imports of the app's editor and document tools, so the app's code and build
 are untouched (apart from one `export` in `server/agent/tools.ts`).
@@ -9,10 +9,11 @@ are untouched (apart from one `export` in `server/agent/tools.ts`).
 plugin/
   server/index.ts   HTTP server: /mcp (streamable HTTP MCP, stateless), /img/<id> (document images), /health
   server/mcp.ts     tools, the app as a UI resource, server instructions
-  server/files.ts   documents and presentations from the app's SQLite + JSON files; headless edits via the
-                    app's own doc and deck tools
-  web/              the app shown in ChatGPT: library, the document editor (Editor.tsx) and the presentation
-                    editor (DeckWorkbench.tsx), both built from the app's components and saving via tools
+  server/files.ts   documents, presentations and spreadsheets from the app's SQLite + JSON files; headless
+                    edits via the app's own doc, deck and sheet tools
+  web/              the app shown in ChatGPT: library, the document editor (Editor.tsx), the presentation
+                    editor (DeckWorkbench.tsx) and the spreadsheet (SheetWorkbench.tsx), all built from the
+                    app's components and saving via tools
   web/harness.*     a stand-in for ChatGPT's host, to run the app locally without a tunnel
   skills/docs/      SKILL.md: how the model should edit documents
   plugin.json, mcp.json   package manifests for submission / Codex
@@ -20,14 +21,16 @@ plugin/
 
 ## How it works
 
-- **Tools for the model**: `list_files`, `open_file`, `create_doc`, `create_deck`, `import_file` (a Word or
-  PowerPoint file the user attached in ChatGPT, declared with `openai/fileParams` so the host supplies a
-  download URL; the app's own converters run on the server), `rename_file`, `delete_file`,
-  the app's document tools (`read_doc`, `insert_content`, `replace_blocks`, `replace_text`, `format_text`, ...)
-  and its presentation tools (`read_deck`, `add_slides`, `update_slide`, `edit_elements`, `delete_slides`,
-  `move_slide`, `set_deck_theme`; `render_slide` needs a browser and is left out). They act on the file open in
-  the app unless an id is given. Edits run the app's `runDocTool` / `runDeckTool` against a headless controller
-  on the server, then save. Annotations mark reads read-only and deletions destructive, which drives ChatGPT's
+- **Tools for the model**: `list_files`, `open_file`, `create_doc`, `create_deck`, `create_sheet`, `import_file`
+  (a Word, PowerPoint or Excel file the user attached in ChatGPT, declared with `openai/fileParams` so the host
+  supplies a download URL; the app's own converters run on the server), `rename_file`, `delete_file`,
+  the app's document tools (`read_doc`, `insert_content`, `replace_blocks`, `replace_text`, `format_text`, ...),
+  its presentation tools (`read_deck`, `add_slides`, `update_slide`, `edit_elements`, `delete_slides`,
+  `move_slide`, `set_deck_theme`; `render_slide` needs a browser and is left out) and its spreadsheet tools
+  (`get_sheet_overview`, `read_range`, `write_range`, `format_range`, `sort_range`, `set_filter`, rows,
+  columns and tabs; `select_range` only moves the cursor and is left out). They act on the file open in
+  the app unless an id is given. Edits run the app's `runDocTool` / `runDeckTool` / `runClientTool` against a
+  headless controller on the server, then save. Annotations mark reads read-only and deletions destructive, which drives ChatGPT's
   "ask before changes" setting.
 - **Tools for the app only** (`_meta.ui.visibility: ["app"]`, hidden from the model): `app_state`, `get_file`,
   `save_file`, `set_open_file`, `upload_image`, `upload_ticket`. The app never calls the REST API; the iframe
@@ -38,11 +41,13 @@ plugin/
   `open_doc` renders the same resource, so "open my Q3 plan" in any chat shows the editor.
 - **Live updates**: every save bumps a revision (the save time). The app polls `app_state` every 2.5 s and
   reloads the file when the revision changed (a model edit) or switches when another file was opened. A
-  document is replaced as one undoable step; a presentation is updated slide by slide. Saves carry the
+  document or spreadsheet is replaced as one undoable step; a presentation is updated slide by slide. Saves carry the
   revision the editor loaded; a stale save is refused and the editor reloads.
-- **Cursor to the model**: the app pushes the cursor block and selected text (documents) or the current slide
-  and selected elements (presentations) with `ui/update-model-context` (shown as a composer attachment) and
-  reports it to the server, so `read_doc` / `read_deck` return it. "Make this shorter" works on the selection.
+- **Cursor to the model**: the app pushes the cursor block and selected text (documents), the current slide
+  and selected elements (presentations) or the active tab and selected ranges (spreadsheets) with
+  `ui/update-model-context` (shown as a composer attachment) and reports it to the server, so `read_doc` /
+  `read_deck` / `get_sheet_overview` return it and sheet tools default to the user's tab. "Make this shorter"
+  works on the selection.
 - **Prompt buttons** ("Summarize", "Proofread", "Ask about my docs") send a user message with `ui/message`.
 
 ## What ChatGPT actually requires (learned the hard way)

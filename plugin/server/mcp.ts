@@ -8,12 +8,11 @@ import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps
 import { z } from 'zod';
 import { schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
-import type { Deck, ThemeId } from '../../shared/deck.ts';
-import type { Doc } from '../../shared/doc.ts';
-import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, ToolError, type DeckEditTool, type DocEditTool, type FileKind, type SlideSpec } from './files.ts';
+import type { ThemeId } from '../../shared/deck.ts';
+import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, SHEET_EDIT_TOOLS, ToolError, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 // Hosts cache UI resources by URI: bump the version whenever the app changes shape.
-export const APP_URI = 'ui://freeflow-docs/app-v7.html';
+export const APP_URI = 'ui://freeflow-docs/app-v8.html';
 export const SERVER_INFO = { name: 'freeflow-docs', version: '0.2.0' };
 /** What the server advertises: tools, resources, and MCP Apps UI resources. */
 export const SERVER_CAPABILITIES = {
@@ -55,8 +54,8 @@ export interface McpOptions {
 /** The largest file import_file will download. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
-export const INSTRUCTIONS = `Freeflow Docs: the user's text documents and slide presentations, with an app that shows one file open for editing.
-Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document and presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation unless an id is given. Read first (read_doc or read_deck) to learn block or slide numbers and element ids; they change after inserts and deletes. Write document content as Markdown. Keep edits targeted: change the blocks, slides or elements that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
+export const INSTRUCTIONS = `Freeflow Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
+Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
 
 const DOC_ICON = {
   src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
@@ -64,13 +63,15 @@ const DOC_ICON = {
   sizes: ['20x20'],
 };
 
-const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document) or deck (slide presentation).');
+const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document), deck (slide presentation) or sheet (spreadsheet).');
 const fileId = z.string().describe('The file id (from list_files or the app).');
 const optionalDocId = z.string().optional().describe('The document to act on. Defaults to the document open in the app.');
 const optionalDeckId = z.string().optional().describe('The presentation to act on. Defaults to the presentation open in the app.');
+const optionalSheetId = z.string().optional().describe('The spreadsheet to act on. Defaults to the spreadsheet open in the app.');
+type EditTool = DocEditTool | DeckEditTool | SheetEditTool;
 
 /** Which of the app's tools change the file, for ChatGPT's "ask before changes" setting. */
-const ANNOTATIONS: Record<DocEditTool | DeckEditTool, { readOnlyHint: boolean; destructiveHint: boolean }> = {
+const ANNOTATIONS: Record<EditTool, { readOnlyHint: boolean; destructiveHint: boolean }> = {
   read_doc: { readOnlyHint: true, destructiveHint: false },
   get_doc_info: { readOnlyHint: true, destructiveHint: false },
   insert_content: { readOnlyHint: false, destructiveHint: false },
@@ -89,15 +90,38 @@ const ANNOTATIONS: Record<DocEditTool | DeckEditTool, { readOnlyHint: boolean; d
   delete_slides: { readOnlyHint: false, destructiveHint: true },
   move_slide: { readOnlyHint: false, destructiveHint: false },
   set_deck_theme: { readOnlyHint: false, destructiveHint: false },
+  get_sheet_overview: { readOnlyHint: true, destructiveHint: false },
+  read_range: { readOnlyHint: true, destructiveHint: false },
+  write_range: { readOnlyHint: false, destructiveHint: false },
+  clear_range: { readOnlyHint: false, destructiveHint: true },
+  format_range: { readOnlyHint: false, destructiveHint: false },
+  insert_rows: { readOnlyHint: false, destructiveHint: false },
+  delete_rows: { readOnlyHint: false, destructiveHint: true },
+  insert_columns: { readOnlyHint: false, destructiveHint: false },
+  delete_columns: { readOnlyHint: false, destructiveHint: true },
+  move_columns: { readOnlyHint: false, destructiveHint: false },
+  sort_range: { readOnlyHint: false, destructiveHint: false },
+  set_cell_image: { readOnlyHint: false, destructiveHint: false },
+  set_cell_link: { readOnlyHint: false, destructiveHint: false },
+  set_filter: { readOnlyHint: false, destructiveHint: false },
+  set_filter_criteria: { readOnlyHint: false, destructiveHint: false },
+  set_column_width: { readOnlyHint: false, destructiveHint: false },
+  set_row_height: { readOnlyHint: false, destructiveHint: false },
+  freeze: { readOnlyHint: false, destructiveHint: false },
+  add_tab: { readOnlyHint: false, destructiveHint: false },
+  rename_tab: { readOnlyHint: false, destructiveHint: false },
+  delete_tab: { readOnlyHint: false, destructiveHint: true },
 };
 
 /** Descriptions that differ from the in-app assistant's (which mention things only it has). */
-const DESCRIPTIONS: Partial<Record<DocEditTool | DeckEditTool, string>> = {
+const DESCRIPTIONS: Partial<Record<EditTool, string>> = {
   insert_image: 'Add an image block to the document from an https URL. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)',
   replace_blocks: 'Replace blocks from..to of the document with new content written as Markdown. Use this to rewrite a paragraph or a whole section; prefer replace_text for small wording changes.',
   delete_blocks: 'Delete blocks from..to of the document.',
   delete_slides: 'Delete slides by number.',
   read_deck: 'Outline of the presentation: theme, every slide with its layout, elements (id, type, position, text) and notes, and which slide the user is on. Call this before changing slides.',
+  get_sheet_overview:
+    'Describe the spreadsheet: every tab with its size, used range, frozen panes, filter and first few rows, plus the range the user has selected. Call this first when you need to know how the data is laid out.',
 };
 
 /** Fetch an attached file from the host, within limits. Only https, and never an address on a private network. */
@@ -255,12 +279,29 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       }),
   );
 
+  server.registerTool(
+    'create_sheet',
+    {
+      title: 'Create spreadsheet',
+      description: 'Create a new, empty spreadsheet and open it in the app. Fill it in with write_range.',
+      inputSchema: schemas.create_sheet.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ title }) =>
+      guard(async () => {
+        const file = await service.createSheet(title);
+        service.setOpen({ kind: 'sheet', id: file.id });
+        return ok({ file, ...service.state() });
+      }),
+  );
+
   // A file the user attached in ChatGPT: the host turns the `file` argument into a download URL (openai/fileParams).
   server.registerTool(
     'import_file',
     {
-      title: 'Import a Word or PowerPoint file',
-      description: 'Import a Word document (.docx) as a new document, or a PowerPoint presentation (.pptx) as a new presentation, from a file the user attached, and open it in the app.',
+      title: 'Import a Word, PowerPoint or Excel file',
+      description:
+        'Import a Word document (.docx) as a new document, a PowerPoint presentation (.pptx) as a new presentation, or an Excel workbook (.xlsx) as a new spreadsheet, from a file the user attached, and open it in the app.',
       inputSchema: {
         file: z
           .object({
@@ -289,7 +330,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'open_file',
     {
       title: 'Open file',
-      description: `Open a document or presentation in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, or every slide). The document or presentation tools then act on it by default.`,
+      description: `Open a document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default.`,
       inputSchema: { kind, id: fileId },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       ...(ui ? { _meta: rendersApp() } : {}),
@@ -297,7 +338,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     async ({ kind: k, id }) =>
       guard(async () => {
         service.setOpen({ kind: k, id });
-        const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : await service.editDeck(id, 'read_deck', {});
+        const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : k === 'deck' ? await service.editDeck(id, 'read_deck', {}) : await service.editSheet(id, 'get_sheet_overview', {});
         return ok({ ...outline, ...service.state() });
       }),
   );
@@ -306,7 +347,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'rename_file',
     {
       title: 'Rename file',
-      description: 'Change the title of a document or presentation. Defaults to the open file.',
+      description: 'Change the title of a file. Defaults to the open file.',
       inputSchema: { kind: kind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -333,7 +374,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       }),
   );
 
-  const describe = (name: DocEditTool | DeckEditTool) => (DESCRIPTIONS[name] ?? schemas[name].description ?? '').replace(/the open (document|presentation)/g, 'the $1');
+  const describe = (name: EditTool) => (DESCRIPTIONS[name] ?? schemas[name].description ?? '').replace(/the open (document|presentation|spreadsheet)/g, 'the $1');
 
   for (const name of DOC_EDIT_TOOLS) {
     server.registerTool(
@@ -363,6 +404,20 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     );
   }
 
+  for (const name of SHEET_EDIT_TOOLS) {
+    server.registerTool(
+      name,
+      { description: describe(name), inputSchema: { ...schemas[name].shape, sheet_id: optionalSheetId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
+      async (args: Record<string, unknown>) =>
+        guard(async () => {
+          const { sheet_id, ...input } = args as Record<string, unknown> & { sheet_id?: string };
+          const id = service.target('sheet', sheet_id);
+          if (!id) return fail('No spreadsheet is open in the app. Pass sheet_id (see list_files), or open one with open_file.');
+          return ok(await service.editSheet(id, name, input));
+        }),
+    );
+  }
+
   // --- Tools for the app only (hidden from the model) ------------------------------------
 
   if (!appTools) return server;
@@ -381,12 +436,13 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         selected_text: z.string().max(500).optional(),
         slide: z.number().int().min(1).optional(),
         selection: z.array(z.string()).max(50).optional(),
+        tab: z.string().optional(),
       },
       ...appOnly(false),
     },
-    async ({ kind: k, id, cursor_block, selected_text, slide, selection }) =>
+    async ({ kind: k, id, cursor_block, selected_text, slide, selection, tab }) =>
       guard(() => {
-        service.setOpen(k && id ? { kind: k, id } : null, { cursor_block, selected_text, slide, selection });
+        service.setOpen(k && id ? { kind: k, id } : null, { cursor_block, selected_text, slide, selection, tab });
         return ok({ ...service.state() });
       }),
   );
@@ -403,7 +459,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     async ({ kind: k, id, rev, data }) =>
       guard(async () => {
         try {
-          return ok({ ...(await service.save(k, id, data as unknown as Doc | Deck, rev)) });
+          return ok({ ...(await service.save(k, id, data as unknown as FileData, rev)) });
         } catch (e) {
           if (e instanceof ConflictError) return { content: [{ type: 'text', text: e.message }], structuredContent: { conflict: true, rev: e.rev }, isError: true };
           throw e;
@@ -413,7 +469,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
 
   server.registerTool(
     'upload_ticket',
-    { description: 'A one-time ticket and URL for the app to upload a Word or PowerPoint file to import.', inputSchema: {}, ...appOnly(false) },
+    { description: 'A one-time ticket and URL for the app to upload a Word, PowerPoint or Excel file to import.', inputSchema: {}, ...appOnly(false) },
     async () => guard(() => ok({ ticket: service.hub.issueTicket(service.userId), url: `${opts.publicUrl ?? ''}/plugin/import` })),
   );
 

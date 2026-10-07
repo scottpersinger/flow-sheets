@@ -1,10 +1,12 @@
-// The app as shown in ChatGPT: the library of files, or one document or presentation open in its editor.
+// The app as shown in ChatGPT: the library of files, or one document, presentation or spreadsheet open in
+// its editor.
 // Which file is open is shared with the server, so the model's tools act on it and "open my plan" in the
 // composer switches the editor to it.
 import { useEffect, useRef, useState } from 'react';
 import { DeckWorkbench } from './DeckWorkbench.tsx';
 import { Editor } from './Editor.tsx';
 import { Library } from './Library.tsx';
+import { SheetWorkbench } from './SheetWorkbench.tsx';
 import type { AppState, FileKind, Host, OpenFile } from './host.ts';
 
 /** How often the app asks the server what changed (the model's edits, a file opened by a tool). */
@@ -68,5 +70,6 @@ export function DocsApp({ host }: { host: Host }) {
   if (shown === undefined) return <div className="page-loading">Loading…</div>;
   if (!shown) return <Library host={host} onOpen={(f) => void open(f)} />;
   if (shown.kind === 'deck') return <DeckWorkbench key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} />;
+  if (shown.kind === 'sheet') return <SheetWorkbench key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} onOpen={(f) => void open(f)} />;
   return <Editor key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} />;
 }

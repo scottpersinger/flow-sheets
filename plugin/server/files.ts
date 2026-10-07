@@ -4,26 +4,29 @@
 // view, so a tool behaves exactly as it does inside the app, then the result is saved.
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { runClientTool, type ClientToolEnv } from '../../client/src/agent/clientTools.ts';
 import { runDeckTool } from '../../client/src/agent/deckTools.ts';
 import { importDocx, isDocx } from '../../server/docxImport.ts';
 import { importPptx, isPptx } from '../../server/pptxImport.ts';
-import { ImportError } from '../../server/xlsxImport.ts';
+import { importExcel, ImportError } from '../../server/xlsxImport.ts';
 import { runDocTool } from '../../client/src/agent/docTools.ts';
 import { ToolError } from '../../client/src/agent/toolError.ts';
 import { DeckController } from '../../client/src/deck/controller.ts';
 import { DocController } from '../../client/src/doc/controller.ts';
+import { SheetController } from '../../client/src/state/controller.ts';
 import { openDb, type DB } from '../../server/db.ts';
 import { ImageStore } from '../../server/images.ts';
-import { SheetStore } from '../../server/sheets.ts';
+import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type Workbook } from '../../shared/types.ts';
 
 export { ToolError };
 
-export type FileKind = 'doc' | 'deck';
-export const FILE_KINDS: readonly FileKind[] = ['doc', 'deck'];
+export type FileKind = 'doc' | 'deck' | 'sheet';
+export const FILE_KINDS: readonly FileKind[] = ['doc', 'deck', 'sheet'];
+export type FileData = Doc | Deck | Workbook;
 
 /** A save with a stale revision: someone else (the app, the model) changed the file first. */
 export class ConflictError extends Error {
@@ -50,6 +53,8 @@ export interface Cursor {
   /** Presentations: 1-based slide being viewed, and ids of the selected elements. */
   slide?: number;
   selection?: string[];
+  /** Spreadsheets: the active tab's name (selection holds the selected ranges, e.g. "B2:D9"). */
+  tab?: string;
 }
 
 export interface OpenFile {
@@ -79,6 +84,31 @@ export type DocEditTool = (typeof DOC_EDIT_TOOLS)[number];
 /** Tools the model may run on a presentation (render_slide needs a browser and is left out). */
 export const DECK_EDIT_TOOLS = ['read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme'] as const;
 export type DeckEditTool = (typeof DECK_EDIT_TOOLS)[number];
+/** Tools the model may run on a spreadsheet (select_range only moves the user's cursor and is left out). */
+export const SHEET_EDIT_TOOLS = [
+  'get_sheet_overview',
+  'read_range',
+  'write_range',
+  'clear_range',
+  'format_range',
+  'insert_rows',
+  'delete_rows',
+  'insert_columns',
+  'delete_columns',
+  'move_columns',
+  'sort_range',
+  'set_cell_image',
+  'set_cell_link',
+  'set_filter',
+  'set_filter_criteria',
+  'set_column_width',
+  'set_row_height',
+  'freeze',
+  'add_tab',
+  'rename_tab',
+  'delete_tab',
+] as const;
+export type SheetEditTool = (typeof SHEET_EDIT_TOOLS)[number];
 
 export interface SlideSpec extends SlideContent {
   layout?: LayoutId;
@@ -86,7 +116,7 @@ export interface SlideSpec extends SlideContent {
 
 const summary = (m: SheetMeta): FileSummary => ({ kind: m.kind as FileKind, id: m.id, title: m.title, updated_at: m.updatedAt, created_at: m.createdAt });
 
-const noun = (kind: FileKind) => (kind === 'doc' ? 'document' : 'presentation');
+const noun = (kind: FileKind) => (kind === 'doc' ? 'document' : kind === 'deck' ? 'presentation' : 'spreadsheet');
 
 /** Apply fn to every image address in a document (the content is plain JSON). */
 function mapDocImages(doc: Doc, fn: (src: string) => string): Doc {
@@ -103,6 +133,20 @@ function mapDocImages(doc: Doc, fn: (src: string) => string): Doc {
 /** Apply fn to every image element's address in a presentation. */
 function mapDeckImages(deck: Deck, fn: (src: string) => string): Deck {
   return { ...deck, slides: deck.slides.map((s) => ({ ...s, elements: s.elements.map((e) => (e.type === 'image' ? { ...e, src: fn(e.src) } : e)) })) };
+}
+
+/** Apply fn to every cell image's address in a workbook. */
+function mapWorkbookImages(wb: Workbook, fn: (src: string) => string): Workbook {
+  return {
+    ...wb,
+    tabs: wb.tabs.map((t) => ({ ...t, cells: Object.fromEntries(Object.entries(t.cells).map(([k, c]) => [k, c.img ? { ...c, img: fn(c.img) } : c])) })),
+  };
+}
+
+function mapImages<T extends FileData>(kind: FileKind, data: T, fn: (src: string) => string): T {
+  if (kind === 'doc') return mapDocImages(data as Doc, fn) as T;
+  if (kind === 'deck') return mapDeckImages(data as Deck, fn) as T;
+  return mapWorkbookImages(data as Workbook, fn) as T;
 }
 
 /** The app's storage, shared by every account the plugin serves. */
@@ -220,6 +264,10 @@ export class FileService {
     return summary(await this.sheets.createDoc(this.userId, title.trim() || 'Untitled document', doc));
   }
 
+  async createSheet(title: string): Promise<FileSummary> {
+    return summary(await this.sheets.create(this.userId, title.trim() || 'Untitled spreadsheet'));
+  }
+
   async createDeck(title: string, theme?: ThemeId, slides: SlideSpec[] = []): Promise<FileSummary> {
     const deck: Deck = {
       version: 1,
@@ -251,11 +299,17 @@ export class FileService {
         if (problem) throw new ToolError(problem);
         return { file: summary(await this.sheets.createDeck(this.userId, baseTitle || 'Imported presentation', deck)), warnings };
       }
+      if (/\.xlsx?$/i.test(name ?? '') || bytes.subarray(0, 2).toString('latin1') === 'PK' || bytes[0] === 0xd0) {
+        const { workbook, warnings } = await importExcel(bytes);
+        const problem = validateWorkbook(workbook);
+        if (problem) throw new ToolError(problem);
+        return { file: summary(await this.sheets.create(this.userId, baseTitle || 'Imported spreadsheet', workbook)), warnings };
+      }
     } catch (e) {
       if (e instanceof ImportError) throw new ToolError(e.message);
       throw e;
     }
-    throw new ToolError('Only Word documents (.docx) and PowerPoint presentations (.pptx) can be imported.');
+    throw new ToolError('Only Word documents (.docx), PowerPoint presentations (.pptx) and Excel workbooks (.xlsx) can be imported.');
   }
 
   rename(kind: FileKind, id: string, title: string): FileSummary {
@@ -289,27 +343,51 @@ export class FileService {
 
   // --- Whole files for the app's editors --------------------------------------------------
 
-  /** A file with image addresses the app's iframe can load. The revision is the save time. */
-  async get(kind: FileKind, id: string): Promise<{ meta: FileSummary; rev: string; data: Doc | Deck }> {
-    if (kind === 'doc') {
-      const loaded = await this.sheets.loadDoc(this.userId, id);
-      if (!loaded) throw new ToolError(`There is no document ${id}.`);
-      return { meta: summary(loaded.meta), rev: loaded.meta.updatedAt, data: this.toPublic(kind, loaded.doc) };
+  /** An Excel file as workbook tabs, for adding to an open spreadsheet. */
+  async convertExcel(bytes: Buffer, name?: string): Promise<{ workbook: Workbook; warnings: string[] }> {
+    if (name && !/\.xlsx?$/i.test(name)) throw new ToolError('Choose an Excel workbook (.xlsx or .xls).');
+    try {
+      const { workbook, warnings } = await importExcel(bytes);
+      const problem = validateWorkbook(workbook);
+      if (problem) throw new ToolError(problem);
+      return { workbook, warnings };
+    } catch (e) {
+      if (e instanceof ImportError) throw new ToolError(e.message);
+      throw e;
     }
-    const loaded = await this.sheets.loadDeck(this.userId, id);
-    if (!loaded) throw new ToolError(`There is no presentation ${id}.`);
-    return { meta: summary(loaded.meta), rev: loaded.meta.updatedAt, data: this.toPublic(kind, loaded.deck) };
+  }
+
+  /** The stored file of a kind, or null. */
+  private async load(kind: FileKind, id: string): Promise<{ meta: SheetMeta; data: FileData } | null> {
+    if (kind === 'doc') {
+      const r = await this.sheets.loadDoc(this.userId, id);
+      return r && { meta: r.meta, data: r.doc };
+    }
+    if (kind === 'deck') {
+      const r = await this.sheets.loadDeck(this.userId, id);
+      return r && { meta: r.meta, data: r.deck };
+    }
+    const r = await this.sheets.load(this.userId, id);
+    return r && r.meta.kind === 'sheet' ? { meta: r.meta, data: r.workbook } : null;
+  }
+
+  /** A file with image addresses the app's iframe can load. The revision is the save time. */
+  async get(kind: FileKind, id: string): Promise<{ meta: FileSummary; rev: string; data: FileData }> {
+    const loaded = await this.load(kind, id);
+    if (!loaded) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    return { meta: summary(loaded.meta), rev: loaded.meta.updatedAt, data: this.toPublic(kind, loaded.data) };
   }
 
   /** Save a whole file. With ifRev, the save only happens when nobody else saved first. */
-  async save(kind: FileKind, id: string, data: Doc | Deck, ifRev?: string): Promise<{ rev: string }> {
+  async save(kind: FileKind, id: string, data: FileData, ifRev?: string): Promise<{ rev: string }> {
     const stored = this.toStored(kind, data);
-    const problem = kind === 'doc' ? validateDoc(stored) : validateDeck(stored);
+    const problem = kind === 'doc' ? validateDoc(stored) : kind === 'deck' ? validateDeck(stored) : validateWorkbook(stored);
     if (problem) throw new ToolError(problem);
     const meta = this.sheets.get(this.userId, id, kind);
     if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     if (ifRev && meta.updatedAt !== ifRev) throw new ConflictError(meta.updatedAt);
-    const saved = kind === 'doc' ? await this.sheets.saveDoc(this.userId, id, stored as Doc) : await this.sheets.saveDeck(this.userId, id, stored as Deck);
+    const saved =
+      kind === 'doc' ? await this.sheets.saveDoc(this.userId, id, stored as Doc) : kind === 'deck' ? await this.sheets.saveDeck(this.userId, id, stored as Deck) : await this.sheets.save(this.userId, id, stored as Workbook);
     if (!saved) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return { rev: saved.updatedAt };
   }
@@ -364,6 +442,44 @@ export class FileService {
     }
   }
 
+  /** The same for a spreadsheet and the app's sheet tools (which run against a SheetController). */
+  async editSheet(id: string, tool: SheetEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const loaded = await this.sheets.load(this.userId, id);
+    if (!loaded || loaded.meta.kind !== 'sheet') throw new ToolError(`There is no spreadsheet ${id}.`);
+    const before = JSON.stringify(loaded.workbook);
+    const ctl = new SheetController(loaded.workbook, async () => {});
+    try {
+      if (this.open?.id === id && this.cursor.tab) {
+        // Start on the tab the user is looking at, so tools that default to "the active tab" agree with them.
+        const tab = ctl.store.workbook.tabs.find((t) => t.name === this.cursor.tab);
+        if (tab && tab.id !== ctl.activeTabId) ctl.switchTab(tab.id);
+      }
+      const unavailable = (what: string) => async () => {
+        throw new ToolError(`${what} is not available here.`);
+      };
+      const env = {
+        ctl,
+        deck: null,
+        doc: null,
+        group: `mcp-${Date.now()}`,
+        openSheet: unavailable('Opening another spreadsheet'),
+        openDeck: unavailable('Opening a presentation'),
+        openDoc: unavailable('Opening a document'),
+        requestAppChange: unavailable('Changing the app'),
+        requestResearch: unavailable('Research'),
+        uploadImage: unavailable('Uploading'),
+      } as unknown as ClientToolEnv;
+      const result = JSON.parse(await runClientTool({ id: 'mcp', name: tool, input }, env)) as Record<string, unknown>;
+      const after = ctl.store.workbook;
+      let rev = loaded.meta.updatedAt;
+      if (JSON.stringify(after) !== before) rev = (await this.save('sheet', id, after, loaded.meta.updatedAt)).rev;
+      if (this.open?.id === id && tool === 'get_sheet_overview' && this.cursor.selection?.length) result.selection = this.cursor.selection;
+      return { sheet_id: id, title: loaded.meta.title, rev, ...result };
+    } finally {
+      ctl.dispose();
+    }
+  }
+
   // --- Images ---------------------------------------------------------------------------
 
   /** Store an image uploaded from the app; returns an address the iframe can load. */
@@ -388,13 +504,11 @@ export class FileService {
     return prefix && src.startsWith(prefix) ? `/api/images/${src.slice(prefix.length)}` : src;
   }
 
-  toPublic<T extends Doc | Deck>(kind: FileKind, data: T): T {
-    if (!this.publicUrl) return data;
-    return (kind === 'doc' ? mapDocImages(data as Doc, (s) => this.publicSrc(s)) : mapDeckImages(data as Deck, (s) => this.publicSrc(s))) as T;
+  toPublic<T extends FileData>(kind: FileKind, data: T): T {
+    return this.publicUrl ? mapImages(kind, data, (s) => this.publicSrc(s)) : data;
   }
 
-  toStored<T extends Doc | Deck>(kind: FileKind, data: T): T {
-    if (!this.publicUrl) return data;
-    return (kind === 'doc' ? mapDocImages(data as Doc, (s) => this.storedSrc(s)) : mapDeckImages(data as Deck, (s) => this.storedSrc(s))) as T;
+  toStored<T extends FileData>(kind: FileKind, data: T): T {
+    return this.publicUrl ? mapImages(kind, data, (s) => this.storedSrc(s)) : data;
   }
 }
