@@ -2,6 +2,22 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-07 — Rename home to FreeFlow Docs; move links into overflow menu
+
+The home header now says "FreeFlow Docs", and the browser tab title on the home page is set to "FreeFlow Docs" too. Export all, Trash, Connectors and Changes are gone from the header row. They now sit in a "⋯" button (aria-label "More") next to Assistant. The dropdown items use the same targets as before: the `/api/export.zip` link, the Trash modal, `/connectors` and `/changes`. The menu closes on outside click, Escape, or after you pick an item.
+
+`npm run typecheck` and `npm test` both pass. I added no new test, because the repo has no component or DOM test setup. I haven't opened the page in a browser, so the dropdown styling is unchecked. The change is in `client/src/pages/HomePage.tsx` and `client/src/styles.css`; no new assistant tool was added.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-07.
+
+### Request
+
+On the app home page (list of spreadsheets, presentations and documents; served at docs.freeflow.im), the top header currently shows a green Sheets logo with the title "Sheets", a search box ("Search spreadsheets, pr..."), and text links "Export all", "Trash", "Connectors", "Changes", then an "Assistant" button and the user's email. Requested changes: (1) Rename the home page title/branding from "Sheets" to "FreeFlow Docs" (header title, and the browser tab title on the home page if it says Sheets). (2) Remove the "Export all", "Trash", "Connectors" and "Changes" links from the header row and put them in a "dot dot dot" (three-dot / kebab, vertical or horizontal ellipsis) overflow menu button placed in the header, e.g. next to the Assistant button. Clicking it opens a dropdown listing Export all, Trash, Connectors, Changes, each behaving exactly as the current links/buttons do (same routes/actions, e.g. /connectors). Close the menu on outside click or Escape; make it keyboard accessible with an aria-label such as "More". Keep the search box, Assistant button and user email as they are. Only the home page header is affected; the in-editor headers for sheets/decks/docs should not change.
+
+Files: client/src/pages/HomePage.tsx, client/src/styles.css
+
+Job: c19f6361-7a11-468a-accb-12d86cc3e04c
+
 ## 2026-10-07 — File chips in chat, stored PDF files with preview tab and download
 
 Stored files are in, and `export_deck` now uploads its PDF and shows a file chip in the chat. `npm run typecheck` and `npm test` both pass. I didn't run the app, so the chip, the preview tab and the home list haven't been tried in a browser.
