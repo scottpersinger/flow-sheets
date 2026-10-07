@@ -51,7 +51,12 @@ export function HomePage() {
         navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
         return;
       }
-      if (isWordFile(file) || isPdfFile(file)) {
+      if (isPdfFile(file)) {
+        const { file: stored } = await api.importPdf(file);
+        navigate(`/f/${stored.id}`);
+        return;
+      }
+      if (isWordFile(file)) {
         const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name));
         navigate(`/doc/${doc.id}`, { state: { importWarnings: warnings } });
         return;

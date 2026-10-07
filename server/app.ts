@@ -8,7 +8,7 @@ import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { importDocx } from './docxImport.ts';
-import { importPdf, isPdf } from './pdfImport.ts';
+import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
 import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, PREVIEW_FILE_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
@@ -547,19 +547,6 @@ export async function buildApp(opts: AppOptions) {
     // Import as a brand-new document.
     r.post('/api/docs/import', async (req, reply) => {
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported document';
-      if (Buffer.isBuffer(req.body) && isPdf(req.body)) {
-        // PDF: extract the text into a new document and keep the original in the user's files.
-        let pdf;
-        try {
-          pdf = importPdf(req.body);
-        } catch (e) {
-          if (!(e instanceof ImportError)) req.log.warn({ err: e }, 'pdf import failed');
-          return reply.code(400).send({ error: e instanceof ImportError ? e.message : 'This PDF could not be read.' });
-        }
-        const doc = await sheets.createDoc(req.user!.id, title, pdf.doc);
-        await storedFiles.create(req.user!.id, `${title.replace(/[\\/\u0000-\u001f]/g, '_')}.pdf`, 'application/pdf', req.body);
-        return { doc, warnings: pdf.warnings };
-      }
       const result = await convertDocx(req, reply);
       if (!result) return reply;
       const doc = await sheets.createDoc(req.user!.id, title, result.doc);
@@ -567,6 +554,13 @@ export async function buildApp(opts: AppOptions) {
     });
 
     // Convert only (nothing is stored but the pictures); the client adds the blocks to an open document.
+    r.post('/api/import/pdf', async (req, reply) => {
+      if (!Buffer.isBuffer(req.body) || !isPdf(req.body)) return reply.code(400).send({ error: 'This file is not a valid PDF.' });
+      const raw = String((req.query as { filename?: unknown }).filename ?? '');
+      const name = raw.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'document.pdf';
+      return { file: await storedFiles.create(req.user!.id, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', req.body) };
+    });
+
     r.post('/api/import/docx', async (req, reply) => {
       const result = await convertDocx(req, reply);
       if (!result) return reply;
