@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { fileIcon } from './FileLibrary.tsx';
 
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -6,12 +7,7 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** A short icon label for a MIME type. */
-export function fileIcon(type: string): string {
-  if (type === 'application/pdf') return 'PDF';
-  if (type.startsWith('image/')) return 'IMG';
-  return 'FILE';
-}
+export { fileIcon } from './FileLibrary.tsx';
 
 export interface ChipFile {
   id: string;
