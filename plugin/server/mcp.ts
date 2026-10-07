@@ -115,7 +115,9 @@ const ANNOTATIONS: Record<EditTool, { readOnlyHint: boolean; destructiveHint: bo
 
 /** Descriptions that differ from the in-app assistant's (which mention things only it has). */
 const DESCRIPTIONS: Partial<Record<EditTool, string>> = {
-  insert_image: 'Add an image block to the document from an https URL. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)',
+  insert_image: 'Add an image block to the document from an https URL, or from an image the user attached in the chat (pass it as file). (Markdown ![alt](src) on its own line in insert_content does the same without a width.)',
+  set_cell_image:
+    'Show an image inside a cell, scaled to fit the cell: from an https URL, or from an image the user attached in the chat (pass it as file). Replaces the cell\'s value; keeps its formatting. Make the row taller or the column wider (set_row_height, set_column_width) if the image should appear larger.',
   replace_blocks: 'Replace blocks from..to of the document with new content written as Markdown. Use this to rewrite a paragraph or a whole section; prefer replace_text for small wording changes.',
   delete_blocks: 'Delete blocks from..to of the document.',
   delete_slides: 'Delete slides by number.',
@@ -123,6 +125,25 @@ const DESCRIPTIONS: Partial<Record<EditTool, string>> = {
   get_sheet_overview:
     'Describe the spreadsheet: every tab with its size, used range, frozen panes, filter and first few rows, plus the range the user has selected. Call this first when you need to know how the data is laid out.',
 };
+
+/** Tools that take an image, and the field it goes in: the user's attachment can stand in for the address. */
+const IMAGE_TOOLS: Partial<Record<EditTool, string>> = { set_cell_image: 'url', insert_image: 'src' };
+
+const attachedFile = z.object({
+  download_url: z.string().describe('Where to download the file (filled in by ChatGPT).'),
+  file_id: z.string().optional(),
+  mime_type: z.string().optional(),
+  file_name: z.string().optional(),
+});
+
+/** The image type from its first bytes (attachments arrive without a reliable type). */
+function sniffImageType(bytes: Buffer): string | null {
+  if (bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
 
 /** Fetch an attached file from the host, within limits. Only https, and never an address on a private network. */
 async function download(url: string, fetchFn: typeof fetch): Promise<Buffer> {
@@ -303,14 +324,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       description:
         'Import a Word document (.docx) as a new document, a PowerPoint presentation (.pptx) as a new presentation, or an Excel workbook (.xlsx) as a new spreadsheet, from a file the user attached, and open it in the app.',
       inputSchema: {
-        file: z
-          .object({
-            download_url: z.string().describe('Where to download the file (filled in by ChatGPT).'),
-            file_id: z.string().optional(),
-            mime_type: z.string().optional(),
-            file_name: z.string().optional(),
-          })
-          .describe('The attached file.'),
+        file: attachedFile.describe('The attached file.'),
         title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -376,16 +390,41 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
 
   const describe = (name: EditTool) => (DESCRIPTIONS[name] ?? schemas[name].description ?? '').replace(/the open (document|presentation|spreadsheet)/g, 'the $1');
 
+  // Image tools also take the image the user attached in the chat (openai/fileParams): the host turns `file`
+  // into a download URL, the bytes are stored like an upload, and the address goes where a URL would.
+  const inputShape = (name: EditTool): Record<string, z.ZodType> => {
+    const shape = schemas[name].shape as Record<string, z.ZodType>;
+    const field = IMAGE_TOOLS[name];
+    if (!field) return shape;
+    return {
+      ...shape,
+      [field]: (shape[field] as z.ZodString).optional().describe(`${shape[field].description ?? ''} Leave out when passing the attached image as file.`),
+      file: attachedFile.optional().describe('An image the user attached in the chat (ChatGPT fills in its download address). Use this instead of an address for attachments.'),
+    };
+  };
+  const imageMeta = (name: EditTool) => (IMAGE_TOOLS[name] ? { _meta: { 'openai/fileParams': ['file'] } } : {});
+  const resolveImage = async (name: EditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const field = IMAGE_TOOLS[name];
+    if (!field) return input;
+    const { file, ...rest } = input as Record<string, unknown> & { file?: z.infer<typeof attachedFile> };
+    if (file?.download_url) {
+      const bytes = await download(file.download_url, opts.fetchFn ?? fetch);
+      const type = sniffImageType(bytes) ?? file.mime_type ?? '';
+      rest[field] = await service.storeImage(type, bytes);
+    } else if (!rest[field]) throw new ToolError(`Give ${field} (an https image address) or attach the image as file.`);
+    return rest;
+  };
+
   for (const name of DOC_EDIT_TOOLS) {
     server.registerTool(
       name,
-      { description: describe(name), inputSchema: { ...schemas[name].shape, doc_id: optionalDocId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
+      { description: describe(name), inputSchema: { ...inputShape(name), doc_id: optionalDocId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false }, ...imageMeta(name) },
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { doc_id, ...input } = args as Record<string, unknown> & { doc_id?: string };
           const id = service.target('doc', doc_id);
           if (!id) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');
-          return ok(await service.editDoc(id, name, input));
+          return ok(await service.editDoc(id, name, await resolveImage(name, input)));
         }),
     );
   }
@@ -407,13 +446,13 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   for (const name of SHEET_EDIT_TOOLS) {
     server.registerTool(
       name,
-      { description: describe(name), inputSchema: { ...schemas[name].shape, sheet_id: optionalSheetId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false } },
+      { description: describe(name), inputSchema: { ...inputShape(name), sheet_id: optionalSheetId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false }, ...imageMeta(name) },
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { sheet_id, ...input } = args as Record<string, unknown> & { sheet_id?: string };
           const id = service.target('sheet', sheet_id);
           if (!id) return fail('No spreadsheet is open in the app. Pass sheet_id (see list_files), or open one with open_file.');
-          return ok(await service.editSheet(id, name, input));
+          return ok(await service.editSheet(id, name, await resolveImage(name, input)));
         }),
     );
   }

@@ -19,6 +19,8 @@ const fakeFetch: typeof fetch = async (input) => {
   return bytes ? new Response(new Uint8Array(bytes), { headers: { 'content-length': String(bytes.length) } }) : new Response('nope', { status: 404 });
 };
 
+const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
 let dir: string;
 let client: Client;
 let svc: FileService;
@@ -147,6 +149,32 @@ describe('MCP server', () => {
     expect(local.text).toMatch(/public https/);
     const missing = await call('import_file', { file: { download_url: 'https://files.example/gone.docx' } });
     expect(missing.text).toMatch(/404/);
+  });
+
+  it('puts an attached image into a cell or a document', async () => {
+    const { tools } = await client.listTools();
+    const cell = tools.find((t) => t.name === 'set_cell_image')!;
+    expect(cell._meta).toMatchObject({ 'openai/fileParams': ['file'] });
+    expect(cell.inputSchema.required ?? []).not.toContain('url');
+    attachments.set('https://files.example/cat.png', Buffer.from(PNG_1X1, 'base64'));
+    await call('create_sheet', { title: 'Pics' });
+    const put = await call('set_cell_image', { range: 'B2', file: { download_url: 'https://files.example/cat.png', mime_type: 'application/octet-stream' } });
+    expect(put.isError, put.text).toBe(false);
+    expect(put.data?.image_in).toBe('Sheet1!B2');
+    const read = await call('read_range', { range: 'B2' });
+    expect((read.data?.values as string[][])[0][0]).toBe('[image]');
+    const neither = await call('set_cell_image', { range: 'B3' });
+    expect(neither.isError).toBe(true);
+    expect(neither.text).toMatch(/attach the image/);
+    attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
+    const notImage = await call('set_cell_image', { range: 'B3', file: { download_url: 'https://files.example/notes.txt' } });
+    expect(notImage.text).toMatch(/PNG, JPEG, GIF or WebP/);
+
+    await call('create_doc', { title: 'Album', markdown: 'Cats.\n' });
+    const inserted = await call('insert_image', { after: 1, file: { download_url: 'https://files.example/cat.png' } });
+    expect(inserted.isError, inserted.text).toBe(false);
+    const doc = await call('read_doc');
+    expect((doc.data?.blocks as { markdown: string }[])[1].markdown).toMatch(/^!\[.*\]\(\/api\/images\//);
   });
 
   it('returns an error result, not a crash, for bad input', async () => {

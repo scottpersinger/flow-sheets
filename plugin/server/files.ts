@@ -467,7 +467,7 @@ export class FileService {
         openDoc: unavailable('Opening a document'),
         requestAppChange: unavailable('Changing the app'),
         requestResearch: unavailable('Research'),
-        uploadImage: unavailable('Uploading'),
+        uploadImage: async (blob: Blob) => this.storeImage(blob.type, Buffer.from(await blob.arrayBuffer())),
       } as unknown as ClientToolEnv;
       const result = JSON.parse(await runClientTool({ id: 'mcp', name: tool, input }, env)) as Record<string, unknown>;
       const after = ctl.store.workbook;
@@ -483,9 +483,13 @@ export class FileService {
   // --- Images ---------------------------------------------------------------------------
 
   /** Store an image uploaded from the app; returns an address the iframe can load. */
-  async uploadImage(type: string, base64: string): Promise<string> {
+  uploadImage(type: string, base64: string): Promise<string> {
+    return this.storeImage(type, Buffer.from(base64, 'base64'));
+  }
+
+  /** Store image bytes (an upload, an attachment, an inline image); returns an address the iframe can load. */
+  async storeImage(type: string, data: Buffer): Promise<string> {
     if (!CELL_IMAGE_TYPES.includes(type)) throw new ToolError('Please choose a PNG, JPEG, GIF or WebP image.');
-    const data = Buffer.from(base64, 'base64');
     if (data.length > MAX_CELL_IMAGE_BYTES) throw new ToolError(`Images must be under ${Math.round(MAX_CELL_IMAGE_BYTES / 1e6)} MB.`);
     return this.publicSrc(await this.images.create(this.userId, type, data));
   }

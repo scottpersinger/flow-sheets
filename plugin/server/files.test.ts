@@ -175,6 +175,16 @@ describe('spreadsheets', () => {
     await expect(svc.save('sheet', sheet.id, wb, rev)).rejects.toBeInstanceOf(ConflictError);
   });
 
+  it('stores an inline image given to set_cell_image and keeps a short address in the cell', async () => {
+    const sheet = await svc.createSheet('Pics');
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const r = await svc.editSheet(sheet.id, 'set_cell_image', { range: 'A1', url: `data:image/png;base64,${png}` });
+    expect(r.image_in).toBe('Sheet1!A1');
+    const stored = await svc.sheets.load('u1', sheet.id);
+    expect(stored!.workbook.tabs[0].cells.A1.img).toMatch(/^\/api\/images\//);
+    expect(svc.imageFile(stored!.workbook.tabs[0].cells.A1.img!.slice('/api/images/'.length))?.type).toBe('image/png');
+  });
+
   it('imports an Excel workbook as a new spreadsheet, or as tabs for an open one', async () => {
     const x = new ExcelJS.Workbook();
     const ws = x.addWorksheet('Sales');
