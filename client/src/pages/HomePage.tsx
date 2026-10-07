@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { DeletedFile, SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
@@ -37,6 +37,8 @@ export function HomePage() {
   const [trash, setTrash] = useState<{ files: DeletedFile[]; available: boolean } | 'loading' | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
 
   const importFile = async (file: File) => {
     const problem = checkImportFile(file);
@@ -95,6 +97,24 @@ export function HomePage() {
   }, [agentRunning]);
 
   useEffect(() => {
+    document.title = 'FreeFlow Docs';
+  }, []);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMoreOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [moreOpen]);
+
+  useEffect(() => {
     if (!menuFor) return;
     const close = () => setMenuFor(null);
     window.addEventListener('click', close);
@@ -143,22 +163,38 @@ export function HomePage() {
       <header className="home-header">
         <div className="home-brand">
           <Logo />
-          <span>Sheets</span>
+          <span>FreeFlow Docs</span>
         </div>
         <input className="home-search" placeholder="Search spreadsheets, presentations and documents" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
-          <a href="/api/export.zip" className="home-changes" title="Download every document, presentation and spreadsheet as a zip (Markdown, PowerPoint, Excel and JSON)">
-            Export all
-          </a>
-          <button className="home-changes link-btn" onClick={openTrash} title="Files deleted in the last 30 days">
-            Trash
-          </button>
-          <Link to="/connectors" className="home-changes" title="Connect data sources such as Brex">
-            Connectors
-          </Link>
-          <Link to="/changes" className="home-changes" title="Changes the assistant made to the app">
-            Changes
-          </Link>
+          <div className="home-more" ref={moreRef}>
+            <button className="btn home-more-btn" aria-label="More" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((o) => !o)}>
+              ⋯
+            </button>
+            {moreOpen && (
+              <div className="home-more-menu" role="menu">
+                <a role="menuitem" href="/api/export.zip" onClick={() => setMoreOpen(false)} title="Download every document, presentation and spreadsheet as a zip (Markdown, PowerPoint, Excel and JSON)">
+                  Export all
+                </a>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    openTrash();
+                  }}
+                  title="Files deleted in the last 30 days"
+                >
+                  Trash
+                </button>
+                <Link role="menuitem" to="/connectors" title="Connect data sources such as Brex">
+                  Connectors
+                </Link>
+                <Link role="menuitem" to="/changes" title="Changes the assistant made to the app">
+                  Changes
+                </Link>
+              </div>
+            )}
+          </div>
           <AgentButton />
           <span>{user?.email}</span>
           <button className="btn" onClick={() => void logout()}>
