@@ -9,7 +9,7 @@ import { fileIcon } from '../components/FileChip.tsx';
 import { DeckIcon, DocIcon, Logo } from '../components/Logo.tsx';
 import { ConfirmModal, Modal, PromptModal } from '../components/Modal.tsx';
 import { useFavicon } from '../favicon.ts';
-import { checkImportFile, isPowerPointFile, isWordFile, pickImportFile, titleFromFileName } from '../importFile.ts';
+import { checkImportFile, isPdfFile, isPowerPointFile, isWordFile, pickImportFile, titleFromFileName } from '../importFile.ts';
 
 /** A row of the home list: a spreadsheet, presentation, document or stored file. */
 type HomeItem = Omit<SheetMeta, 'kind'> & { kind: SheetMeta['kind'] | 'file' };
@@ -51,7 +51,7 @@ export function HomePage() {
         navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
         return;
       }
-      if (isWordFile(file)) {
+      if (isWordFile(file) || isPdfFile(file)) {
         const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name));
         navigate(`/doc/${doc.id}`, { state: { importWarnings: warnings } });
         return;
@@ -233,16 +233,16 @@ export function HomePage() {
                   const file = await pickImportFile();
                   if (file) void importFile(file);
                 }}
-                aria-label="Import an Excel, PowerPoint or Word file"
+                aria-label="Import an Excel, PowerPoint, Word or PDF file"
               >
                 <svg width="44" height="44" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
-              <div className="tile-label">Import Excel, PowerPoint or Word</div>
+              <div className="tile-label">Import Excel, PowerPoint, Word or PDF</div>
             </div>
           </div>
-          <div className="tile-hint">You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx) or Word (.docx) file anywhere on this page.</div>
+          <div className="tile-hint">You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx) Word (.docx) or PDF (.pdf) file anywhere on this page.</div>
         </div>
       </section>
 
@@ -353,7 +353,7 @@ export function HomePage() {
           </div>
         </div>
       )}
-      {dragOver && !importing && <div className="drop-hint">Drop an Excel, PowerPoint or Word file to import it</div>}
+      {dragOver && !importing && <div className="drop-hint">Drop an Excel, PowerPoint, Word or PDF file to import it</div>}
       {creating === 'sheet' && (
         <PromptModal
           title="New spreadsheet"

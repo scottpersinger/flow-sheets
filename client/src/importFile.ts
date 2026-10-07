@@ -4,6 +4,7 @@
 export const EXCEL_ACCEPT = '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
 export const PPTX_ACCEPT = '.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 export const DOCX_ACCEPT = '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+export const PDF_ACCEPT = '.pdf,application/pdf';
 export const MAX_IMPORT_MB = 20;
 
 function pickFile(accept: string): Promise<File | null> {
@@ -22,12 +23,13 @@ export const pickExcelFile = (): Promise<File | null> => pickFile(EXCEL_ACCEPT);
 /** Open the browser's file picker for a PowerPoint file; resolves to null if the user cancels. */
 export const pickPptxFile = (): Promise<File | null> => pickFile(PPTX_ACCEPT);
 /** Open the browser's file picker for anything the home page can import. */
-export const pickImportFile = (): Promise<File | null> => pickFile(`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT}`);
+export const pickImportFile = (): Promise<File | null> => pickFile(`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT}`);
 /** Open the browser's file picker for a Word document; resolves to null if the user cancels. */
 export const pickDocxFile = (): Promise<File | null> => pickFile(DOCX_ACCEPT);
 
 export const isPowerPointFile = (file: File): boolean => /\.pptx$/i.test(file.name);
 export const isWordFile = (file: File): boolean => /\.docx$/i.test(file.name);
+export const isPdfFile = (file: File): boolean => /\.pdf$/i.test(file.name);
 
 function checkSize(file: File): string | null {
   return file.size > MAX_IMPORT_MB * 1024 * 1024 ? `This file is too large to import (${MAX_IMPORT_MB} MB maximum).` : null;
@@ -51,11 +53,11 @@ export function checkDocxFile(file: File): string | null {
 
 /** Checks for the home page, which takes any kind. */
 export function checkImportFile(file: File): string | null {
-  if (!/\.(xlsx?|pptx|docx)$/i.test(file.name)) return 'Please choose an Excel workbook (.xlsx or .xls), a PowerPoint presentation (.pptx) or a Word document (.docx).';
+  if (!/\.(xlsx?|pptx|docx|pdf)$/i.test(file.name)) return 'Please choose an Excel workbook (.xlsx or .xls), a PowerPoint presentation (.pptx), a Word document (.docx) or a PDF (.pdf).';
   return checkSize(file);
 }
 
 export function titleFromFileName(name: string): string {
   const file = { name } as File;
-  return name.replace(/\.(xlsx?|pptx|docx)$/i, '').trim() || (isPowerPointFile(file) ? 'Imported presentation' : isWordFile(file) ? 'Imported document' : 'Imported spreadsheet');
+  return name.replace(/\.(xlsx?|pptx|docx|pdf)$/i, '').trim() || (isPowerPointFile(file) ? 'Imported presentation' : isWordFile(file) || isPdfFile(file) ?'Imported document' : 'Imported spreadsheet');
 }
