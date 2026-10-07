@@ -6,7 +6,18 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../server/db.ts';
 import { FileHub, type FileService } from './files.ts';
+import { buildSlide, newId } from '../../shared/deck.ts';
+import { buildPptx } from '../../shared/pptxExport.ts';
+import { buildDocx } from '../../server/testing.ts';
 import { APP_URI, appHtml, createMcpServer } from './mcp.ts';
+
+/** Serves the test's Word and PowerPoint files at pretend ChatGPT download URLs. */
+const attachments = new Map<string, Buffer>();
+const fakeFetch: typeof fetch = async (input) => {
+  const url = typeof input === 'string' ? input : (input as URL).toString();
+  const bytes = attachments.get(url);
+  return bytes ? new Response(new Uint8Array(bytes), { headers: { 'content-length': String(bytes.length) } }) : new Response('nope', { status: 404 });
+};
 
 let dir: string;
 let client: Client;
@@ -19,7 +30,7 @@ beforeEach(async () => {
   const hub = new FileHub({ db, dataDir: dir, publicUrl: null });
   await hub.init();
   svc = hub.forUser('u1');
-  const server = createMcpServer(svc, { bundle: () => ({ js: 'console.log(1)', css: '', hash: 'abc' }), publicUrl: null });
+  const server = createMcpServer(svc, { bundle: () => ({ js: 'console.log(1)', css: '', hash: 'abc' }), publicUrl: null, fetchFn: fakeFetch });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
   client = new Client({ name: 'test', version: '0' });
@@ -93,6 +104,30 @@ describe('MCP server', () => {
     expect(outline.data?.slide_count).toBe(3);
     const files = await call('list_files', { kind: 'deck' });
     expect((files.data?.files as { title: string }[]).map((f) => f.title)).toEqual(['Pitch']);
+  });
+
+  it('imports Word and PowerPoint files the user attached, and refuses other things', async () => {
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === 'import_file')?._meta).toMatchObject({ 'openai/fileParams': ['file'] });
+    attachments.set('https://files.example/brief.docx', await buildDocx('<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>From Word</w:t></w:r></w:p><w:p><w:r><w:t>Body.</w:t></w:r></w:p>'));
+    const doc = await call('import_file', { file: { download_url: 'https://files.example/brief.docx', file_id: 'f1', file_name: 'brief.docx' } });
+    expect(doc.isError).toBe(false);
+    expect(doc.data?.file).toMatchObject({ kind: 'doc', title: 'brief' });
+    const read = await call('read_doc');
+    expect((read.data?.blocks as { markdown: string }[])[0].markdown).toMatch(/^# .*From Word/);
+    const { pres } = await buildPptx({ version: 1, theme: 'light', slides: [buildSlide('title-body', { title: 'From PowerPoint', body: ['One', 'Two'] }, newId)] }, 'x', async () => null);
+    attachments.set('https://files.example/deck.pptx', Buffer.from((await pres.write({ outputType: 'nodebuffer' })) as Buffer));
+    const deck = await call('import_file', { file: { download_url: 'https://files.example/deck.pptx' }, title: 'Pitch' });
+    expect(deck.data?.file).toMatchObject({ kind: 'deck', title: 'Pitch' });
+    expect((deck.data?.open as { kind: string }).kind).toBe('deck');
+    attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
+    const txt = await call('import_file', { file: { download_url: 'https://files.example/notes.txt' } });
+    expect(txt.isError).toBe(true);
+    expect(txt.text).toMatch(/Only Word documents/);
+    const local = await call('import_file', { file: { download_url: 'http://127.0.0.1/secret' } });
+    expect(local.text).toMatch(/public https/);
+    const missing = await call('import_file', { file: { download_url: 'https://files.example/gone.docx' } });
+    expect(missing.text).toMatch(/404/);
   });
 
   it('returns an error result, not a crash, for bad input', async () => {

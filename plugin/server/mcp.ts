@@ -48,7 +48,12 @@ export interface McpOptions {
    *  rendering it, 'app' adds the app-only tools and the docs_app tool, 'full' (default) adds the sidebar
    *  entrypoint. */
   level?: 'minimal' | 'tools' | 'render' | 'app' | 'full';
+  /** Fetches files ChatGPT hands to import_file (tests pass a fake). */
+  fetchFn?: typeof fetch;
 }
+
+/** The largest file import_file will download. */
+export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 export const INSTRUCTIONS = `Freeflow Docs: the user's text documents and slide presentations, with an app that shows one file open for editing.
 Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document and presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation unless an id is given. Read first (read_doc or read_deck) to learn block or slide numbers and element ids; they change after inserts and deletes. Write document content as Markdown. Keep edits targeted: change the blocks, slides or elements that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
@@ -94,6 +99,25 @@ const DESCRIPTIONS: Partial<Record<DocEditTool | DeckEditTool, string>> = {
   delete_slides: 'Delete slides by number.',
   read_deck: 'Outline of the presentation: theme, every slide with its layout, elements (id, type, position, text) and notes, and which slide the user is on. Call this before changing slides.',
 };
+
+/** Fetch an attached file from the host, within limits. Only https, and never an address on a private network. */
+async function download(url: string, fetchFn: typeof fetch): Promise<Buffer> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new ToolError('The file address is not a valid URL.');
+  }
+  if (u.protocol !== 'https:' || /^(localhost|127\.|10\.|192\.168\.|169\.254\.|\[|0\.)/.test(u.hostname) || /^172\.(1[6-9]|2\d|3[01])\./.test(u.hostname)) throw new ToolError('Files can only be fetched from public https addresses.');
+  const res = await fetchFn(u, { redirect: 'follow', signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) throw new ToolError(`Could not download the file (${res.status}).`);
+  const declared = Number(res.headers.get('content-length') ?? 0);
+  if (declared > MAX_IMPORT_BYTES) throw new ToolError(`The file is too large to import (over ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.length > MAX_IMPORT_BYTES) throw new ToolError(`The file is too large to import (over ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`);
+  if (!bytes.length) throw new ToolError('The file is empty.');
+  return bytes;
+}
 
 function ok(data: Record<string, unknown>): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data };
@@ -228,6 +252,35 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         const file = await service.createDeck(title, theme as ThemeId | undefined, (slides ?? []) as SlideSpec[]);
         service.setOpen({ kind: 'deck', id: file.id });
         return ok({ file, ...service.state() });
+      }),
+  );
+
+  // A file the user attached in ChatGPT: the host turns the `file` argument into a download URL (openai/fileParams).
+  server.registerTool(
+    'import_file',
+    {
+      title: 'Import a Word or PowerPoint file',
+      description: 'Import a Word document (.docx) as a new document, or a PowerPoint presentation (.pptx) as a new presentation, from a file the user attached, and open it in the app.',
+      inputSchema: {
+        file: z
+          .object({
+            download_url: z.string().describe('Where to download the file (filled in by ChatGPT).'),
+            file_id: z.string().optional(),
+            mime_type: z.string().optional(),
+            file_name: z.string().optional(),
+          })
+          .describe('The attached file.'),
+        title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: { 'openai/fileParams': ['file'] },
+    },
+    async ({ file, title }) =>
+      guard(async () => {
+        const bytes = await download(file.download_url, opts.fetchFn ?? fetch);
+        const r = await service.importFile(bytes, file.file_name, title);
+        service.setOpen({ kind: r.file.kind, id: r.file.id });
+        return ok({ ...r, ...service.state() });
       }),
   );
 

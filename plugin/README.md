@@ -20,7 +20,9 @@ plugin/
 
 ## How it works
 
-- **Tools for the model**: `list_files`, `open_file`, `create_doc`, `create_deck`, `rename_file`, `delete_file`,
+- **Tools for the model**: `list_files`, `open_file`, `create_doc`, `create_deck`, `import_file` (a Word or
+  PowerPoint file the user attached in ChatGPT, declared with `openai/fileParams` so the host supplies a
+  download URL; the app's own converters run on the server), `rename_file`, `delete_file`,
   the app's document tools (`read_doc`, `insert_content`, `replace_blocks`, `replace_text`, `format_text`, ...)
   and its presentation tools (`read_deck`, `add_slides`, `update_slide`, `edit_elements`, `delete_slides`,
   `move_slide`, `set_deck_theme`; `render_slide` needs a browser and is left out). They act on the file open in

@@ -4,6 +4,9 @@
 // view, so a tool behaves exactly as it does inside the app, then the result is saved.
 import path from 'node:path';
 import { runDeckTool } from '../../client/src/agent/deckTools.ts';
+import { importDocx, isDocx } from '../../server/docxImport.ts';
+import { importPptx, isPptx } from '../../server/pptxImport.ts';
+import { ImportError } from '../../server/xlsxImport.ts';
 import { runDocTool } from '../../client/src/agent/docTools.ts';
 import { ToolError } from '../../client/src/agent/toolError.ts';
 import { DeckController } from '../../client/src/deck/controller.ts';
@@ -206,6 +209,33 @@ export class FileService {
     const problem = validateDeck(deck);
     if (problem) throw new ToolError(problem);
     return summary(await this.sheets.createDeck(this.userId, title.trim() || 'Untitled presentation', deck));
+  }
+
+  /**
+   * Create a document from a Word file or a presentation from a PowerPoint file, with the app's own
+   * converters (pictures are stored for the account). The kind comes from the bytes, not the name.
+   */
+  async importFile(bytes: Buffer, name: string | undefined, title: string | undefined): Promise<{ file: FileSummary; warnings: string[] }> {
+    const baseTitle = (title?.trim() || name?.replace(/\.[^.]+$/, '').trim() || '').slice(0, 200);
+    const storeImage = (type: string, data: Buffer) => this.images.create(this.userId, type, data);
+    try {
+      if (await isDocx(bytes)) {
+        const { doc, warnings } = await importDocx(bytes, storeImage);
+        const problem = validateDoc(doc);
+        if (problem) throw new ToolError(problem);
+        return { file: summary(await this.sheets.createDoc(this.userId, baseTitle || 'Imported document', doc)), warnings };
+      }
+      if (await isPptx(bytes)) {
+        const { deck, warnings } = await importPptx(bytes, storeImage);
+        const problem = validateDeck(deck);
+        if (problem) throw new ToolError(problem);
+        return { file: summary(await this.sheets.createDeck(this.userId, baseTitle || 'Imported presentation', deck)), warnings };
+      }
+    } catch (e) {
+      if (e instanceof ImportError) throw new ToolError(e.message);
+      throw e;
+    }
+    throw new ToolError('Only Word documents (.docx) and PowerPoint presentations (.pptx) can be imported.');
   }
 
   rename(kind: FileKind, id: string, title: string): FileSummary {
