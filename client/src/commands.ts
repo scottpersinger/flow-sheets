@@ -21,7 +21,7 @@ export interface CommandHost {
   isBranch: boolean;
   goHome(): void;
   openConnectors(): void;
-  download(kind: 'csv' | 'json'): void;
+  download(kind: 'csv' | 'json' | 'xlsx'): void;
   deleteTab(tabId: string): void;
 }
 
@@ -215,6 +215,7 @@ export function fileItems(host: CommandHost): MenuItem[] {
     {
       label: 'Download',
       submenu: [
+        { label: 'Excel workbook (.xlsx)', action: () => host.download('xlsx') },
         { label: 'Comma-separated values (.csv, current sheet)', action: () => host.download('csv') },
         { label: 'Workbook (.json)', action: () => host.download('json') },
       ],

@@ -15,11 +15,13 @@
     "plugin:start": "NODE_ENV=production node plugin/server/index.ts",
     "plugin:build": "vite build --config plugin/vite.config.ts",
     "plugin:watch": "vite build --config plugin/vite.config.ts --watch",
-    "plugin:harness": "vite --config plugin/vite.config.ts"
+    "plugin:harness": "vite --config plugin/vite.config.ts",
+    "r2": "node server/scripts/r2.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.288",
     "@anthropic-ai/sdk": "^0.131.0",
+    "@aws-sdk/client-s3": "^3.1147.0",
     "@fastify/cookie": "^11.1.2",
     "@fastify/static": "^10.1.5",
     "@modelcontextprotocol/ext-apps": "^1.7.5",

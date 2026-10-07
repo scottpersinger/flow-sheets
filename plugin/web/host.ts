@@ -20,6 +20,8 @@ export interface AppState {
 export class Host {
   readonly app = new App({ name: 'freeflow-docs', version: '0.2.0' });
   readonly ext = new OpenAIExtensions(this.app);
+  /** Where the full app lives (from the page the server rendered), for "Open in Freeflow"; null when unknown. */
+  readonly appUrl: string | null = document.querySelector<HTMLMetaElement>('meta[name="freeflow-url"]')?.content.replace(/\/$/, '') || null;
   /** structuredContent of the tool call that showed the app (docs_app or open_file), once it arrives. */
   initial: Partial<AppState> | null = null;
   private initialListeners = new Set<(s: Partial<AppState>) => void>();
@@ -92,6 +94,26 @@ export class Host {
     const mc = this.ext.modelContext;
     if (!mc) return;
     await mc.update({ content: [{ type: 'text', text, _meta: { 'openai/title': title } }], structuredContent: structured });
+  }
+
+  /** The full app's address for a file, or for its home page. */
+  appLink(file?: { kind: FileKind; id: string }): string | null {
+    if (!this.appUrl) return null;
+    if (!file) return this.appUrl;
+    const prefix = { doc: '/doc/', deck: '/d/', sheet: '/s/' }[file.kind];
+    return `${this.appUrl}${prefix}${encodeURIComponent(file.id)}`;
+  }
+
+  /** Open a web address in a new browser tab: through the host (the iframe cannot navigate the top window),
+   *  or directly when there is no host (the harness). */
+  async openLink(url: string): Promise<void> {
+    try {
+      const r = await this.app.openLink({ url });
+      if (!r.isError) return;
+    } catch {
+      // No host, or one that does not open links.
+    }
+    window.open(url, '_blank', 'noopener');
   }
 
   async fullscreen(): Promise<void> {

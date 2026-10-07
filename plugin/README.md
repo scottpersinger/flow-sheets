@@ -7,7 +7,13 @@ are untouched (apart from one `export` in `server/agent/tools.ts`).
 
 ```
 plugin/
-  server/index.ts   HTTP server: /mcp (streamable HTTP MCP, stateless), /img/<id> (document images), /health
+  server/index.ts   standalone HTTP server for development: /mcp (streamable HTTP MCP, stateless), OAuth,
+                    /img/<id> (document images), /health
+  server/http.ts    the request handler both servers use: /mcp, /oauth/*, /plugin/* (import uploads, hosted
+                    assets), the OAuth well-known documents
+  server/mount.ts   runs that handler inside the app's Fastify server (PLUGIN_ENABLED=1), sharing its stores
+  server/oauth.ts   OAuth 2.1 authorization server for the MCP endpoint (see Accounts and OAuth)
+  server/stateless.ts  MCP 2026-07-28 (server/discover, ttlMs/cacheScope) on top of the 2025-11-25 SDK
   server/mcp.ts     tools, the app as a UI resource, server instructions
   server/files.ts   documents, presentations and spreadsheets from the app's SQLite + JSON files; headless
                     edits via the app's own doc, deck and sheet tools
@@ -36,9 +42,15 @@ plugin/
   `save_file`, `set_open_file`, `upload_image`, `upload_ticket`. The app never calls the REST API; the iframe
   has no cookies. The library's Import tile posts the file's bytes to `/plugin/import` with a one-time ticket
   from `upload_ticket` (the only route the app reaches directly, which is why it answers any origin).
-- **The app** is one UI resource (`ui://freeflow-docs/app.html`, `text/html;profile=mcp-app`) with the built
-  bundle inlined. `docs_app` is the sidebar entrypoint (`openai/ui.entrypoints: [{type: "global"}]`);
-  `open_doc` renders the same resource, so "open my Q3 plan" in any chat shows the editor.
+- **The app** is one UI resource (`ui://freeflow-docs/app-<hash>.html`, `text/html;profile=mcp-app`) with the
+  built bundle inlined. The URI carries the bundle's content hash (`appUri` in `mcp.ts`), so a rebuilt app is
+  a new resource and a host never keeps serving a stale copy. `docs_app` is the sidebar entrypoint
+  (`openai/ui.entrypoints: [{type: "global"}, {type: "thread"}]`); `open_file` renders the same resource, so
+  "open my Q3 plan" in any chat shows the editor.
+- **Open in Freeflow**: the library's header, each file's menu and each editor's header link to the same
+  file in the full app (`<APP_URL>/doc/<id>`, `/d/<id>`, `/s/<id>`). The page carries the app's address in a
+  `freeflow-url` meta tag, and links open through the host (`ui/open-link`) in a new tab; a browser signed
+  in to the app lands on the file, otherwise on sign-in, which returns to it.
 - **Live updates**: every save bumps a revision (the save time). The app polls `app_state` every 2.5 s and
   reloads the file when the revision changed (a model edit) or switches when another file was opened. A
   document or spreadsheet is replaced as one undoable step; a presentation is updated slide by slide. Saves carry the
@@ -59,8 +71,8 @@ plugin/
   list results. Without them, "Create as a plugin" fails with the unhelpful "couldn't complete MCP setup", and a
   plugin created earlier stores no HTML template for the tool ("HTML asset not found" when it opens). The
   real reason only shows in the 424 response of `POST /backend-api/aip/connectors/mcp` in the browser.
-- The HTML template is captured when the plugin is created or on "Refresh tools"; bump the `ui://` URI
-  when the app changes shape.
+- The HTML template is captured when the plugin is created or on "Refresh tools", keyed by the `ui://` URI,
+  which is why the URI carries the bundle hash. After deploying a new build, use *Refresh tools*.
 - Every tool needs annotations, and the app runs with "CSP off" in developer mode (so hosted scripts are not
   reliable there; the bundle is inlined).
 
@@ -106,7 +118,8 @@ consent page, opaque access tokens (1 h) and rotating refresh tokens (30 d) with
 and the `iss` parameter on redirects. Hashes live in `plugin.db` in the data directory. `/mcp` answers 401
 with a `WWW-Authenticate` challenge until a valid bearer token arrives, then acts as that account; the
 `get_profile` tool (marked `openai/profile`) lets ChatGPT show and link accounts. Setting `PLUGIN_USER_EMAIL`
-switches all of this off for development (every request acts as that account; the harness needs this).
+switches all of this off for development (every request acts as that account; the harness needs this). The
+standalone server refuses to start with it set when `NODE_ENV=production`, and the in-app mount never reads it.
 
 ## Running inside the app (deployment)
 

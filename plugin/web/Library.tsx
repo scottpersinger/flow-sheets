@@ -111,6 +111,11 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
           <button className="btn" onClick={() => void host.ask('What spreadsheets, presentations and documents do I have? List them with a one-line summary each.')}>
             Ask about my files
           </button>
+          {host.appLink() && (
+            <button className="btn" title="Open the full Freeflow app in a new tab" onClick={() => void host.openLink(host.appLink()!)}>
+              Open Freeflow ↗
+            </button>
+          )}
         </div>
       </header>
 
@@ -198,6 +203,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
                     {menuFor === f.id && (
                       <div className="dropdown">
                         <button onClick={() => onOpen({ kind: f.kind, id: f.id })}>Open</button>
+                        {host.appLink(f) && <button onClick={() => (setMenuFor(null), void host.openLink(host.appLink(f)!))}>Open in Freeflow ↗</button>}
                         <button onClick={() => (setMenuFor(null), setRenaming(f))}>Rename</button>
                         <button className="danger" onClick={() => (setMenuFor(null), setDeleting(f))}>
                           Delete

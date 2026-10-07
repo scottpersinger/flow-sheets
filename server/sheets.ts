@@ -5,6 +5,7 @@ import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';
 import { migrateDeck } from '../shared/lines.ts';
 import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
+import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
 
 interface SheetRow {
@@ -90,6 +91,8 @@ export class SheetStore {
   private dir: string;
   // Serialize writes per document so concurrent saves can't interleave on disk.
   private writeChains = new Map<string, Promise<void>>();
+  /** The off-box copy (backup.ts): every write, base and delete is reported to it when set. */
+  backup: Backup | null = null;
 
   constructor(db: DB, dir: string) {
     this.db = db;
@@ -126,11 +129,12 @@ export class SheetStore {
   private async insert(ownerId: string, kind: DocKind, title: string, doc: Workbook | Deck | Doc): Promise<SheetMeta> {
     const id = randomUUID();
     const file = `${id}.json`;
-    await this.writeAtomic(file, doc);
+    const json = await this.writeAtomic(file, doc);
     const now = new Date().toISOString();
     this.db
       .prepare('INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(id, ownerId, kind, title, file, now, now);
+    this.backup?.putFile(ownerId, kind, id, now, json);
     return { id, kind, title, createdAt: now, updatedAt: now };
   }
 
@@ -144,7 +148,7 @@ export class SheetStore {
     if (!src) return null;
     const id = randomUUID();
     const file = `${id}.json`;
-    await this.writeAtomic(file, src.workbook);
+    const json = await this.writeAtomic(file, src.workbook);
     await this.writeAtomic(baseFileOf(id), src.workbook);
     const now = new Date().toISOString();
     this.db
@@ -153,6 +157,8 @@ export class SheetStore {
          VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(id, ownerId, title, file, now, now, sourceId, src.meta.title, now);
+    this.backup?.putFile(ownerId, 'sheet', id, now, json);
+    this.backup?.putBase(ownerId, id, json);
     return this.get(ownerId, id);
   }
 
@@ -180,10 +186,11 @@ export class SheetStore {
   private async write(r: SheetRow, doc: Workbook | Deck | Doc): Promise<SheetMeta> {
     const prev = this.writeChains.get(r.id) ?? Promise.resolve();
     const next = prev.then(() => this.writeAtomic(r.file, doc));
-    this.writeChains.set(r.id, next.catch(() => {}));
-    await next;
+    this.writeChains.set(r.id, next.then(() => {}, () => {}));
+    const json = await next;
     const now = new Date().toISOString();
     this.db.prepare('UPDATE sheets SET updated_at = ? WHERE id = ?').run(now, r.id);
+    this.backup?.putFile(r.owner_id, r.kind, r.id, now, json);
     return { ...toMeta(r), updatedAt: now };
   }
 
@@ -244,13 +251,33 @@ export class SheetStore {
     this.writeChains.delete(id);
     await rm(this.filePath(r.file), { force: true });
     await rm(this.filePath(baseFileOf(id)), { force: true });
+    this.backup?.markDeleted(r.owner_id, r.kind, id, r.title);
     return true;
   }
 
-  private async writeAtomic(file: string, doc: Workbook | Deck | Doc): Promise<void> {
+  /** Puts a deleted file back (from the off-box copy), under its old id. Fails if the id is taken. */
+  async restore(ownerId: string, kind: DocKind, id: string, title: string, json: string): Promise<SheetMeta> {
+    if (this.db.prepare('SELECT 1 FROM sheets WHERE id = ?').get(id)) throw new Error('A file with this id already exists');
+    const file = `${id}.json`;
     const target = this.filePath(file);
     const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmp, JSON.stringify(doc));
+    await writeFile(tmp, json);
     await rename(tmp, target);
+    const now = new Date().toISOString();
+    this.db
+      .prepare('INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, ownerId, kind, title, file, now, now);
+    this.backup?.putFile(ownerId, kind, id, now, json);
+    return { id, kind, title, createdAt: now, updatedAt: now };
+  }
+
+  /** Writes the file (temp file, then rename) and returns the JSON written. */
+  private async writeAtomic(file: string, doc: Workbook | Deck | Doc): Promise<string> {
+    const target = this.filePath(file);
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    const json = JSON.stringify(doc);
+    await writeFile(tmp, json);
+    await rename(tmp, target);
+    return json;
   }
 }

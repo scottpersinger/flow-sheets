@@ -11,8 +11,11 @@ import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
 import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, SHEET_EDIT_TOOLS, ToolError, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
-// Hosts cache UI resources by URI: bump the version whenever the app changes shape.
-export const APP_URI = 'ui://freeflow-docs/app-v9.html';
+/**
+ * The app's resource URI. Hosts capture the HTML by URI when the plugin is created or its tools refreshed, so
+ * the URI carries the bundle's content hash: a rebuilt app is a new URI, never a stale copy under the old one.
+ */
+export const appUri = (hash: string): string => `ui://freeflow-docs/app-${hash}.html`;
 export const SERVER_INFO = { name: 'freeflow-docs', version: '0.2.0' };
 /** What the server advertises: tools, resources, and MCP Apps UI resources. */
 export const SERVER_CAPABILITIES = {
@@ -183,8 +186,10 @@ async function guard(fn: () => Promise<CallToolResult> | CallToolResult): Promis
   }
 }
 
-export function appHtml(bundle: Bundle, assetOrigin: string | null): string {
-  const head = '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Docs</title>';
+/** The page shown in ChatGPT. `appUrl` is where the full app lives, for its "Open in Freeflow" links. */
+export function appHtml(bundle: Bundle, assetOrigin: string | null, appUrl: string | null = null): string {
+  const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Docs</title>${appUrl ? `<meta name="freeflow-url" content="${escape(appUrl)}">` : ''}`;
   if (assetOrigin) {
     // Served from our own origin, which the resource's CSP (resourceDomains) allows.
     return `<!doctype html>\n<html lang="en"><head>${head}<link rel="stylesheet" href="${assetOrigin}/plugin/app.css?v=${bundle.hash}"></head><body><div id="root"></div><script type="module" src="${assetOrigin}/plugin/app.js?v=${bundle.hash}"></script></body></html>`;
@@ -200,10 +205,20 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const server = new McpServer({ ...SERVER_INFO, icons: [DOC_ICON] }, { instructions: INSTRUCTIONS });
   const level = opts.level ?? 'full';
   const ui = level === 'render' || level === 'app' || level === 'full';
+  // Only the levels that show the app need the bundle. An unbuilt app still lists its tools (the resource
+  // read is where "run npm run plugin:build" surfaces), under a URI no built app will ever have.
+  const bundleHash = (): string => {
+    try {
+      return opts.bundle().hash;
+    } catch {
+      return 'unbuilt';
+    }
+  };
+  const APP_URI = ui ? appUri(bundleHash()) : '';
   const appTools = level === 'app' || level === 'full';
   const entrypoint = level === 'full';
 
-  const listFiles = { title: 'List files', description: "The user's documents and presentations, most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: kind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+  const listFiles = { title: 'List files', description: "The user's documents, presentations and spreadsheets, most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: kind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
   server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
   if (level === 'minimal') return server;
 
@@ -219,7 +234,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     },
     'openai/ui': { preferredDisplayMode: 'inline', availableDisplayModes: ['inline', 'fullscreen'] },
     // Legacy Apps SDK aliases of the same things, which ChatGPT's web host still reads.
-    'openai/widgetDescription': 'The Freeflow Docs editor: the open document or presentation, editable in place.',
+    'openai/widgetDescription': 'The Freeflow Docs editor: the open document, presentation or spreadsheet, editable in place.',
     'openai/widgetPrefersBorder': true,
     'openai/widgetCSP': { connect_domains: origins, resource_domains: [...origins, 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'] },
   };
@@ -233,7 +248,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const contentMeta = pick === 'none' ? undefined : pick === 'ui' ? { ui: uiMeta.ui } : pick === 'legacy' ? Object.fromEntries(Object.entries(uiMeta).filter(([k]) => k.startsWith('openai/widget'))) : uiMeta;
   if (ui)
     server.registerResource('docs-app', APP_URI, { title: 'Docs', mimeType }, async () => ({
-      contents: [{ uri: APP_URI, mimeType, text: opts.helloPage ? HELLO : appHtml(opts.bundle(), opts.hostedAssets ? opts.publicUrl : null), ...(contentMeta ? { _meta: contentMeta } : {}) }],
+      contents: [{ uri: APP_URI, mimeType, text: opts.helloPage ? HELLO : appHtml(opts.bundle(), opts.hostedAssets ? opts.publicUrl : null, opts.publicUrl), ...(contentMeta ? { _meta: contentMeta } : {}) }],
     }));
 
   // Opens from ChatGPT's sidebar: the whole app, with the composer alongside.
@@ -377,7 +392,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'delete_file',
     {
       title: 'Delete file',
-      description: 'Delete a document or presentation permanently. Only when the user clearly asks for it.',
+      description: 'Delete a document, presentation or spreadsheet permanently. Only when the user clearly asks for it.',
       inputSchema: { kind, id: fileId },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },

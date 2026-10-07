@@ -3,7 +3,7 @@
   "mcpServers": {
     "docs": {
       "type": "streamable-http",
-      "url": "https://REPLACE-WITH-PLUGIN_PUBLIC_URL/mcp"
+      "url": "https://docs.freeflow.im/mcp"
     }
   }
 }

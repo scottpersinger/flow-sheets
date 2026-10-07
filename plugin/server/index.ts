@@ -23,6 +23,10 @@ const publicUrl = process.env.PLUGIN_PUBLIC_URL?.replace(/\/$/, '') || null;
 const devEmail = process.env.PLUGIN_USER_EMAIL;
 const production = process.env.NODE_ENV === 'production';
 
+if (production && devEmail) {
+  console.error('PLUGIN_USER_EMAIL is set: it switches OAuth off and makes every request act as that account. Refusing to start in production; unset it.');
+  process.exit(1);
+}
 if (!publicUrl) console.warn('PLUGIN_PUBLIC_URL is not set: images in files will not load in ChatGPT, and OAuth needs it.');
 mkdirSync(dataDir, { recursive: true });
 const hub = await FileHub.open({ dataDir, publicUrl });

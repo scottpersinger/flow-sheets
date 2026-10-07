@@ -211,6 +211,8 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
       },
       download: (kind) => {
         if (kind === 'json') downloadFile(`${meta.title}.json`, 'application/json', JSON.stringify(ctl.store.workbook, null, 2));
+        // Excel is written on the server from the saved workbook, so pending edits are flushed first.
+        else if (kind === 'xlsx') void ctl.saver.flush().then(() => window.location.assign(`/api/files/${meta.id}/export?format=xlsx`));
         else downloadFile(`${meta.title} - ${ctl.tab.name}.csv`, 'text/csv', toCSV(ctl));
       },
     }),

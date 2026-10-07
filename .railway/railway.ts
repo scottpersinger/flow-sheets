@@ -20,6 +20,8 @@ export default defineRailway(() => {
       // read/write) is set in the dashboard, not here.
       RAILPACK_DEPLOY_APT_PACKAGES: "git",
       RAILPACK_PRUNE_DEPS: "false",
+      // Off-box copy of every file in Cloudflare R2 (server/backup.ts): R2_BUCKET, R2_ACCESS_KEY_ID,
+      // R2_SECRET_ACCESS_KEY and CLOUDFLARE_ACCOUNT_ID are secrets, set in the dashboard, not here.
       // Give in-flight requests a moment to finish when a deploy replaces the container.
       RAILWAY_DEPLOYMENT_DRAINING_SECONDS: "15",
       // The app lives at docs.freeflow.im; the old sheets.freeflow.im host redirects there.

@@ -5,11 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CELL_IMAGE_TYPES } from '../shared/types.ts';
+import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
 
 export class ImageStore {
   private db: DB;
   private dir: string;
+  /** The off-box copy (backup.ts): every upload is reported to it when set. */
+  backup: Backup | null = null;
 
   constructor(db: DB, dir: string) {
     this.db = db;
@@ -31,6 +34,7 @@ export class ImageStore {
     this.db
       .prepare('INSERT INTO images (id, owner_id, type, size, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(id, ownerId, type, data.length, new Date().toISOString());
+    this.backup?.putImage(ownerId, id, type, data);
     return `/api/images/${id}`;
   }
 

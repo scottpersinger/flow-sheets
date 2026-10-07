@@ -2,7 +2,7 @@ import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../sha
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import type { Deck } from '../../shared/deck.ts';
 import type { Doc } from '../../shared/doc.ts';
-import { CELL_IMAGE_TOO_LARGE, type SheetMeta, type Workbook } from '../../shared/types.ts';
+import { CELL_IMAGE_TOO_LARGE, type DeletedFile, type SheetMeta, type Workbook } from '../../shared/types.ts';
 
 export interface User {
   id: string;
@@ -116,6 +116,8 @@ export const api = {
   convertDocx: (file: File) => uploadExcel<{ doc: Doc; warnings: string[] }>('/api/import/docx', file),
   renameDoc: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/docs/${encodeURIComponent(id)}`, { title }),
   deleteDoc: (id: string) => request<{ ok: true }>('DELETE', `/api/docs/${encodeURIComponent(id)}`),
+  listTrash: () => request<{ files: DeletedFile[]; available: boolean }>('GET', '/api/trash'),
+  restoreFromTrash: (id: string) => request<{ file: SheetMeta }>('POST', `/api/trash/${encodeURIComponent(id)}/restore`),
 
   agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
   agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),

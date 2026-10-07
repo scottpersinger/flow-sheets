@@ -54,7 +54,8 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
     const css = path.join(opts.webDir, 'app.css');
     if (!existsSync(js)) throw new Error(`The app is not built: run "npm run plugin:build" (looked for ${js}).`);
     const code = readFileSync(js, 'utf8');
-    cached = { js: code, css: existsSync(css) ? readFileSync(css, 'utf8') : '', hash: createHash('sha1').update(code).digest('hex').slice(0, 10) };
+    const styles = existsSync(css) ? readFileSync(css, 'utf8') : '';
+    cached = { js: code, css: styles, hash: createHash('sha1').update(code).update(styles).digest('hex').slice(0, 10) };
     return cached;
   };
 

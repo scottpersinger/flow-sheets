@@ -7,8 +7,8 @@
     "com.openai": {
       "interface": {
         "displayName": "Freeflow Docs",
-        "shortDescription": "Documents, edited by chat",
-        "longDescription": "Opens your Freeflow Docs documents in ChatGPT's sidebar. Edit by hand in the full editor, or ask ChatGPT to rewrite a section, fix wording, add content or change formatting; the document updates in place.",
+        "shortDescription": "Documents, presentations and spreadsheets, edited by chat",
+        "longDescription": "Opens your Freeflow Docs documents, presentations and spreadsheets in ChatGPT's sidebar. Edit by hand in the full editor, or ask ChatGPT to rewrite a section, fix wording, add slides, fill in cells or change formatting; the file updates in place.",
         "developerName": "Freeflow",
         "category": "Productivity"
       }

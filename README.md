@@ -154,3 +154,11 @@ OAuth 2.0).
 
 - `data/app.db`: SQLite database holding users, sessions, sheet metadata (owner, title, timestamps), assistant conversations and per-user assistant usage.
 - `data/sheets/<id>.json`: one file per spreadsheet in the native JSON workbook format (`shared/types.ts`). Cells are stored sparsely by A1 address as the raw input plus optional style. Files are written atomically (temp file, then rename). The client autosaves the full workbook 800 ms after the last change.
+
+### Backups (Cloudflare R2)
+
+With `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `CLOUDFLARE_ACCOUNT_ID` set (or `R2_ENDPOINT` for another S3-compatible store), every save also puts the file to the bucket as `users/<owner>/<kind>/<id>/<revision>.json`, so the bucket holds a history; images go up on upload and branch bases beside their branch (`server/backup.ts`). Uploads are queued and retried, so a save never fails because the bucket is down. Deleting a file writes a marker instead of removing the objects: the home page's **Trash** lists files deleted in the last 30 days and restores them. Once a day (and at `npm run r2 -- maintenance`) the server snapshots `app.db` and `plugin.db` into `backups/<date>/`, re-uploads anything the bucket lacks, prunes snapshots older than 30 days and purges files deleted more than 30 days ago. `npm run r2 -- restore <empty dir>` rebuilds a data directory from the bucket; `npm run r2 -- list [prefix]` shows what is there. Without the variables, nothing changes.
+
+### Export
+
+Each file's menu on the home page and the editors' File menus download it: documents as Markdown (or JSON), presentations as PowerPoint (or JSON), spreadsheets as Excel, CSV of one tab, or JSON (`GET /api/files/<id>/export?format=md|pptx|xlsx|csv|json`, `server/export.ts`). **Export all** on the home page downloads every file of the account as a zip with a readable format and JSON per file plus an `images/` folder, with Markdown image links pointing into it (`GET /api/export.zip`).

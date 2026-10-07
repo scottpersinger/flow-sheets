@@ -355,6 +355,11 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: DocSummary; 
           </nav>
         </div>
         <div className="wb-user wb-ask">
+          {host.appLink({ kind: 'doc', id: meta.id }) && (
+            <button className="btn" title="Open in the full Freeflow app in a new tab" onClick={() => void ctl.saver.flush().then(() => host.openLink(host.appLink({ kind: 'doc', id: meta.id })!))}>
+              Open in Freeflow ↗
+            </button>
+          )}
           <button className="btn" title="Ask ChatGPT to summarize this document" onClick={() => void host.ask('Summarize the document I have open in Docs.')}>
             Summarize
           </button>

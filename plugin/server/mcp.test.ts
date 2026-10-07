@@ -9,7 +9,9 @@ import { FileHub, type FileService } from './files.ts';
 import { buildSlide, newId } from '../../shared/deck.ts';
 import { buildPptx } from '../../shared/pptxExport.ts';
 import { buildDocx } from '../../server/testing.ts';
-import { APP_URI, appHtml, createMcpServer } from './mcp.ts';
+import { appHtml, appUri, createMcpServer } from './mcp.ts';
+
+const APP_URI = appUri('abc');
 
 /** Serves the test's Word and PowerPoint files at pretend ChatGPT download URLs. */
 const attachments = new Map<string, Buffer>();
@@ -77,6 +79,15 @@ describe('MCP server', () => {
     expect(html).toContain('src="https://docs.example.com/plugin/app.js?v=h1"');
     expect(html).toContain('href="https://docs.example.com/plugin/app.css?v=h1"');
     expect(html).not.toContain('<style>');
+    expect(html).not.toContain('freeflow-url');
+    const withApp = appHtml({ js: 'x', css: 'y', hash: 'h1' }, null, 'https://docs.example.com/');
+    expect(withApp).toContain('<meta name="freeflow-url" content="https://docs.example.com/">');
+    expect(withApp).toContain('<style>y</style>');
+  });
+
+  it('names the app resource after the bundle hash', () => {
+    expect(appUri('h1')).toBe('ui://freeflow-docs/app-h1.html');
+    expect(appUri('h2')).not.toBe(appUri('h1'));
   });
 
   it('serves the app as a UI resource', async () => {

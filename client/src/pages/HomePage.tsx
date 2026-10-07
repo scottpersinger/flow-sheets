@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { SheetMeta } from '../../../shared/types.ts';
+import type { DeletedFile, SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { DeckIcon, DocIcon, Logo } from '../components/Logo.tsx';
-import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
+import { ConfirmModal, Modal, PromptModal } from '../components/Modal.tsx';
 import { useFavicon } from '../favicon.ts';
 import { checkImportFile, isPowerPointFile, isWordFile, pickImportFile, titleFromFileName } from '../importFile.ts';
 
@@ -29,6 +29,9 @@ export function HomePage() {
   const [filter, setFilter] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
+  // Deleted files kept in the off-box copy for 30 days; null while closed.
+  const [trash, setTrash] = useState<{ files: DeletedFile[]; available: boolean } | 'loading' | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const importFile = async (file: File) => {
@@ -60,6 +63,23 @@ export function HomePage() {
     Promise.all([api.listSheets(), api.listDecks(), api.listDocs()])
       .then(([s, d, t]) => setSheets([...s.sheets, ...d.decks, ...t.docs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))))
       .catch((e: Error) => setError(e.message));
+
+  const openTrash = () => {
+    setTrash('loading');
+    api.listTrash().then(setTrash, (e: Error) => (setError(e.message), setTrash(null)));
+  };
+  const restoreFile = async (f: DeletedFile) => {
+    setRestoring(f.id);
+    try {
+      await api.restoreFromTrash(f.id);
+      setTrash((t) => (t && t !== 'loading' ? { ...t, files: t.files.filter((x) => x.id !== f.id) } : t));
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRestoring(null);
+    }
+  };
 
   const pathOf = (s: SheetMeta) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : `/s/${s.id}`);
   const KIND_NAMES = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document' } as const;
@@ -123,6 +143,12 @@ export function HomePage() {
         </div>
         <input className="home-search" placeholder="Search spreadsheets, presentations and documents" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <div className="home-user">
+          <a href="/api/export.zip" className="home-changes" title="Download every document, presentation and spreadsheet as a zip (Markdown, PowerPoint, Excel and JSON)">
+            Export all
+          </a>
+          <button className="home-changes link-btn" onClick={openTrash} title="Files deleted in the last 30 days">
+            Trash
+          </button>
           <Link to="/connectors" className="home-changes" title="Connect data sources such as Brex">
             Connectors
           </Link>
@@ -225,6 +251,9 @@ export function HomePage() {
                       <div className="dropdown">
                         <button onClick={() => navigate(pathOf(s))}>Open</button>
                         <button onClick={() => (setMenuFor(null), window.open(pathOf(s), '_blank'))}>Open in new tab</button>
+                        <button onClick={() => (setMenuFor(null), window.location.assign(`/api/files/${s.id}/export`))}>
+                          {s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' ? 'Download as Markdown' : 'Download as Excel'}
+                        </button>
                         <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>
                         {s.kind === 'sheet' && <button onClick={() => (setMenuFor(null), setBranching(s))}>Create branch</button>}
                         <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
@@ -240,6 +269,42 @@ export function HomePage() {
         )}
       </section>
 
+      {trash && (
+        <Modal title="Trash" onClose={() => setTrash(null)}>
+          {trash === 'loading' ? (
+            <p>Loading…</p>
+          ) : !trash.available ? (
+            <p>Deleted files cannot be restored on this server: no backup store is configured.</p>
+          ) : trash.files.length === 0 ? (
+            <p>Nothing has been deleted in the last 30 days.</p>
+          ) : (
+            <table className="sheet-list trash-list">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Deleted</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {trash.files.map((f) => (
+                  <tr key={f.id}>
+                    <td>
+                      {f.kind === 'deck' ? <DeckIcon size={18} /> : f.kind === 'doc' ? <DocIcon size={18} /> : <Logo size={18} />} {f.title}
+                    </td>
+                    <td>{formatWhen(f.deletedAt)}</td>
+                    <td>
+                      <button className="btn" disabled={restoring === f.id} onClick={() => void restoreFile(f)}>
+                        {restoring === f.id ? 'Restoring…' : 'Restore'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Modal>
+      )}
       {importing && (
         <div className="modal-backdrop">
           <div className="modal import-progress" role="status">

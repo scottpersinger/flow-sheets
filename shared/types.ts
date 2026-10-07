@@ -139,6 +139,14 @@ export interface SheetMeta {
   };
 }
 
+/** A deleted file still held in the off-box copy (server/backup.ts), restorable from the Trash. */
+export interface DeletedFile {
+  id: string;
+  kind: DocKind;
+  title: string;
+  deletedAt: string;
+}
+
 export const DEFAULT_ROWS = 1000;
 export const DEFAULT_COLS = 26;
 

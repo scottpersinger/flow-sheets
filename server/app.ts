@@ -16,7 +16,10 @@ import { registerConnectorService } from './agent/tools.ts';
 import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
 import { ConnectorError } from './connectors/types.ts';
 import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, VERIFY_TTL_MS, validateCredentials, type User } from './auth.ts';
+import { Backup } from './backup.ts';
+import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
 import { openDb } from './db.ts';
+import { EXPORT_FORMATS, ExportError, exportAll, exportFile, imageSource, loadFile, type ExportFormat } from './export.ts';
 import { ImageStore } from './images.ts';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mountPlugin } from '../plugin/server/mount.ts';
@@ -68,6 +71,11 @@ export interface AppOptions {
    * documents, the built plugin app from webDir. publicUrl is the origin ChatGPT reaches this server on.
    */
   plugin?: { publicUrl: string; webDir: string };
+  /**
+   * Object store for the off-box copy of every file (server/backup.ts). Defaults to Cloudflare R2 from the
+   * environment (R2_BUCKET and friends); null leaves backups off. Tests pass a MemoryObjectStore.
+   */
+  blob?: ObjectStore | null;
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -116,6 +124,14 @@ export async function buildApp(opts: AppOptions) {
   };
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
   await images.init();
+  // Every save and upload also goes to the object store, and a daily pass snapshots the database and
+  // re-uploads anything missing (backup.ts). Restore with `npm run r2 restore <dir>`.
+  const blob = opts.blob === undefined ? (() => { const cfg = r2FromEnv(); return cfg ? new S3ObjectStore(cfg) : null; })() : opts.blob;
+  const backup = blob ? new Backup(blob, { dataDir: opts.dataDir, db, log: { info: (m) => app.log.info(m), error: (m) => app.log.error(m) } }) : null;
+  if (backup) {
+    sheets.backup = backup;
+    images.backup = backup;
+  }
   auth.purgeExpiredSessions();
   const connectors = new ConnectorService(db, { keyFile: path.join(opts.dataDir, 'connector.key'), ...opts.connectors });
   // Lets the agent's server tools (list_connections, fetch_connector_data) reach the user's connections.
@@ -156,7 +172,16 @@ export async function buildApp(opts: AppOptions) {
   app.addHook('onRequest', async (req) => {
     req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
   });
-  app.addHook('onClose', async () => db.close());
+  app.addHook('onClose', async () => {
+    if (backup) {
+      backup.stop();
+      // Let queued uploads finish before the database closes (a redeploy gives 15 s).
+      if (!(await backup.drain(8_000))) app.log.error(`backup: ${backup.pending} upload(s) still pending at shutdown`);
+    }
+    db.close();
+  });
+  // The daily pass runs for a real deployment (store from the environment), not for tests.
+  if (backup && opts.blob === undefined) backup.startDaily();
 
   const setSessionCookie = (reply: FastifyReply, userId: string) => {
     const { token } = auth.createSession(userId);
@@ -634,6 +659,53 @@ export async function buildApp(opts: AppOptions) {
       // Images never change once uploaded.
       reply.header('Content-Type', img.type).header('Cache-Control', 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff');
       return reply.send(createReadStream(img.file));
+    });
+
+    // --- Export: one file in a readable format, or everything as a zip (server/export.ts) ---------
+    const attachment = (reply: FastifyReply, name: string, type: string) =>
+      reply
+        .header('Content-Type', type)
+        .header('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'")}"; filename*=UTF-8''${encodeURIComponent(name)}`)
+        .header('Cache-Control', 'no-store')
+        .header('X-Content-Type-Options', 'nosniff');
+
+    r.get('/api/files/:id/export', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const { format, tab } = req.query as { format?: string; tab?: string };
+      const loaded = await loadFile(sheets, req.user!.id, id);
+      if (!loaded) return reply.code(404).send({ error: 'File not found' });
+      const fmt = (format ?? EXPORT_FORMATS[loaded.meta.kind][0]) as ExportFormat;
+      try {
+        const out = await exportFile(loaded.meta, loaded.data, fmt, imageSource(images, req.user!.id), tab);
+        return attachment(reply, out.name, out.type).send(out.body);
+      } catch (e) {
+        if (e instanceof ExportError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
+    });
+
+    // --- Trash: files deleted in the last 30 days, kept in the off-box copy (server/backup.ts) ---------
+    r.get('/api/trash', async (req) => ({ files: backup ? await backup.listDeleted(req.user!.id) : [], available: !!backup }));
+
+    r.post('/api/trash/:id/restore', async (req, reply) => {
+      if (!backup) return reply.code(404).send({ error: 'No backup store is configured' });
+      const { id } = req.params as { id: string };
+      if (!/^[0-9a-f-]{36}$/.test(id)) return reply.code(404).send({ error: 'File not found' });
+      const entry = (await backup.listDeleted(req.user!.id)).find((f) => f.id === id);
+      if (!entry) return reply.code(404).send({ error: 'File not found in the trash' });
+      if (sheets.get(req.user!.id, id)) return reply.code(409).send({ error: 'This file is not deleted' });
+      const json = await backup.latestRevision(req.user!.id, entry.kind, id);
+      if (!json) return reply.code(404).send({ error: 'No copy of this file is left' });
+      const meta = await sheets.restore(req.user!.id, entry.kind, id, entry.title, json);
+      await backup.undelete(req.user!.id, entry.kind, id);
+      return { file: meta };
+    });
+
+    r.get('/api/export.zip', async (req, reply) => {
+      const { body, files, problems } = await exportAll(sheets, req.user!.id, imageSource(images, req.user!.id));
+      req.log.info({ files, problems: problems.length }, 'exported account');
+      const date = new Date().toISOString().slice(0, 10);
+      return attachment(reply, `Freeflow export ${date}.zip`, 'application/zip').send(body);
     });
   });
 
