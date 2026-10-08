@@ -9,7 +9,8 @@ import { FileLibrary, formatWhen, kindIcon, type LibraryItem } from '../componen
 import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { useFavicon } from '../favicon.ts';
-import { checkImportFile, DOCX_ACCEPT, EXCEL_ACCEPT, isMarkdownFile, isPdfFile, isPowerPointFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName } from '../importFile.ts';
+import { checkImportFile, CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, isCsvFile, isMarkdownFile, isPdfFile, isPowerPointFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName } from '../importFile.ts';
+import { csvTitle } from '../../../shared/csv.ts';
 import { markdownTitle } from '../../../shared/markdown.ts';
 
 const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : s.kind === 'markdown' ? `/md/${s.id}` : s.kind === 'file' ? `/f/${s.id}` : `/s/${s.id}`);
@@ -53,6 +54,12 @@ export function HomePage() {
         const text = await file.text();
         const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text);
         navigate(`/md/${doc.id}`);
+        return;
+      }
+      if (isCsvFile(file)) {
+        // Stored as the CSV file it is, and opened in the spreadsheet editor.
+        const { sheet } = await api.importCsv(csvTitle(file.name), await file.text());
+        navigate(`/s/${sheet.id}`);
         return;
       }
       const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name));
@@ -151,6 +158,9 @@ export function HomePage() {
                 <Link role="menuitem" to="/changes" title="Changes the assistant made to the app">
                   Changes
                 </Link>
+                <Link role="menuitem" to="/settings" title="Choose the model the assistant runs on">
+                  Settings
+                </Link>
               </div>
             )}
           </div>
@@ -169,9 +179,9 @@ export function HomePage() {
         else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title)).doc.id}`);
         else navigate(`/doc/${(await api.createDoc(title)).doc.id}`);
       }}
-      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT}`}
-      importLabel="Import Excel, PowerPoint, Word, PDF or Markdown"
-      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf) or Markdown (.md) file anywhere on this page."
+      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT}`}
+      importLabel="Import Excel, PowerPoint, Word, PDF, Markdown or CSV"
+      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md) or CSV (.csv) file anywhere on this page."
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => navigate(pathOf(s))}
@@ -183,9 +193,10 @@ export function HomePage() {
       rowActions={(s) => [
         { label: 'Open in new tab', onClick: () => void window.open(pathOf(s), '_blank') },
         {
-          label: s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' || s.kind === 'markdown' ? 'Download as Markdown' : s.kind === 'file' ? 'Download' : 'Download as Excel',
+          label: s.kind === 'deck' ? 'Download as PowerPoint' : s.kind === 'doc' || s.kind === 'markdown' ? 'Download as Markdown' : s.kind === 'file' ? 'Download' : s.format === 'csv' ? 'Download as CSV' : 'Download as Excel',
           onClick: () => window.location.assign(s.kind === 'file' ? `/api/files/${s.id}/download` : `/api/files/${s.id}/export`),
         },
+        ...(s.kind === 'sheet' && s.format !== 'csv' ? [{ label: 'Download as CSV', onClick: () => window.location.assign(`/api/files/${s.id}/export?format=csv`) }] : []),
         ...(s.kind === 'sheet' ? [{ label: 'Create branch', onClick: () => setBranching(s) }] : []),
       ]}
       onRename={async (s, title) => {

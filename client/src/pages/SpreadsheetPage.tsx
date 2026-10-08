@@ -29,8 +29,11 @@ import { TabBar } from '../components/TabBar.tsx';
 import { Toolbar } from '../components/Toolbar.tsx';
 import { Grid } from '../grid/Grid.tsx';
 import { useFavicon } from '../favicon.ts';
-import { checkExcelFile, pickExcelFile } from '../importFile.ts';
+import { csvTitle, csvToWorkbook } from '../../../shared/csv.ts';
+import { checkCsvFile, checkExcelFile, pickCsvFile, pickExcelFile } from '../importFile.ts';
+import { uniqueTabName } from '../state/ops.ts';
 import { SheetController } from '../state/controller.ts';
+import { csvGuard } from '../state/store.ts';
 import { useController } from '../state/useController.ts';
 
 function downloadFile(name: string, mime: string, content: string) {
@@ -73,6 +76,8 @@ export function SpreadsheetPage() {
         ctl = new SheetController(workbook, async (wb) => {
           await api.saveSheet(sheet.id, wb);
         });
+        // A CSV file only takes changes CSV can store; the rest asks to convert it first (see Workbench).
+        if (sheet.format === 'csv') ctl.store.guard = csvGuard;
         setState({ meta: sheet, ctl });
       })
       .catch((e: unknown) => {
@@ -104,7 +109,15 @@ export function SpreadsheetPage() {
   return <Workbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
 }
 
-type Dialog = { kind: 'rename' } | { kind: 'deleteSheet' } | { kind: 'deleteTab'; tabId: string } | { kind: 'branch' } | null;
+type Dialog =
+  | { kind: 'rename' }
+  | { kind: 'deleteSheet' }
+  | { kind: 'deleteTab'; tabId: string }
+  | { kind: 'branch' }
+  | { kind: 'csvCopy' }
+  /** Convert a CSV file to a spreadsheet: asked from the File menu, or because a change needs it (then `reason` and `retry` are set). */
+  | { kind: 'convert'; reason?: string; retry?: () => void }
+  | null;
 
 function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetController }) {
   useController(ctl);
@@ -130,6 +143,22 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
+
+  // A CSV file: when a change needs something CSV cannot store, offer to convert the file and then make it.
+  useEffect(() => {
+    ctl.onRefused = (reason, retry) => setDialog({ kind: 'convert', reason, retry });
+    return () => {
+      ctl.onRefused = null;
+    };
+  }, [ctl]);
+
+  const convertToSpreadsheet = async () => {
+    if (ctl.edit) ctl.commitEdit();
+    await ctl.saver.flush();
+    const { sheet } = await api.convertSheet(meta.id);
+    ctl.store.guard = null;
+    setMeta(sheet);
+  };
 
   // Branches can be compared with their original; refresh metadata (e.g. the original's title) on each fetch.
   useEffect(() => {
@@ -209,15 +238,35 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
           notify(e instanceof Error ? e.message : String(e));
         }
       },
+      importCsv: async () => {
+        const file = await pickCsvFile();
+        if (!file) return;
+        const problem = checkCsvFile(file);
+        if (problem) return notify(problem);
+        try {
+          const [tab] = csvToWorkbook(await file.text()).tabs;
+          // Sheet names cannot contain [ ] * ? / \ : and are at most 100 characters.
+          const name = csvTitle(file.name).replace(/[[\]*?/\\:]/g, ' ').trim().slice(0, 100) || 'Imported CSV';
+          ctl.importTabs([{ ...tab, name: uniqueTabName(ctl.store.workbook.tabs, name) }]);
+          // In a CSV file the new sheet waits for the answer to "Convert to a spreadsheet?".
+          if (!ctl.store.guard) notify(`Added “${file.name}” as a new sheet. Press ${isMac ? '⌘Z' : 'Ctrl+Z'} to undo.`);
+        } catch (e) {
+          notify(e instanceof Error ? e.message : String(e));
+        }
+      },
+      saveCopyAsCsv: () => setDialog({ kind: 'csvCopy' }),
       download: (kind) => {
         if (kind === 'json') downloadFile(`${meta.title}.json`, 'application/json', JSON.stringify(ctl.store.workbook, null, 2));
         // Excel is written on the server from the saved workbook, so pending edits are flushed first.
         else if (kind === 'xlsx') void ctl.saver.flush().then(() => window.location.assign(`/api/files/${meta.id}/export?format=xlsx`));
+        // A CSV file downloads as the file itself (raw values), written by the server from the saved copy.
+        else if (meta.format === 'csv') void ctl.saver.flush().then(() => window.location.assign(`/api/files/${meta.id}/export?format=csv`));
         else downloadFile(`${meta.title} - ${ctl.tab.name}.csv`, 'text/csv', toCSV(ctl));
       },
+      convertToSpreadsheet: meta.format === 'csv' ? () => setDialog({ kind: 'convert' }) : undefined,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ctl, notify, meta.title, meta.branch],
+    [ctl, notify, meta.title, meta.branch, meta.format],
   );
 
   // Close top menus on outside click.
@@ -307,6 +356,11 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
               }}
             />
             <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
+            {meta.format === 'csv' && (
+              <span className="format-chip" title="This is a CSV file: edits are saved as CSV. Formatting, more sheets and other spreadsheet features need it converted to a spreadsheet (File → Convert to spreadsheet).">
+                CSV
+              </span>
+            )}
             {meta.branch && (
               <span className="branch-chip" title={`Branched ${new Date(meta.branch.branchedAt).toLocaleString()}`}>
                 <BranchIcon />
@@ -397,6 +451,40 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
             await ctl.saver.flush();
             const { sheet } = await api.branchSheet(meta.id, t);
             navigate(`/s/${sheet.id}`);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'convert' && (
+        <ConfirmModal
+          title="Convert to a spreadsheet?"
+          message={
+            <>
+              {dialog.reason ? `${dialog.reason} cannot be saved in a CSV file. ` : 'A CSV file holds plain cell values only. '}
+              Converting “{meta.title}” to a spreadsheet lets it keep formatting, column sizes, filters, images and more sheets. It will no longer be a CSV file, and
+              you can still download it as CSV.
+            </>
+          }
+          confirmText="Convert"
+          onConfirm={async () => {
+            await convertToSpreadsheet();
+            dialog.retry?.();
+            notify('Converted to a spreadsheet.');
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'csvCopy' && (
+        <PromptModal
+          title="Save a copy as CSV file"
+          label="Name for the CSV copy (current sheet, values only)"
+          initial={ctl.store.workbook.tabs.length > 1 && ctl.tab.name !== meta.title ? `${meta.title} - ${ctl.tab.name}` : meta.title}
+          confirmText="Save copy"
+          onConfirm={async (t) => {
+            if (ctl.edit) ctl.commitEdit();
+            const { sheet } = await api.importCsv(t, toCSV(ctl));
+            window.open(`/s/${sheet.id}`, '_blank');
+            notify(`Saved “${sheet.title}” as a CSV file.`);
           }}
           onClose={() => setDialog(null)}
         />

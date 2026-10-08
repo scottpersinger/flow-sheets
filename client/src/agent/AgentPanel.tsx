@@ -6,6 +6,7 @@ import { FileChip, fileOfResult } from '../components/FileChip.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { ASSISTANT_PANEL } from '../panelSize.ts';
 import { useAgent } from './AgentProvider.tsx';
+import { ChatMarkdown } from './ChatMarkdown.tsx';
 import { targetOf } from './clientTools.ts';
 import { toolLabel } from './describe.ts';
 import { imageFiles, prepareImage, type PreparedImage } from './images.ts';
@@ -127,7 +128,7 @@ export function AgentPanel() {
             </div>
           ) : it.kind === 'assistant' ? (
             <div key={i} className="agent-msg assistant">
-              {it.text.trim()}
+              <ChatMarkdown text={it.text.trim()} />
             </div>
           ) : (
             <ToolRow key={it.id} item={it} />

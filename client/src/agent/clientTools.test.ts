@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import type { FetchResult } from '../../../shared/connectors.ts';
 import { newWorkbook, type Workbook } from '../../../shared/types.ts';
+import { csvToWorkbook } from '../../../shared/csv.ts';
 import { SheetController } from '../state/controller.ts';
+import { csvGuard } from '../state/store.ts';
 import { confirmationFor, runClientTool, ToolError, type ClientToolEnv } from './clientTools.ts';
 
 function setup(wb: Workbook = newWorkbook('t1')) {
@@ -343,5 +345,46 @@ describe('ingest_connector_data', () => {
       throw new Error('Brex rejected the user token (401).');
     };
     await expect(call('ingest_connector_data', { connection_id: 'c1', dataset: 'd' })).rejects.toThrow(/401/);
+  });
+});
+
+describe('CSV files', () => {
+  function csvSetup() {
+    const s = setup(csvToWorkbook('Name,Qty\nPens,3\nPaper,1\n'));
+    s.ctl.store.guard = csvGuard;
+    return s;
+  }
+
+  it('takes values, formulas, sorting and row changes from the assistant', async () => {
+    const { ctl, call } = csvSetup();
+    await call('write_range', { start: 'A4', rows: [['Total', '=SUM(B2:B3)']] });
+    expect(ctl.store.display(ctl.tab.id, 3, 1)).toBe('4');
+    await call('sort_range', { range: 'A2:B3', by_column: 'B' });
+    expect(ctl.tab.cells.A2).toEqual({ v: 'Paper' });
+    expect(csvGuard([])).toBeNull();
+  });
+
+  it('refuses what CSV cannot store, changes nothing and says to convert', async () => {
+    const { ctl, call } = csvSetup();
+    const before = JSON.stringify(ctl.store.workbook);
+    await expect(call('format_range', { range: 'A1:B1', bold: true })).rejects.toThrow(/CSV file.*cell formatting.*Convert to spreadsheet/s);
+    await expect(call('freeze', { rows: 1 })).rejects.toThrow(ToolError);
+    await expect(call('add_tab', { name: 'More' })).rejects.toThrow(/more than one sheet/);
+    expect(JSON.stringify(ctl.store.workbook)).toBe(before);
+    expect(ctl.store.canUndo()).toBe(false);
+  });
+
+  it('offers the user a retry, which goes through once the file is converted', () => {
+    const { ctl } = csvSetup();
+    let asked: { reason: string; retry: () => void } | null = null;
+    ctl.onRefused = (reason, retry) => (asked = { reason, retry });
+    ctl.setStyle({ b: true });
+    expect(asked!.reason).toBe('Cell formatting');
+    expect(ctl.tab.cells.A1).toEqual({ v: 'Name' });
+    ctl.store.guard = null;
+    asked!.retry();
+    expect(ctl.tab.cells.A1).toEqual({ v: 'Name', st: { b: true } });
+    ctl.undo();
+    expect(ctl.tab.cells.A1).toEqual({ v: 'Name' });
   });
 });

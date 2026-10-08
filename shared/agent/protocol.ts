@@ -223,3 +223,28 @@ export const CLIENT_TOOLS = new Set([
   'request_app_change',
   'request_research',
 ]);
+
+/** OpenAI models a user can run the assistant on with their own API key (Settings page). */
+export const OPENAI_MODELS = [
+  { id: 'gpt-6-astra', name: 'Astra', hint: 'Most capable, highest cost' },
+  { id: 'gpt-6.1-sol', name: 'Sol', hint: 'Balanced' },
+  { id: 'gpt-6-luna', name: 'Luna', hint: 'Fastest, lowest cost' },
+] as const;
+export type OpenAIModelId = (typeof OPENAI_MODELS)[number]['id'];
+export const DEFAULT_OPENAI_MODEL: OpenAIModelId = 'gpt-6.1-sol';
+
+/** A user's choice of what powers the assistant. The key itself never leaves the server. */
+export interface AssistantSettings {
+  /** 'default' is the model this server is set up with; 'openai' uses the user's own key. */
+  provider: 'default' | 'openai';
+  openaiModel: OpenAIModelId;
+  /** The saved key, masked ("••••abcd"), or null when there is none. */
+  openaiKey: string | null;
+}
+
+/** Body of PUT /api/settings/assistant. A new key replaces the saved one; null removes it; omitted keeps it. */
+export interface AssistantSettingsUpdate {
+  provider: 'default' | 'openai';
+  openaiModel: OpenAIModelId;
+  openaiKey?: string | null;
+}

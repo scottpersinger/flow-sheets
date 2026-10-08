@@ -5,7 +5,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { CLIENT_TOOLS, IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
+import { openaiModel } from './openai.ts';
 import { renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
+import type { AssistantSettingsStore } from './settings.ts';
 import { AgentStore, type MessageParam, type Pending } from './store.ts';
 import { runServerTool, TOOL_DEFS, ToolFailure, validateToolInput } from './tools.ts';
 
@@ -29,6 +31,8 @@ export interface AgentOptions {
   model?: ModelCall;
   /** Model calls allowed per user per day (shared API key). */
   dailyRequestLimit?: number;
+  /** Makes the model call for a user running the assistant on their own OpenAI key. Tests pass a stub. */
+  openai?: (apiKey: string, model: string) => ModelCall;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -49,15 +53,19 @@ export class AgentError extends Error {
 export class AgentService {
   private store: AgentStore;
   private sheets: SheetStore;
+  private settings: AssistantSettingsStore;
   private model: ModelCall | null;
+  private openai: (apiKey: string, model: string) => ModelCall;
   private dailyLimit: number;
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
-  constructor(store: AgentStore, sheets: SheetStore, opts: AgentOptions = {}) {
+  constructor(store: AgentStore, sheets: SheetStore, settings: AssistantSettingsStore, opts: AgentOptions = {}) {
     this.store = store;
     this.sheets = sheets;
+    this.settings = settings;
     this.model = opts.model ?? null;
+    this.openai = opts.openai ?? openaiModel;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -91,7 +99,8 @@ export class AgentService {
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
     if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
-    if (this.store.requestsToday(userId) >= this.dailyLimit) {
+    // The daily limit protects the server's shared key; a user on their own key pays for their own calls.
+    if (!this.settings.openai(userId) && this.store.requestsToday(userId) >= this.dailyLimit) {
       throw new AgentError(429, "You've reached today's limit for the assistant. Try again tomorrow.");
     }
   }
@@ -128,17 +137,20 @@ export class AgentService {
     this.store.setPending(conv.id, null);
 
     const env = { userId, sheets: this.sheets, context: req.context };
+    // The user's own OpenAI key and model when they set one in Settings; otherwise the server's model.
+    const own = this.settings.openai(userId);
+    const callModel = own ? this.openai(own.apiKey, own.model) : this.getModel();
     let parseRetries = 0;
 
     // 2. Call the model until it stops calling tools, or pauses for the browser.
     for (let step = 0; step < MAX_STEPS; step++) {
-      if (this.store.requestsToday(userId) >= this.dailyLimit) {
+      if (!own && this.store.requestsToday(userId) >= this.dailyLimit) {
         emit({ type: 'error', message: "You've reached today's limit for the assistant." });
         return;
       }
       let message: Message;
       try {
-        message = await this.getModel()(
+        message = await callModel(
           {
             model: MODEL,
             max_tokens: 32000,
@@ -161,7 +173,7 @@ export class AgentService {
         if (err instanceof Anthropic.AnthropicError && !(err instanceof Anthropic.APIError) && parseRetries++ < 2) continue;
         throw err;
       }
-      this.store.recordUsage(userId, message.usage);
+      if (!own) this.store.recordUsage(userId, message.usage);
       // Keep the whole content (thinking blocks included) so later requests replay it unchanged.
       this.store.append(conv.id, { role: 'assistant', content: message.content as Anthropic.Beta.BetaContentBlockParam[] });
 

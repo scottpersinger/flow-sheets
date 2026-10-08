@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -329,6 +329,72 @@ describe('sheets', () => {
     expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${sheet.id}.json`);
     res = await app.inject({ method: 'GET', url: '/api/sheets', headers: { cookie } });
     expect(res.json().sheets).toEqual([]);
+  });
+});
+
+describe('CSV files', () => {
+  it('imports a CSV as a spreadsheet, saves edits as CSV, and converts when it needs more', async () => {
+    const { cookie } = await signUp(app, box, 'csv@x.com');
+    const text = 'Item,"Price, each"\r\nPen,1.50\r\n';
+    let res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Prices', csv: text } });
+    expect(res.statusCode).toBe(200);
+    const { sheet } = res.json();
+    expect(sheet).toMatchObject({ kind: 'sheet', format: 'csv', title: 'Prices' });
+    const stored = () => JSON.parse(readFileSync(path.join(dir, 'sheets', `${sheet.id}.json`), 'utf8'));
+    expect(stored()).toEqual({ version: 1, csv: text });
+
+    // It opens as an ordinary workbook and is listed with the spreadsheets, marked as CSV.
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
+    const { workbook } = res.json();
+    expect(res.json().sheet.format).toBe('csv');
+    expect(workbook.tabs[0].cells).toEqual({ A1: { v: 'Item' }, B1: { v: 'Price, each' }, A2: { v: 'Pen' }, B2: { v: '1.50' } });
+    res = await app.inject({ method: 'GET', url: '/api/sheets', headers: { cookie } });
+    expect(res.json().sheets[0]).toMatchObject({ id: sheet.id, format: 'csv' });
+
+    // Edits are written back as CSV, keeping the file's line endings.
+    workbook.tabs[0].cells.A3 = { v: 'Total' };
+    workbook.tabs[0].cells.B3 = { v: '=B2*2' };
+    res = await app.inject({ method: 'PUT', url: `/api/sheets/${sheet.id}`, headers: { cookie }, payload: { workbook } });
+    expect(res.json().sheet.format).toBe('csv');
+    expect(stored()).toEqual({ version: 1, csv: 'Item,"Price, each"\r\nPen,1.50\r\nTotal,=B2*2\r\n' });
+
+    // It downloads as the CSV file by default.
+    res = await app.inject({ method: 'GET', url: `/api/files/${sheet.id}/export`, headers: { cookie } });
+    expect(res.headers['content-disposition']).toContain('Prices.csv');
+    expect(res.body).toBe('Item,"Price, each"\nPen,1.50\nTotal,=B2*2\n');
+
+    // Converting makes it a native spreadsheet with the same content.
+    res = await app.inject({ method: 'POST', url: `/api/sheets/${sheet.id}/convert`, headers: { cookie }, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sheet.format).toBeUndefined();
+    expect(stored().tabs[0].cells.B3).toEqual({ v: '=B2*2' });
+    workbook.tabs[0].cells.A1 = { v: 'Item', st: { b: true } };
+    res = await app.inject({ method: 'PUT', url: `/api/sheets/${sheet.id}`, headers: { cookie }, payload: { workbook } });
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
+    expect(res.json().sheet.format).toBeUndefined();
+    expect(res.json().workbook.tabs[0].cells.A1).toEqual({ v: 'Item', st: { b: true } });
+  });
+
+  it('becomes a native spreadsheet rather than drop what CSV cannot store', async () => {
+    const { cookie } = await signUp(app, box, 'csv2@x.com');
+    let res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Data', csv: 'a,b\n1,2\n' } });
+    const { sheet } = res.json();
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
+    const { workbook } = res.json();
+    workbook.tabs[0].frozenRows = 1;
+    res = await app.inject({ method: 'PUT', url: `/api/sheets/${sheet.id}`, headers: { cookie }, payload: { workbook } });
+    expect(res.json().sheet.format).toBeUndefined();
+    res = await app.inject({ method: 'GET', url: `/api/sheets/${sheet.id}`, headers: { cookie } });
+    expect(res.json().sheet.format).toBeUndefined();
+    expect(res.json().workbook.tabs[0]).toMatchObject({ frozenRows: 1, cells: { A1: { v: 'a' }, B2: { v: '2' } } });
+  });
+
+  it('rejects CSV that is not text or is too large', async () => {
+    const { cookie } = await signUp(app, box, 'csv3@x.com');
+    let res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'x', csv: 5 } });
+    expect(res.statusCode).toBe(400);
+    res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'x', csv: 'a'.repeat(10 * 1024 * 1024 + 1) } });
+    expect(res.statusCode).toBe(400);
   });
 });
 

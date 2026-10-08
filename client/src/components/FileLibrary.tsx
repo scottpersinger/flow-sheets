@@ -13,6 +13,8 @@ export type LibraryKind = SheetMeta['kind'] | 'file';
 export interface LibraryItem {
   id: string;
   kind: LibraryKind;
+  /** A spreadsheet stored as a CSV file. */
+  format?: SheetMeta['format'];
   title: string;
   updatedAt: string;
   createdAt: string;
@@ -28,7 +30,8 @@ export interface LibraryAction {
 export const KIND_NAMES: Record<LibraryKind, string> = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document', markdown: 'Markdown document', file: 'file' };
 
 /** The Type column: a short label per kind (stored files show their file type). */
-export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title'>): string {
+export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title' | 'format'>): string {
+  if (item.format === 'csv') return 'CSV';
   if (item.kind === 'file') {
     const ext = /\.([a-z0-9]+)$/i.exec(item.title)?.[1];
     return ext ? ext.toUpperCase() : 'File';

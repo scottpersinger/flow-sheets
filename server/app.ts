@@ -4,16 +4,19 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
-import type { AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
+import type { AgentEvent, AgentTurnRequest, AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
+import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
 import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, PREVIEW_FILE_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
+import { checkOpenAIKey, openaiErrorMessage } from './agent/openai.ts';
+import { AssistantSettingsStore, SettingsError } from './agent/settings.ts';
 import { AgentStore } from './agent/store.ts';
 import { registerConnectorService } from './agent/tools.ts';
 import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
@@ -68,6 +71,8 @@ export interface AppOptions {
    * (comma-separated). Lets the app move to a new domain while old links keep working.
    */
   legacyHosts?: string[];
+  /** Checks an OpenAI key before it is saved in Settings. Tests pass a stub; the default asks OpenAI. */
+  checkOpenAIKey?: (apiKey: string, model: string) => Promise<void>;
   /** Connector overrides (tests pass a fake fetch). */
   connectors?: Partial<Omit<ConnectorServiceOptions, 'keyFile'>>;
   /**
@@ -90,6 +95,8 @@ function cleanTitle(t: unknown): string | null {
 
 function agentErrorMessage(e: unknown): string {
   if (e instanceof AgentError) return e.message;
+  const openai = openaiErrorMessage(e);
+  if (openai) return openai;
   if (e instanceof Anthropic.RateLimitError) return 'The assistant is getting too many requests right now. Try again in a minute.';
   if (e instanceof Anthropic.AuthenticationError) return 'The assistant is not configured correctly on this server (API key).';
   if (e instanceof Anthropic.APIError && e.status && e.status >= 500) return 'The AI service had a problem. Try again in a moment.';
@@ -142,7 +149,9 @@ export async function buildApp(opts: AppOptions) {
   const connectors = new ConnectorService(db, { keyFile: path.join(opts.dataDir, 'connector.key'), ...opts.connectors });
   // Lets the agent's server tools (list_connections, fetch_connector_data) reach the user's connections.
   registerConnectorService(sheets, connectors);
-  const agent = new AgentService(new AgentStore(db), sheets, opts.agent);
+  // Created after the connector service, which makes the encryption key file they share.
+  const assistantSettings = new AssistantSettingsStore(db, path.join(opts.dataDir, 'connector.key'));
+  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, opts.agent);
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.
@@ -383,9 +392,20 @@ export async function buildApp(opts: AppOptions) {
 
     r.get('/api/sheets', async (req) => ({ sheets: sheets.list(req.user!.id) }));
 
-    r.post('/api/sheets', async (req) => {
-      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title) ?? 'Untitled spreadsheet';
-      return { sheet: await sheets.create(req.user!.id, title) };
+    // Create: empty, or a CSV file from its text (an uploaded .csv file, read by the browser).
+    r.post('/api/sheets', async (req, reply) => {
+      const body = (req.body ?? {}) as { title?: unknown; csv?: unknown };
+      if (body.csv !== undefined) {
+        if (typeof body.csv !== 'string') return reply.code(400).send({ error: 'CSV must be a string' });
+        if (body.csv.length > MAX_CSV_CHARS) return reply.code(400).send({ error: 'This file is too large to import (10 MB maximum).' });
+        try {
+          return { sheet: await sheets.createCsv(req.user!.id, cleanTitle(body.title) ?? 'Imported CSV', body.csv) };
+        } catch (e) {
+          if (e instanceof CsvError) return reply.code(400).send({ error: e.message });
+          throw e;
+        }
+      }
+      return { sheet: await sheets.create(req.user!.id, cleanTitle(body.title) ?? 'Untitled spreadsheet') };
     });
 
     /** Parse an uploaded .xlsx body; sends a 400 and returns null on failure. */
@@ -459,6 +479,14 @@ export async function buildApp(opts: AppOptions) {
       const problem = validateWorkbook(workbook);
       if (problem) return reply.code(400).send({ error: problem });
       const meta = await sheets.save(req.user!.id, id, workbook!);
+      if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
+      return { sheet: meta };
+    });
+
+    // Convert a CSV file to a native spreadsheet, so it can hold formatting, more tabs and so on.
+    r.post('/api/sheets/:id/convert', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const meta = await sheets.convertToNative(req.user!.id, id);
       if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
       return { sheet: meta };
     });
@@ -740,7 +768,7 @@ export async function buildApp(opts: AppOptions) {
       const { format, tab } = req.query as { format?: string; tab?: string };
       const loaded = await loadFile(sheets, req.user!.id, id);
       if (!loaded) return reply.code(404).send({ error: 'File not found' });
-      const fmt = (format ?? EXPORT_FORMATS[loaded.meta.kind][0]) as ExportFormat;
+      const fmt = (format ?? (loaded.meta.format === 'csv' ? 'csv' : EXPORT_FORMATS[loaded.meta.kind][0])) as ExportFormat;
       try {
         const out = await exportFile(loaded.meta, loaded.data, fmt, imageSource(images, req.user!.id), tab);
         return attachment(reply, out.name, out.type).send(out.body);
@@ -974,6 +1002,18 @@ export async function buildApp(opts: AppOptions) {
         // Jobs queued during the turn start only now: the worker's edits restart the dev server, which would
         // cut off a reply still streaming.
         jobRunner.startQueued();
+      }
+    });
+
+    // --- Assistant settings: the server's model, or an OpenAI model on the user's own key ---
+    r.get('/api/settings/assistant', async (req) => ({ settings: assistantSettings.get(req.user!.id) }));
+
+    r.put('/api/settings/assistant', async (req, reply) => {
+      try {
+        return { settings: await assistantSettings.update(req.user!.id, (req.body ?? {}) as Partial<AssistantSettingsUpdate>, opts.checkOpenAIKey ?? checkOpenAIKey) };
+      } catch (e) {
+        if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
+        throw e;
       }
     });
 

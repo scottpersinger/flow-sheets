@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentJob, AgentTurnRequest, ChatItem } from '../../shared/agent/protocol.ts';
+import type { AgentEvent, AgentJob, AgentTurnRequest, AssistantSettings, AssistantSettingsUpdate, ChatItem } from '../../shared/agent/protocol.ts';
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import type { Deck } from '../../shared/deck.ts';
 import type { Doc } from '../../shared/doc.ts';
@@ -95,6 +95,10 @@ export const api = {
 
   listSheets: () => request<{ sheets: SheetMeta[] }>('GET', '/api/sheets'),
   createSheet: (title: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title }),
+  /** Create a CSV file from the text of an uploaded .csv file; it opens in the spreadsheet editor. */
+  importCsv: (title: string, csv: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, csv }),
+  /** Turn a CSV file into a native spreadsheet. */
+  convertSheet: (id: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/convert`, {}),
   getSheet: (id: string) => request<{ sheet: SheetMeta; workbook: Workbook }>('GET', `/api/sheets/${encodeURIComponent(id)}`),
   saveSheet: (id: string, workbook: Workbook, keepalive = false) =>
     request<{ sheet: SheetMeta }>('PUT', `/api/sheets/${encodeURIComponent(id)}`, { workbook }, keepalive ? { keepalive: true } : undefined),
@@ -168,6 +172,8 @@ export const api = {
   testConnection: (id: string) => request<{ connection: ConnectionInfo }>('POST', `/api/connections/${encodeURIComponent(id)}/test`, {}),
   fetchConnectorData: (id: string, body: { dataset: string; params: Record<string, unknown>; handle?: string }) =>
     request<FetchResult>('POST', `/api/connections/${encodeURIComponent(id)}/fetch`, body),
+  assistantSettings: () => request<{ settings: AssistantSettings }>('GET', '/api/settings/assistant'),
+  saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', '/api/settings/assistant', body),
   revertJob: (id: string) => request<{ job: AgentJob }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/revert`, {}),
 };
 

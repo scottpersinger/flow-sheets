@@ -13,6 +13,7 @@ import { FilePage } from './pages/FilePage.tsx';
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordResetPages.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { MarkdownPage } from './pages/MarkdownPage.tsx';
+import { SettingsPage } from './pages/SettingsPage.tsx';
 import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
 import { VerifyEmailPage } from './pages/VerifyEmailPage.tsx';
 import './styles.css';
@@ -52,6 +53,7 @@ function AppShell() {
           <Route path="/f/:id" element={<RequireAuth><FilePage /></RequireAuth>} />
           <Route path="/changes" element={<RequireAuth><ChangesPage /></RequireAuth>} />
           <Route path="/connectors" element={<RequireAuth><ConnectorsPage /></RequireAuth>} />
+          <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

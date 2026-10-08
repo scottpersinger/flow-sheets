@@ -13,7 +13,7 @@ import { isRefInsertPoint, normalizeFormula } from './formulaEdit.ts';
 import * as ops from './ops.ts';
 import { findMatches, type SearchHit, type SearchOptions } from './search.ts';
 import { diffWorkbooks, type Side, type WorkbookDiff } from '../../../shared/diff.ts';
-import { AutoSaver, WorkbookStore, type Tx } from './store.ts';
+import { AutoSaver, TransactionRefused, WorkbookStore, type Tx } from './store.ts';
 
 export interface Selection {
   ranges: Range[]; // last one is the primary range
@@ -96,6 +96,11 @@ export class SheetController {
   compare: CompareState | null = null;
   /** Fetches comparison data for this sheet (set by the page for branches). */
   compareLoader: (() => Promise<CompareData>) | null = null;
+  /**
+   * Called when the store's guard refuses a change of the user's (a CSV file asked for something CSV cannot
+   * store), with the reason and a function that tries the change again.
+   */
+  onRefused: ((reason: string, retry: () => void) => void) | null = null;
   private compareTimer: ReturnType<typeof setTimeout> | null = null;
   scrollRequest: { r: number; c: number; seq: number } | null = null;
   /** Number of rows that fit in the viewport; maintained by the grid for PageUp/PageDown. */
@@ -351,7 +356,15 @@ export class SheetController {
 
   run(fn: (tx: Tx) => void, after?: () => void): boolean {
     const before = this.meta();
-    const changed = this.store.transact(fn, { before });
+    let changed: boolean;
+    try {
+      changed = this.store.transact(fn, { before });
+    } catch (e) {
+      if (!(e instanceof TransactionRefused) || !this.onRefused) throw e;
+      this.onRefused(e.message, () => this.run(fn, after));
+      this.emit();
+      return false;
+    }
     after?.();
     if (changed) this.store.amendLastMeta(this.meta());
     this.emit();

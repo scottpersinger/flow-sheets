@@ -16,12 +16,18 @@ export interface CommandHost {
   deleteSheet(): void;
   newSheet(): void;
   importXlsx(): void;
+  /** Add a CSV file as a new sheet. */
+  importCsv?: () => void;
+  /** Save the current sheet as a new CSV file in the app (values only). */
+  saveCopyAsCsv?: () => void;
   createBranch(): void;
   compareWithOriginal(): void;
   isBranch: boolean;
   goHome(): void;
   openConnectors(): void;
   download(kind: 'csv' | 'json' | 'xlsx'): void;
+  /** Set while the open file is a CSV file: converts it to a native spreadsheet (after asking). */
+  convertToSpreadsheet?: () => void;
   deleteTab(tabId: string): void;
 }
 
@@ -207,9 +213,12 @@ export function fileItems(host: CommandHost): MenuItem[] {
     { label: 'New spreadsheet', action: () => host.newSheet() },
     { label: 'Open…', action: () => host.goHome() },
     { label: 'Import Excel file (.xlsx, .xls)…', action: () => host.importXlsx() },
+    ...(host.importCsv ? [{ label: 'Import CSV file (.csv)…', action: host.importCsv } as MenuItem] : []),
     { label: 'Data connectors…', action: () => host.openConnectors() },
     'sep',
     { label: 'Rename', action: () => host.renameSheet() },
+    ...(host.convertToSpreadsheet ? [{ label: 'Convert to spreadsheet…', action: host.convertToSpreadsheet } as MenuItem] : []),
+    ...(host.saveCopyAsCsv ? [{ label: 'Save a copy as CSV file…', action: host.saveCopyAsCsv } as MenuItem] : []),
     { label: 'Create branch…', action: () => host.createBranch() },
     ...(host.isBranch ? [{ label: 'Compare with original', action: () => host.compareWithOriginal() } as MenuItem] : []),
     {

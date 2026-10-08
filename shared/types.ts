@@ -128,6 +128,8 @@ export type DocKind = 'sheet' | 'deck' | 'doc' | 'markdown';
 export interface SheetMeta {
   id: string;
   kind: DocKind;
+  /** Set on a spreadsheet stored as a CSV file (shared/csv.ts): it holds one tab of plain values. */
+  format?: 'csv';
   title: string;
   createdAt: string;
   updatedAt: string;

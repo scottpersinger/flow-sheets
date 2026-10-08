@@ -51,7 +51,7 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 
 ## Assistant
 
-**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. You can ask it in plain language to read, edit, format, sort or restructure the open spreadsheet, or to find, read, create and open other spreadsheets. It knows which spreadsheet, tab and selection you're looking at. It uses Claude Sonnet 5.5 by default (`AGENT_MODEL` switches it, for example to Opus 5.5) through one API key on the server.
+**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. You can ask it in plain language to read, edit, format, sort or restructure the open spreadsheet, or to find, read, create and open other spreadsheets. It knows which spreadsheet, tab and selection you're looking at. It uses Claude Sonnet 5.5 by default (`AGENT_MODEL` switches it, for example to Opus 5.5) through one API key on the server. Under **Settings** (in the More menu on the home page) a user can instead enter their own OpenAI API key and pick a model (Astra, Sol or Luna); their assistant then runs on that key, is billed to them, and is not counted against the daily limit.
 
 - **Edits appear immediately** and save like your own. Everything the assistant changes for one message undoes as a single step with ⌘Z. Deleting tabs, rows or columns, and clearing more than 100 cells, asks you first.
 - **One ongoing conversation per user**, kept across page loads and navigation. **New chat** starts over (old conversations stay in the database).
@@ -137,6 +137,14 @@ The conversion runs on the server (`server/xlsxImport.ts`). `.xlsx` files are re
 - column widths, row heights, frozen panes, the filter range, and multiple sheets with the references between them
 
 Features the app doesn't support are reported in a banner after import: unsupported functions (shown as `#NAME?`), table references or links to other files (shown as `#ERROR!`), merged cells (unmerged, with the value kept in the top-left cell) and hidden sheets. Charts, images, comments, conditional formatting, data validation and filter criteria are dropped. Uploads are limited to 20 MB, 300 MB uncompressed and 1 million cells.
+
+## CSV files
+
+Drop a `.csv` file on the home page (or use the Import tile) and it opens in the spreadsheet editor as the CSV file it is: one sheet of plain values, listed with type **CSV** and marked with a CSV badge next to its name. Edits are saved back as CSV text (`shared/csv.ts`), keeping the file's line endings; formulas are stored as typed (`=B2*2`) and still calculate. **File → Download → Comma-separated values** gives the file back.
+
+CSV cannot hold formatting, images, column widths and row heights, frozen rows and columns, filters, sheet names or a second sheet. Using one of these asks to convert the file to a spreadsheet first (also **File → Convert to spreadsheet…**), then makes the change. Converting keeps the same file and content; it can still be downloaded as CSV afterwards. The assistant works on a CSV file like on any spreadsheet, and tells you when what you asked for needs the conversion. Imports are limited to 10 MB.
+
+Inside a spreadsheet, **File → Import CSV file…** adds a CSV file as a new sheet, and **File → Save a copy as CSV file…** saves the current sheet as a new CSV file in the app, with the values as shown and without formatting, formulas, images or the other sheets. The home page menu of a spreadsheet has **Download as CSV** for its first sheet.
 
 ## Connectors
 

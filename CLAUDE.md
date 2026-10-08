@@ -23,6 +23,13 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   `create_doc`, `read_other_doc`) work on them too, through `client/src/agent/markdownTools.ts` and
   `shared/agent/markdownBlocks.ts` (blocks are the top-level Markdown constructs, edits are text ranges
   applied through the editor so they are undoable); the formatting and page tools do not.
+- CSV files are spreadsheets stored as CSV text (`shared/csv.ts`; `SheetMeta.format === 'csv'`, the `format`
+  column in `server/sheets.ts`). `SheetStore.load` parses the text into a one-tab workbook and `save` writes
+  CSV back for as long as the workbook holds only plain values, so everything that reads spreadsheets works
+  on them. In the editor `csvGuard` (`client/src/state/store.ts`) refuses a change CSV cannot store
+  (formatting, images, column sizes, frozen panes, filters, more tabs) and the page offers to convert the
+  file to a native spreadsheet (`POST /api/sheets/:id/convert`); the assistant's tools get a `ToolError`
+  telling it to ask the user to convert.
 
 Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a change is finished.
 
@@ -30,6 +37,11 @@ Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a cha
 
 The server runs the Claude loop (`server/agent/agent.ts`). Tools are defined once as Zod schemas in
 `server/agent/tools.ts`; the server validates every tool input and sends the JSON Schema to Claude.
+
+A user can run the assistant on an OpenAI model with their own API key instead (the Settings page,
+`/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`). The loop and the stored history
+stay in the Claude message format; `server/agent/openai.ts` translates each request to the Responses API
+and the reply back. The model choices are `OPENAI_MODELS` in `shared/agent/protocol.ts`.
 
 Two kinds of tools:
 

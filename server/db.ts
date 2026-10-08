@@ -134,6 +134,16 @@ export function openDb(file: string): DB {
       output_tokens INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (user_id, day)
     );
+
+    -- What powers each user's assistant (see server/agent/settings.ts). openai_key is encrypted.
+    CREATE TABLE IF NOT EXISTS assistant_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      openai_model TEXT NOT NULL,
+      openai_key TEXT,
+      openai_key_masked TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
   migrate(db);
   return db;
@@ -149,6 +159,8 @@ function migrate(db: DB): void {
   db.exec('CREATE INDEX IF NOT EXISTS sheets_parent ON sheets(parent_id)');
   // Slide decks share the table and storage with spreadsheets; kind tells them apart.
   if (!cols.has('kind')) db.exec("ALTER TABLE sheets ADD COLUMN kind TEXT NOT NULL DEFAULT 'sheet'");
+  // A spreadsheet stored as CSV text has format 'csv' (shared/csv.ts); null is the native format of the kind.
+  if (!cols.has('format')) db.exec('ALTER TABLE sheets ADD COLUMN format TEXT');
 
   // Google sign-in: the Google account id linked to the user. Accounts created by Google sign-in have an empty
   // password_hash (no password can match it) until the user sets one through "Forgot your password?".

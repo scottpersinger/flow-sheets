@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';
 import type { MarkdownDoc } from '../shared/markdown.ts';
+import { csvProblem, csvStyle, csvToWorkbook, isCsvDoc, newCsvDoc, workbookToCsv, type CsvDoc } from '../shared/csv.ts';
 import { migrateDeck } from '../shared/lines.ts';
 import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import type { Backup } from './backup.ts';
@@ -13,6 +14,8 @@ interface SheetRow {
   id: string;
   owner_id: string;
   kind: DocKind;
+  /** 'csv' for a spreadsheet stored as CSV text; null otherwise. */
+  format: string | null;
   title: string;
   file: string;
   created_at: string;
@@ -32,6 +35,7 @@ const SELECT_SHEETS = `
 const toMeta = (r: SheetRow): SheetMeta => ({
   id: r.id,
   kind: r.kind,
+  ...(r.format === 'csv' ? { format: 'csv' as const } : {}),
   title: r.title,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -48,6 +52,8 @@ const toMeta = (r: SheetRow): SheetMeta => ({
 });
 
 const baseFileOf = (id: string) => `${id}.base.json`;
+
+type Stored = Workbook | Deck | Doc | MarkdownDoc | CsvDoc;
 
 /** Structural validation of an uploaded workbook (guards against malformed saves, not a full schema). */
 export function validateWorkbook(wb: unknown): string | null {
@@ -86,7 +92,8 @@ export function validateWorkbook(wb: unknown): string | null {
 /**
  * Spreadsheets, slide decks, text documents and Markdown documents, stored as one JSON file each with their
  * metadata in SQLite. The workbook methods (load, save, branch, ...) only see spreadsheets; the deck, doc and
- * markdown methods likewise.
+ * markdown methods likewise. A spreadsheet can be stored as CSV text instead of a workbook (format "csv"):
+ * load still returns a workbook, and save writes CSV for as long as the workbook fits in one.
  */
 export class SheetStore {
   private db: DB;
@@ -128,16 +135,22 @@ export class SheetStore {
     return r ? toMeta(r) : null;
   }
 
-  private async insert(ownerId: string, kind: DocKind, title: string, doc: Workbook | Deck | Doc | MarkdownDoc): Promise<SheetMeta> {
+  private async insert(ownerId: string, kind: DocKind, title: string, doc: Stored, format: 'csv' | null = null): Promise<SheetMeta> {
     const id = randomUUID();
     const file = `${id}.json`;
     const json = await this.writeAtomic(file, doc);
     const now = new Date().toISOString();
     this.db
-      .prepare('INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, ownerId, kind, title, file, now, now);
+      .prepare('INSERT INTO sheets (id, owner_id, kind, format, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, ownerId, kind, format, title, file, now, now);
     this.backup?.putFile(ownerId, kind, id, now, json);
-    return { id, kind, title, createdAt: now, updatedAt: now };
+    return { id, kind, ...(format ? { format } : {}), title, createdAt: now, updatedAt: now };
+  }
+
+  /** Create a spreadsheet stored as CSV text. Throws CsvError if the text cannot be opened as one. */
+  async createCsv(ownerId: string, title: string, csv: string): Promise<SheetMeta> {
+    csvToWorkbook(csv);
+    return this.insert(ownerId, 'sheet', title, newCsvDoc(csv), 'csv');
   }
 
   async create(ownerId: string, title: string, workbook?: Workbook): Promise<SheetMeta> {
@@ -182,10 +195,19 @@ export class SheetStore {
   async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook } | null> {
     const r = this.row(ownerId, id, 'sheet');
     if (!r) return null;
-    return { meta: toMeta(r), workbook: await this.read<Workbook>(r) };
+    const stored = await this.read<Workbook | CsvDoc>(r);
+    const csv = isCsvDoc(stored);
+    // The file says what it is; bring the column in line if they disagree (e.g. after a restore).
+    if (csv !== (r.format === 'csv')) this.setFormat(r, csv ? 'csv' : null);
+    return { meta: toMeta(r), workbook: csv ? csvToWorkbook(stored.csv) : stored };
   }
 
-  private async write(r: SheetRow, doc: Workbook | Deck | Doc | MarkdownDoc): Promise<SheetMeta> {
+  private setFormat(r: SheetRow, format: 'csv' | null): void {
+    this.db.prepare('UPDATE sheets SET format = ? WHERE id = ?').run(format, r.id);
+    r.format = format;
+  }
+
+  private async write(r: SheetRow, doc: Stored): Promise<SheetMeta> {
     const prev = this.writeChains.get(r.id) ?? Promise.resolve();
     const next = prev.then(() => this.writeAtomic(r.file, doc));
     this.writeChains.set(r.id, next.then(() => {}, () => {}));
@@ -198,7 +220,26 @@ export class SheetStore {
 
   async save(ownerId: string, id: string, workbook: Workbook): Promise<SheetMeta | null> {
     const r = this.row(ownerId, id, 'sheet');
-    return r ? this.write(r, workbook) : null;
+    if (!r) return null;
+    if (r.format !== 'csv') return this.write(r, workbook);
+    // A CSV file stays CSV while the workbook holds nothing CSV cannot store; otherwise it becomes a native
+    // spreadsheet rather than lose what was added.
+    if (csvProblem(workbook)) {
+      this.setFormat(r, null);
+      return this.write(r, workbook);
+    }
+    const before = await this.read<Workbook | CsvDoc>(r);
+    return this.write(r, newCsvDoc(workbookToCsv(workbook, isCsvDoc(before) ? csvStyle(before.csv) : undefined)));
+  }
+
+  /** Turn a CSV file into a native spreadsheet (same id and content). No-op for one that already is. */
+  async convertToNative(ownerId: string, id: string): Promise<SheetMeta | null> {
+    const res = await this.load(ownerId, id);
+    if (!res) return null;
+    if (res.meta.format !== 'csv') return res.meta;
+    const r = this.row(ownerId, id, 'sheet')!;
+    this.setFormat(r, null);
+    return this.write(r, res.workbook);
   }
 
   // --- Slide decks -------------------------------------------------------------
@@ -283,15 +324,17 @@ export class SheetStore {
     await writeFile(tmp, json);
     await rename(tmp, target);
     const now = new Date().toISOString();
+    // CSV files are written as {"version":1,"csv":...}; load corrects the column if this guess is ever wrong.
+    const format = kind === 'sheet' && /^\s*\{"version":1,"csv":/.test(json) ? 'csv' : null;
     this.db
-      .prepare('INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, ownerId, kind, title, file, now, now);
+      .prepare('INSERT INTO sheets (id, owner_id, kind, format, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, ownerId, kind, format, title, file, now, now);
     this.backup?.putFile(ownerId, kind, id, now, json);
-    return { id, kind, title, createdAt: now, updatedAt: now };
+    return { id, kind, ...(format ? { format } : {}), title, createdAt: now, updatedAt: now };
   }
 
   /** Writes the file (temp file, then rename) and returns the JSON written. */
-  private async writeAtomic(file: string, doc: Workbook | Deck | Doc | MarkdownDoc): Promise<string> {
+  private async writeAtomic(file: string, doc: Stored): Promise<string> {
     const target = this.filePath(file);
     const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
     const json = JSON.stringify(doc);

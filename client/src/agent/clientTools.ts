@@ -19,6 +19,7 @@ import { markdownConfirmationFor, markdownOutline, markdownToolProblem, runMarkd
 import type { MarkdownController } from '../markdown/controller.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
 import type { DocController } from '../doc/controller.ts';
+import { TransactionRefused } from '../state/store.ts';
 import { ToolError } from './toolError.ts';
 
 export { ToolError };
@@ -210,7 +211,19 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
   }
 
   const ctl = requireSheet(env);
-  const run = (fn: Parameters<SheetController['runAgent']>[1]) => ctl.runAgent(env.group, fn);
+  const run = (fn: Parameters<SheetController['runAgent']>[1]) => {
+    try {
+      return ctl.runAgent(env.group, fn);
+    } catch (e) {
+      // A CSV file refuses what CSV cannot store (see csvGuard); converting it is the user's decision.
+      if (e instanceof TransactionRefused) {
+        throw new ToolError(
+          `Nothing was changed: this file is a CSV file, which can only hold plain cell values, and this needs ${e.message.toLowerCase()}. Tell the user it has to be converted to a spreadsheet first (File → Convert to spreadsheet), and continue only after they have converted it.`,
+        );
+      }
+      throw e;
+    }
+  };
 
   switch (call.name) {
     case 'get_sheet_overview':

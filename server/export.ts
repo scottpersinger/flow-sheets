@@ -5,6 +5,7 @@
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { readFile } from 'node:fs/promises';
+import { workbookToCsv } from '../shared/csv.ts';
 import type { Node as PMNode } from 'prosemirror-model';
 import type { Deck } from '../shared/deck.ts';
 import { docSchema, type Doc } from '../shared/doc.ts';
@@ -282,6 +283,8 @@ export async function exportFile(meta: SheetMeta, data: FileData, format: Export
       return { name: safeName(meta.title, 'xlsx'), type, body: await workbookXlsx((data as { workbook: Workbook }).workbook, meta.title) };
     case 'csv': {
       const wb = (data as { workbook: Workbook }).workbook;
+      // A CSV file downloads as the file it is: raw values, not the displayed ones.
+      if (meta.format === 'csv') return { name: safeName(meta.title, 'csv'), type, body: Buffer.from(workbookToCsv(wb)) };
       const t = tab === undefined ? wb.tabs[0] : (wb.tabs.find((x) => x.name === tab || x.id === tab) ?? wb.tabs[Number(tab)]);
       if (!t) throw new ExportError(`No tab named ${tab}`);
       const name = wb.tabs.length > 1 ? safeName(`${meta.title} - ${t.name}`, 'csv') : safeName(meta.title, 'csv');

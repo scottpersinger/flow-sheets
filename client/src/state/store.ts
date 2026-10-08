@@ -1,5 +1,6 @@
 import { cellKey } from '../../../shared/cellref.ts';
 import { Engine } from '../../../shared/formula/engine.ts';
+import { csvCellProblem, csvProblem, csvTabPropProblem } from '../../../shared/csv.ts';
 import type { CellData, Tab, Workbook } from '../../../shared/types.ts';
 import { formatValue, type Scalar } from '../../../shared/values.ts';
 
@@ -15,6 +16,22 @@ export interface UndoEntry<M = unknown> {
   metaAfter?: M;
   /** Transactions with the same group that follow each other merge into one undo step (e.g. one agent request). */
   group?: string;
+}
+
+/** Thrown by transact when the store's guard refuses a change; the change has been rolled back. */
+export class TransactionRefused extends Error {}
+
+/**
+ * The guard of a CSV file (shared/csv.ts): refuses a change that adds something CSV cannot store, and returns
+ * what that is (e.g. "Cell formatting").
+ */
+export function csvGuard(patches: Patch[]): string | null {
+  for (const p of patches) {
+    const problem =
+      p.k === 'cell' ? csvCellProblem(p.after) : p.k === 'tab' ? csvTabPropProblem(p.prop, p.after) : csvProblem({ version: 1, tabs: p.after });
+    if (problem) return problem;
+  }
+  return null;
 }
 
 const STRUCTURAL_PROPS = new Set<keyof Tab>(['name', 'rows', 'cols']);
@@ -90,6 +107,11 @@ export class WorkbookStore<M = unknown> {
   private undoStack: UndoEntry<M>[] = [];
   private redoStack: UndoEntry<M>[] = [];
   private listeners = new Set<() => void>();
+  /**
+   * When set, every transaction is checked before it takes effect: a string refuses it (the reason), the
+   * change is rolled back and transact throws TransactionRefused.
+   */
+  guard: ((patches: Patch[]) => string | null) | null = null;
 
   constructor(workbook: Workbook) {
     this.workbook = workbook;
@@ -144,6 +166,11 @@ export class WorkbookStore<M = unknown> {
     const tx = new Tx(this);
     fn(tx);
     if (!tx.patches.length) return false;
+    const refused = this.guard?.(tx.patches);
+    if (refused) {
+      this.applyPatches(tx.patches, true);
+      throw new TransactionRefused(refused);
+    }
     this.recalc(tx.structural, tx.changedCells);
     if (undoable) {
       const top = this.undoStack[this.undoStack.length - 1];
