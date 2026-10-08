@@ -2,6 +2,27 @@
 
 Each entry is written by the app itself when a change requested through the assistant goes live.
 
+## 2026-10-08 — Draggable freeze-pane separators
+
+Both frozen-pane separators in the grid can now be dragged with the mouse. I haven't tried it in a browser. Typecheck and the full test suite pass, but the tests only cover the freeze setting and undo, not the dragging itself.
+
+- **Drag:** the horizontal line moves the frozen-row count and the vertical line moves the frozen-column count. Each snaps to the nearest row or column boundary, and dragging to the top or left edge sets 0.
+- **Cursor and guide:** hovering a separator shows a row-resize or col-resize cursor. A blue guide line follows the mouse while you drag.
+- **Saving and undo:** releasing the mouse saves the new freeze for that tab through the existing `setFrozen` call, so it persists and Cmd/Ctrl+Z undoes it.
+- **Limits:** once a freeze is 0 there is no line to grab, so you can't drag it back out. Dragging also doesn't auto-scroll the grid.
+
+I added no new assistant tool. The changes are in `client/src/grid/Grid.tsx` and `client/src/styles.css`, plus a new test in `client/src/agent/clientTools.test.ts`.
+
+Requested by scottpersinger@gmail.com through the in-app assistant on 2026-10-08.
+
+### Request
+
+In the spreadsheet grid, the frozen-pane separators (the thick gray line below the frozen rows and the thick gray line right of the frozen columns) cannot currently be adjusted with the mouse; only the freeze tool can change them. Make both separators draggable: dragging the horizontal separator up/down changes the number of frozen rows, snapping to row boundaries; dragging the vertical separator left/right changes the number of frozen columns, snapping to column boundaries. Show a resize cursor (row-resize / col-resize) on hover and a highlighted guide line while dragging. Dragging to the top/left edge sets 0 frozen. The change must persist in the sheet's saved frozen_rows / frozen_columns per tab and be undoable with Cmd/Ctrl+Z. Example: on the 'ARR Build' tab, currently frozen_rows=5 and frozen_columns=1; the user should be able to drag the line under row 5 down to under row 6, or the line right of column A to right of column B, and the freeze updates accordingly.
+
+Files: client/src/agent/clientTools.test.ts, client/src/grid/Grid.tsx, client/src/styles.css
+
+Job: 5c63fd2b-3196-4a36-a8c1-bc57191918be
+
 ## 2026-10-07 — Show "FreeFlow Docs" branding in the PDF file preview header
 
 I renamed the app branding from "Sheets" to "FreeFlow Docs" in the file preview header and in every other page I found. The edits cover the browser tab titles, including `client/index.html` and the spreadsheet, presentation and document editor tab titles. They also cover the Connectors and Changes back links, the sign-in, password-reset and verify-email headers, and the sign-in page's diagram text. The file preview link still goes back to the home page.

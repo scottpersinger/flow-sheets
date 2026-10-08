@@ -52,6 +52,7 @@ import { clipboardImage, uploadImageFile } from '../cellImage.ts';
 
 type Hit =
   | { area: 'corner' }
+  | { area: 'freeze'; axis: 'row' | 'col' }
   | { area: 'colHeader'; c: number; edge?: number }
   | { area: 'rowHeader'; r: number; edge?: number }
   | { area: 'cell'; r: number; c: number; fillHandle?: boolean; selEdge?: boolean; filterCol?: number };
@@ -64,7 +65,8 @@ type Drag =
   | { kind: 'resize'; axis: 'col' | 'row'; idx: number[]; start: number; startSize: number; size: number }
   | { kind: 'fill'; src: Range; target: Range | null }
   | { kind: 'move'; src: Range; grab: CellPos; dest: CellPos | null }
-  | { kind: 'point'; anchor: CellPos };
+  | { kind: 'point'; anchor: CellPos }
+  | { kind: 'freeze'; axis: 'row' | 'col'; n: number };
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -92,6 +94,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [size, setSize] = useState({ width: 800, height: 500 });
   const [scroll, setScroll] = useState({ x: 0, y: 0 });
+  const [freezeGuide, setFreezeGuide] = useState<{ axis: 'row' | 'col'; pos: number } | null>(null);
   const [resizePreview, setResizePreview] = useState<{ axis: 'col' | 'row'; idx: number[]; size: number } | null>(null);
   const [previews, setPreviews] = useState<{ fill: Range | null; move: Range | null }>({ fill: null, move: null });
   /** Column boundary where dragged columns would be dropped (drop indicator), or null. */
@@ -302,6 +305,8 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
   const hitTest = (x: number, y: number): Hit => {
     const { layout: l, vp: v } = live.current;
     if (x < ROW_HEADER_W && y < COL_HEADER_H) return { area: 'corner' };
+    if (l.frozenRows && Math.abs(y - (COL_HEADER_H + l.frozenH)) <= 3) return { area: 'freeze', axis: 'row' };
+    if (l.frozenCols && Math.abs(x - (ROW_HEADER_W + l.frozenW)) <= 3) return { area: 'freeze', axis: 'col' };
     const c = colAtX(l, v, Math.max(x, ROW_HEADER_W));
     const r = rowAtY(l, v, Math.max(y, COL_HEADER_H));
     if (y < COL_HEADER_H) {
@@ -371,6 +376,19 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
         setColDrop(d.before);
         break;
       }
+      case 'freeze': {
+        const row = d.axis === 'row';
+        const lay = row ? l.rows : l.cols;
+        const scroll = row ? v.scrollY : v.scrollX;
+        let p = row ? y - COL_HEADER_H : x - ROW_HEADER_W;
+        if (p > (row ? l.frozenH : l.frozenW)) p += scroll;
+        p = Math.min(Math.max(p, 0), Math.max(0, lay.total - 1));
+        const i = lay.indexAt(p);
+        d.n = Math.min(lay.count, p < lay.start(i) + lay.size(i) / 2 ? i : i + 1);
+        const shown = d.n > (row ? l.frozenRows : l.frozenCols) ? scroll : 0;
+        setFreezeGuide({ axis: d.axis, pos: (row ? COL_HEADER_H : ROW_HEADER_W) + lay.start(d.n) - shown });
+        break;
+      }
       case 'resize': {
         const pos = d.axis === 'col' ? x : y;
         const min = d.axis === 'col' ? 20 : 12;
@@ -409,7 +427,7 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     autoScrollRaf.current = null;
     const d = dragRef.current;
     const el = scrollerRef.current;
-    if (!d || !el || d.kind === 'resize') return;
+    if (!d || !el || d.kind === 'resize' || d.kind === 'freeze') return;
     const { x, y } = lastMouse.current;
     const { layout: l, vp: v } = live.current;
     let dx = 0;
@@ -460,7 +478,11 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     const d = dragRef.current;
     dragRef.current = null;
     if (!d) return;
-    if (d.kind === 'resize') {
+    if (d.kind === 'freeze') {
+      setFreezeGuide(null);
+      if (d.axis === 'row') ctl.setFrozen(d.n, undefined);
+      else ctl.setFrozen(undefined, d.n);
+    } else if (d.kind === 'resize') {
       setResizePreview(null);
       if (d.size !== d.startSize) {
         if (d.axis === 'col') ctl.setColWidth(d.idx, d.size);
@@ -522,6 +544,9 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     }
 
     switch (h.area) {
+      case 'freeze':
+        startDrag({ kind: 'freeze', axis: h.axis, n: h.axis === 'row' ? layout.frozenRows : layout.frozenCols });
+        break;
       case 'corner':
         ctl.selectAll();
         break;
@@ -652,7 +677,8 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
     const { x, y } = pointOf(e);
     const h = hitTest(x, y);
     let cursor = 'default';
-    if (h.area === 'colHeader' && h.edge !== undefined) cursor = 'col-resize';
+    if (h.area === 'freeze') cursor = h.axis === 'row' ? 'row-resize' : 'col-resize';
+    else if (h.area === 'colHeader' && h.edge !== undefined) cursor = 'col-resize';
     else if (h.area === 'colHeader' && ctl.canDragCols(h.c)) cursor = 'grab';
     else if (h.area === 'rowHeader' && h.edge !== undefined) cursor = 'row-resize';
     else if (h.area === 'cell' && h.fillHandle) cursor = 'crosshair';
@@ -974,6 +1000,12 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
           </div>
         </div>
       </div>
+      {freezeGuide && (
+        <div
+          className="freeze-guide"
+          style={freezeGuide.axis === 'row' ? { left: 0, right: 0, top: freezeGuide.pos - 1, height: 3 } : { top: 0, bottom: 0, left: freezeGuide.pos - 1, width: 3 }}
+        />
+      )}
       <textarea
         ref={taRef}
         className="cell-editor"
