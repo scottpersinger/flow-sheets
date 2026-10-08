@@ -324,6 +324,19 @@ describe('ingest_connector_data', () => {
     expect(Object.keys(ctl.tab.cells)).toHaveLength(0);
   });
 
+  it('sets frozen rows and columns from the grid separators and undoes them', () => {
+    const { ctl } = setup();
+    ctl.setFrozen(5, undefined);
+    ctl.setFrozen(undefined, 1);
+    expect(ctl.tab.frozenRows).toBe(5);
+    expect(ctl.tab.frozenCols).toBe(1);
+    ctl.setFrozen(0, undefined);
+    expect(ctl.tab.frozenRows).toBeUndefined();
+    expect(ctl.tab.frozenCols).toBe(1);
+    ctl.undo();
+    expect(ctl.tab.frozenRows).toBe(5);
+  });
+
   it('passes connector errors to Claude', async () => {
     const { call, env } = setup();
     env.fetchConnectorData = async () => {

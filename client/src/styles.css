@@ -872,6 +872,12 @@ textarea {
 .grid-content {
   position: relative;
 }
+.freeze-guide {
+  position: absolute;
+  background: #1a73e8;
+  pointer-events: none;
+  z-index: 3;
+}
 .grid-canvas {
   position: sticky;
   top: 0;
