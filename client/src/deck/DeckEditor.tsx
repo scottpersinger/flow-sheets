@@ -281,12 +281,15 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
     if (el.type === 'text' || el.type === 'shape') ctl.startEditing(el.id);
   };
 
-  const editing = ctl.editing
+  // The id is captured here, not read at commit time: a click outside the box ends editing first, and the
+  // editor then commits as it unmounts, when ctl.editing is already null.
+  const editingId = ctl.editing;
+  const editing = editingId
     ? {
-        id: ctl.editing,
+        id: editingId,
         caret: caretRef.current ?? undefined,
         onCommit: (paragraphs: { text: string; bullet?: boolean; level?: number }[]) => {
-          const id = ctl.editing!;
+          const id = editingId;
           ctl.updateElements([id], (el) => {
             if (el.type === 'text') return { ...el, paragraphs };
             if (el.type === 'shape') {

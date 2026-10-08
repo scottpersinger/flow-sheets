@@ -102,7 +102,7 @@ export function DeckPage() {
   return <DeckWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
 }
 
-type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'deleteSlide'; index: number } | null;
+type Dialog = { kind: 'rename' } | { kind: 'delete' } | null;
 
 function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DeckController }) {
   useDeckController(ctl);
@@ -321,7 +321,7 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
   const slideMenu = (index: number): MenuItem[] => [
     { label: 'New slide', shortcut: '', submenu: LAYOUT_IDS.map((l) => ({ label: LAYOUT_NAMES[l], action: () => ctl.addSlide(l, {}, index + 1) })) },
     { label: 'Duplicate slide', shortcut: `${MOD}D`, action: () => ctl.duplicateSlide(index) },
-    { label: 'Delete slide', danger: true, disabled: ctl.deck.slides.length <= 1, action: () => setDialog({ kind: 'deleteSlide', index }) },
+    { label: 'Delete slide', danger: true, disabled: ctl.deck.slides.length <= 1, action: () => void ctl.deleteSlides([index]) },
     'sep',
     { label: 'Layout', submenu: LAYOUT_IDS.map((l) => ({ label: LAYOUT_NAMES[l], checked: ctl.deck.slides[index]?.layout === l, action: () => ctl.setLayout(l, index) })) },
   ];
@@ -529,16 +529,6 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
             await api.deleteDeck(meta.id);
             navigate('/');
           }}
-          onClose={() => setDialog(null)}
-        />
-      )}
-      {dialog?.kind === 'deleteSlide' && (
-        <ConfirmModal
-          title="Delete slide?"
-          message={<>Delete slide {dialog.index + 1}? You can undo this with {MOD}Z.</>}
-          confirmText="Delete"
-          danger
-          onConfirm={() => void ctl.deleteSlides([dialog.index])}
           onClose={() => setDialog(null)}
         />
       )}
