@@ -9,7 +9,7 @@ import { AuthService, hashPassword } from '../../server/auth.ts';
 import { openDb } from '../../server/db.ts';
 import { FileHub } from './files.ts';
 import { createPluginServer } from './http.ts';
-import { OAuthServer } from './oauth.ts';
+import { OAuthServer, redirectMatches } from './oauth.ts';
 
 const CLIENT_DOC_URL = 'https://chatgpt.example/oauth/client.json';
 const REDIRECT = 'https://chatgpt.example/connector/callback';
@@ -128,6 +128,19 @@ describe('OAuth', () => {
     const third = (await fetch(`${base}/oauth/token`, form({ grant_type: 'authorization_code', code: code2, code_verifier: 'third-verifier-value-1234567' })).then((r) => r.json())) as { access_token: string; refresh_token: string };
     expect((await fetch(`${base}/oauth/revoke`, form({ token: third.refresh_token }))).status).toBe(200);
     expect((await mcp(third.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status).toBe(401);
+  });
+
+  it('lets an app on this computer come back on any port, and only there', () => {
+    const registered = 'http://localhost/callback';
+    expect(redirectMatches(registered, 'http://localhost:53712/callback')).toBe(true);
+    expect(redirectMatches(registered, 'http://localhost/callback')).toBe(true);
+    expect(redirectMatches('http://127.0.0.1/callback', 'http://127.0.0.1:8080/callback')).toBe(true);
+    for (const other of ['http://localhost:53712/other', 'http://127.0.0.1:53712/callback', 'http://localhost.evil.example:53712/callback', 'https://localhost:53712/callback', 'http://user@localhost:53712/callback', 'http://localhost:53712/callback?x=1', 'not a url']) {
+      expect(redirectMatches(registered, other)).toBe(false);
+    }
+    // Anything that is not a loopback address must match exactly.
+    expect(redirectMatches('https://claude.example/cb', 'https://claude.example:8443/cb')).toBe(false);
+    expect(redirectMatches('https://claude.example/cb', 'https://claude.example/cb')).toBe(true);
   });
 
   it('registers clients dynamically and checks their redirect URIs', async () => {

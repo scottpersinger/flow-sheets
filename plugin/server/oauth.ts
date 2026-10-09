@@ -181,7 +181,7 @@ export class OAuthServer {
       name = row.name;
       uris = JSON.parse(row.redirect_uris) as string[];
     }
-    if (!uris.includes(redirectUri)) throw new OAuthError('invalid_request', 'redirect_uri is not registered for this client.');
+    if (!uris.some((u) => redirectMatches(u, redirectUri))) throw new OAuthError('invalid_request', 'redirect_uri is not registered for this client.');
     return { name };
   }
 
@@ -447,6 +447,24 @@ function isAllowedRedirect(u: string): boolean {
   try {
     const url = new URL(u);
     return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'));
+  } catch {
+    return false;
+  }
+}
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Whether the address a client asked to be sent back to is one it registered. An exact match, except for a
+ * native app listening on this computer (http on a loopback host): it gets a free port when it starts, so it
+ * registers the address without one and any port matches (RFC 8252, section 7.3). Claude Code does this.
+ */
+export function redirectMatches(registered: string, requested: string): boolean {
+  if (registered === requested) return true;
+  try {
+    const a = new URL(registered);
+    const b = new URL(requested);
+    return a.protocol === 'http:' && b.protocol === 'http:' && LOOPBACK.has(a.hostname) && a.hostname === b.hostname && a.pathname === b.pathname && a.search === b.search && !b.username && !b.password && !b.hash;
   } catch {
     return false;
   }
