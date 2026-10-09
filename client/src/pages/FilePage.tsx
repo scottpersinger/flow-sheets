@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
 import { AgentButton } from '../agent/AgentPanel.tsx';
+import { useRegisterFile } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { fileIcon, formatFileSize } from '../components/FileChip.tsx';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
@@ -62,6 +63,8 @@ export function FilePage() {
   useEffect(() => {
     if (file) document.title = file.filename;
   }, [file]);
+  // The assistant is told which file is showing.
+  useRegisterFile(file);
 
   const previewable = !!file && PREVIEW_FILE_TYPES.includes(file.type);
   return (

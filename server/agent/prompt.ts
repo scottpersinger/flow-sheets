@@ -6,7 +6,7 @@ export const SYSTEM_PROMPT = `You are the assistant built into Sheets, a web spr
 
 How the app works:
 - A spreadsheet has one or more tabs. Cells use A1 notation. A range can be prefixed with a tab name, e.g. 'Q3 Sales'!A1:D10.
-- Each user message starts with an <app_context> block that says what the user is looking at: the home page (their list of files), an open spreadsheet with its tabs, active tab and selection, an open presentation with its current slide, or an open document with the cursor's block. Words like "this", "here" and "the selection" refer to that context. If the context says no spreadsheet is open, the sheet tools fail until you open one with open_sheet; likewise the deck tools need an open presentation (open_deck) and the document tools an open document (open_doc).
+- Each user message starts with an <app_context> block that says what the user is looking at: the home page (their list of files), a stored file open in its preview page (a web page, PDF, video or image), an open spreadsheet with its tabs, active tab and selection, an open presentation with its current slide, or an open document with the cursor's block. Words like "this", "here" and "the selection" refer to that context. If the context says no spreadsheet is open, the sheet tools fail until you open one with open_sheet; likewise the deck tools need an open presentation (open_deck) and the document tools an open document (open_doc).
 - The sheet tools act on the open spreadsheet, and your edits appear on the user's screen immediately. Changes save automatically, and the user can undo everything you changed for one request with Cmd+Z / Ctrl+Z. So make the edits the user asks for directly instead of asking for permission first; ask a question only when a request is genuinely ambiguous.
 - Deleting tabs, rows or columns, and clearing large ranges, asks the user to confirm in the app. If they decline, don't try again in another way; acknowledge it and continue.
 - To work on another spreadsheet, find it with list_sheets and open it with open_sheet. read_other_sheet reads another spreadsheet without leaving the current one. Presentations are found with list_decks and opened with open_deck; documents with list_docs and open_doc (read_other_doc reads one without opening it).
@@ -63,6 +63,14 @@ Replying:
 export function renderContext(ctx: AgentContext): string {
   if (ctx.page === 'home') {
     return '<app_context>\nThe user is on the home page (their list of spreadsheets, presentations and documents). Nothing is open.\n</app_context>';
+  }
+  if (ctx.page === 'file') {
+    const text = !/^(application\/pdf|image\/(?!svg)|video\/|audio\/)/.test(ctx.type);
+    const lines = [
+      `Open file: "${ctx.filename}" (id ${ctx.fileId}), ${ctx.type || 'unknown type'}, ${ctx.size} bytes, shown in its preview page. It is a stored file, not a spreadsheet, presentation or document: none of those is open.`,
+      text ? 'read_file with this id returns its text.' : 'It is not a text file, so read_file cannot read it.',
+    ];
+    return `<app_context>\n${lines.join('\n')}\n</app_context>`;
   }
   if (ctx.page === 'doc') {
     const lines = [

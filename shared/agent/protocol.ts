@@ -44,6 +44,15 @@ export type AgentContext =
       blockCount: number;
       /** 1-based number of the block holding the cursor (0 when the document is empty). */
       cursorBlock: number;
+    }
+  | {
+      /** A stored file (a PDF, web page, video, image, ...) shown in its preview page. */
+      page: 'file';
+      fileId: string;
+      filename: string;
+      /** MIME type. */
+      type: string;
+      size: number;
     };
 
 /** A tool call the browser must run (sheet tools and navigation), forwarded by the server. */

@@ -399,3 +399,13 @@ describe('web and image search tools', () => {
     expect(validateToolInput('image_search', { query: 'x', max_results: 10 }).ok).toBe(true);
   });
 });
+
+describe('app context', () => {
+  it('tells the assistant which stored file is open, and whether it can be read', async () => {
+    const { renderContext } = await import('./agent/prompt.ts');
+    const page = renderContext({ page: 'file', fileId: 'f1', filename: 'index.html', type: 'text/html', size: 250_000 });
+    expect(page).toContain('Open file: "index.html" (id f1), text/html, 250000 bytes');
+    expect(page).toContain('read_file with this id returns its text.');
+    expect(renderContext({ page: 'file', fileId: 'f2', filename: 'clip.mp4', type: 'video/mp4', size: 10 })).toContain('read_file cannot read it');
+  });
+});

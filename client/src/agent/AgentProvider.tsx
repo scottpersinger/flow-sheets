@@ -71,6 +71,7 @@ interface AgentState {
   doc: OpenDoc | null;
   /** The Markdown page reports the open Markdown document (no tools act on it; the assistant only knows it is open). */
   setOpenMarkdown(doc: OpenMarkdown | null): void;
+  setOpenFile(file: StoredFile | null): void;
   /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
   job: AgentJob | null;
   /** Hide a finished job's card. */
@@ -121,6 +122,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [deck, setDeck] = useState<OpenDeck | null>(null);
   const docRef = useRef<OpenDoc | null>(null);
   const markdownRef = useRef<OpenMarkdown | null>(null);
+  /** The stored file whose preview page is showing. */
+  const fileRef = useRef<StoredFile | null>(null);
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Pending open_sheet / open_deck calls, resolved with the controller once the page has loaded the document.
@@ -268,6 +271,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setOpenFile = useCallback((file: StoredFile | null) => {
+    fileRef.current = file;
+  }, []);
+
   const setOpenMarkdown = useCallback((doc: OpenMarkdown | null) => {
     markdownRef.current = doc;
     const w = doc && waiters.current.get(doc.meta.id);
@@ -307,6 +314,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       };
     }
     const s = sheetRef.current;
+    const f = fileRef.current;
+    if (!s && f) return { page: 'file', fileId: f.id, filename: f.filename, type: f.type, size: f.size };
     if (!s) return { page: 'home' };
     return {
       page: 'sheet',
@@ -602,6 +611,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     docFailed: sheetFailed,
     doc,
     setOpenMarkdown,
+    setOpenFile,
     job,
     dismissJob,
   };
@@ -642,6 +652,15 @@ export function useRegisterMarkdown(ctl: MarkdownController, meta: SheetMeta): v
     setOpenMarkdown(doc);
     return () => setOpenMarkdown(null);
   }, [doc, setOpenMarkdown]);
+}
+
+/** Report the stored file being previewed to the agent while its page is mounted. */
+export function useRegisterFile(file: StoredFile | null): void {
+  const { setOpenFile } = useAgent();
+  useEffect(() => {
+    setOpenFile(file);
+    return () => setOpenFile(null);
+  }, [file, setOpenFile]);
 }
 
 /** Report the open presentation to the agent while a deck page is mounted. */
