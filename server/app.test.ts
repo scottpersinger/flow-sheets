@@ -3,7 +3,7 @@ import { OPENAI_MODELS } from '../shared/agent/protocol.ts';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { buildSlide, newId } from '../shared/deck.ts';
 import { buildPptx } from '../shared/pptxExport.ts';
 import { buildApp } from './app.ts';
@@ -628,6 +628,68 @@ describe('presentations', () => {
     res = await app.inject({ method: 'DELETE', url: `/api/decks/${meta.id}`, headers: { cookie } });
     expect(res.statusCode).toBe(200);
     expect(readdirSync(path.join(dir, 'sheets'))).not.toContain(`${meta.id}.json`);
+  });
+});
+
+describe('getting started', () => {
+  afterEach(() => {
+    delete process.env.GETTING_STARTED_DECK_ID;
+  });
+
+  it('copies the built-in guide into the account once, and returns that copy afterwards', async () => {
+    const { cookie } = await signUp(app, box, 'guide1@x.com');
+    let res = await app.inject({ method: 'POST', url: '/api/getting-started', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const first = res.json().deck;
+    expect(first.title).toBe('Getting started');
+    res = await app.inject({ method: 'GET', url: `/api/decks/${first.id}`, headers: { cookie } });
+    expect(res.json().deck.slides.length).toBeGreaterThan(1);
+    res = await app.inject({ method: 'POST', url: '/api/getting-started', headers: { cookie } });
+    expect(res.json().deck.id).toBe(first.id);
+    res = await app.inject({ method: 'GET', url: '/api/decks', headers: { cookie } });
+    expect(res.json().decks).toHaveLength(1);
+  });
+
+  it('copies the presentation named by GETTING_STARTED_DECK_ID, with its pictures, from its owner', async () => {
+    const { cookie: author } = await signUp(app, box, 'guide-author@x.com');
+    const { cookie: reader } = await signUp(app, box, 'guide-reader@x.com');
+    let res = await app.inject({ method: 'POST', url: '/api/images', headers: { cookie: author, 'content-type': 'image/png' }, payload: Buffer.from('picture') });
+    const picture: string = res.json().url;
+    const deck = { version: 1, theme: 'dark', slides: [{ id: 's1', elements: [{ id: 'e1', type: 'image', src: picture, x: 0, y: 0, w: 100, h: 100 }] }] };
+    res = await app.inject({ method: 'POST', url: '/api/decks', headers: { cookie: author }, payload: { title: 'Guide (master)', deck } });
+    expect(res.statusCode).toBe(200);
+    const master = res.json().deck;
+    process.env.GETTING_STARTED_DECK_ID = master.id;
+
+    // Its owner gets the guide itself.
+    res = await app.inject({ method: 'POST', url: '/api/getting-started', headers: { cookie: author } });
+    expect(res.json().deck.id).toBe(master.id);
+
+    res = await app.inject({ method: 'POST', url: '/api/getting-started', headers: { cookie: reader } });
+    const copy = res.json().deck;
+    expect(copy.id).not.toBe(master.id);
+    expect(copy.title).toBe('Getting started');
+    res = await app.inject({ method: 'GET', url: `/api/decks/${copy.id}`, headers: { cookie: reader } });
+    expect(res.json().deck.theme).toBe('dark');
+    const copied: string = res.json().deck.slides[0].elements[0].src;
+    // The picture is the reader's own copy: the author's is not theirs to load.
+    expect(copied).not.toBe(picture);
+    res = await app.inject({ method: 'GET', url: copied, headers: { cookie: reader } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('picture');
+    res = await app.inject({ method: 'GET', url: picture, headers: { cookie: reader } });
+    expect(res.statusCode).toBe(404);
+    // The author's file is still only theirs.
+    res = await app.inject({ method: 'GET', url: `/api/decks/${master.id}`, headers: { cookie: reader } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('falls back to the built-in guide when the named presentation is gone', async () => {
+    process.env.GETTING_STARTED_DECK_ID = 'no-such-deck';
+    const { cookie } = await signUp(app, box, 'guide3@x.com');
+    const res = await app.inject({ method: 'POST', url: '/api/getting-started', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deck.title).toBe('Getting started');
   });
 });
 

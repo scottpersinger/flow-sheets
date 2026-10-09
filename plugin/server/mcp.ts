@@ -477,6 +477,14 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   if (!appTools) return server;
   const appOnly = (readOnly: boolean) => ({ _meta: { ui: { visibility: ['app'] }, 'openai/widgetAccessible': true }, annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: false } });
 
+  server.registerTool('getting_started', { description: "The user's copy of the Getting started guide (made the first time), opened in the app.", inputSchema: {}, ...appOnly(false) }, async () =>
+    guard(async () => {
+      const file = await service.gettingStarted();
+      service.setOpen({ kind: 'deck', id: file.id });
+      return ok({ file, ...service.state() });
+    }),
+  );
+
   server.registerTool('app_state', { description: 'Which file is open and its revision.', inputSchema: {}, ...appOnly(true) }, async () => ok({ ...service.state() }));
 
   server.registerTool(

@@ -314,6 +314,13 @@ export class SheetStore {
     return { meta: toMeta(r), deck: migrateDeck(await this.read<Deck>(r)) };
   }
 
+  /** A presentation whoever owns it, with the owner. Only for content the app itself hands out (the Getting started guide). */
+  async loadDeckOfAnyOwner(id: string): Promise<{ meta: SheetMeta; deck: Deck; ownerId: string } | null> {
+    const r = this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ? AND s.kind = 'deck'`).get(id) as SheetRow | undefined;
+    if (!r) return null;
+    return { meta: toMeta(r), deck: migrateDeck(await this.read<Deck>(r)), ownerId: r.owner_id };
+  }
+
   async saveDeck(ownerId: string, id: string, deck: Deck): Promise<SheetMeta | null> {
     const r = this.row(ownerId, id, 'deck');
     return r ? this.write(r, deck) : null;

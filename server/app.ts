@@ -28,6 +28,7 @@ import { Backup } from './backup.ts';
 import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
 import { openDb } from './db.ts';
 import { EXPORT_FORMATS, ExportError, exportAll, exportFile, imageSource, loadFile, type ExportFormat } from './export.ts';
+import { openGettingStarted } from './gettingStarted.ts';
 import { ImageStore } from './images.ts';
 import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder } from '../shared/folders.ts';
@@ -702,6 +703,9 @@ export async function buildApp(opts: AppOptions) {
       if (problem) return reply.code(400).send({ error: problem });
       return { deck: await sheets.createDeck(req.user!.id, title, deck as Deck, req.folder) };
     });
+
+    // The user's copy of the Getting started guide, made the first time they ask for it.
+    r.post('/api/getting-started', async (req) => ({ deck: await openGettingStarted(sheets, images, req.user!.id) }));
 
     r.get('/api/decks/:id', async (req, reply) => {
       const { id } = req.params as { id: string };

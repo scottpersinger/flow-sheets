@@ -2,7 +2,6 @@
 // the plugin's tools instead of the REST API. The iframe has no cookies, so files come from `list_files`,
 // imports go through a one-time ticket, and opening a file tells the server so the model acts on it.
 import { useEffect, useRef, useState } from 'react';
-import { findGettingStarted, GETTING_STARTED_SLIDES, GETTING_STARTED_TITLE } from '../../shared/gettingStarted.ts';
 import { FileLibrary, type LibraryItem } from '../../client/src/components/FileLibrary.tsx';
 import { HomeIcon } from '../../client/src/components/Logo.tsx';
 import { Modal } from '../../client/src/components/Modal.tsx';
@@ -58,15 +57,13 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
     }
   };
 
-  // The guide is a presentation of the user's own: the first click makes their copy of the built-in one.
+  // The guide is a presentation of the user's own: the first click makes their copy of it (on the server).
   const openGuide = async () => {
     if (openingGuide.current) return;
     openingGuide.current = true;
     try {
-      const { files } = await host.call<{ files: FileSummary[] }>('list_files', { kind: 'deck', query: GETTING_STARTED_TITLE });
-      const mine = findGettingStarted(files);
-      const id = mine?.id ?? (await host.call<{ file: FileSummary }>('create_deck', { title: GETTING_STARTED_TITLE, slides: GETTING_STARTED_SLIDES })).file.id;
-      onOpen({ kind: 'deck', id });
+      const { file } = await host.call<{ file: FileSummary }>('getting_started');
+      onOpen({ kind: 'deck', id: file.id });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

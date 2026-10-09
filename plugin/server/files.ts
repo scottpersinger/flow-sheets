@@ -2,6 +2,7 @@
 // files the app uses, scoped to one account, plus the headless editing the model's tools need. Edits run the
 // app's own tools (client/src/agent/docTools.ts and deckTools.ts) against a controller that has no editor
 // view, so a tool behaves exactly as it does inside the app, then the result is saved.
+import { openGettingStarted } from '../../server/gettingStarted.ts';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { runClientTool, type ClientToolEnv } from '../../client/src/agent/clientTools.ts';
@@ -343,6 +344,11 @@ export class FileService {
     const problem = validateDeck(deck);
     if (problem) throw new ToolError(problem);
     return summary(await this.sheets.createDeck(this.userId, title.trim() || 'Untitled presentation', deck));
+  }
+
+  /** The user's copy of the Getting started guide; the first call makes it. */
+  async gettingStarted(): Promise<FileSummary> {
+    return summary(await openGettingStarted(this.sheets, this.images, this.userId));
   }
 
   /**

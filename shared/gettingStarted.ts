@@ -1,11 +1,12 @@
-// The "Getting started" guide: a presentation that ships with the app. The first time a user opens it from the
-// home page a copy is made in their account (a real file they can present and edit); after that the tile opens
-// that copy, found by its title. Placeholder content for now.
+// The "Getting started" guide. The first time a user opens it from the home page a copy is made in their
+// account (a real file they can present and edit); after that the tile opens that copy, found by its title
+// (server/gettingStarted.ts). The copy is made from a presentation kept in the app; the slides here are the
+// built-in one used where there is none (the desktop app, local development).
 import { buildSlide, newId, type Deck, type LayoutId, type SlideContent } from './deck.ts';
 
 export const GETTING_STARTED_TITLE = 'Getting started';
 
-/** The guide's slides, as the layouts build them (also the form the ChatGPT plugin's create_deck takes). */
+/** The built-in guide's slides, as the layouts build them. */
 export const GETTING_STARTED_SLIDES: (SlideContent & { layout: LayoutId })[] = [
   { layout: 'title', title: 'Getting started with Universal Docs', subtitle: 'Documents, presentations and spreadsheets in one place' },
   { layout: 'title-body', title: 'Start something new', body: ['- Pick a blank spreadsheet, presentation or document from the home page', '- Or import a Word, PowerPoint, Excel, PDF, Markdown or CSV file', '- Everything saves automatically'] },

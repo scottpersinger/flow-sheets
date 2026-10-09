@@ -3,7 +3,6 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { DeletedFile, StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
-import { findGettingStarted, GETTING_STARTED_TITLE, gettingStartedDeck } from '../../../shared/gettingStarted.ts';
 import { api, type FolderInfo } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { Account } from '../components/Account.tsx';
@@ -60,15 +59,13 @@ export function HomePage() {
   const [importing, setImporting] = useState<string | null>(null);
   const [branching, setBranching] = useState<LibraryItem | null>(null);
 
-  // The guide is a presentation of the user's own: the first click copies the built-in one into their files.
+  // The guide is a presentation of the user's own: the first click makes their copy of it (on the server).
   const openingGuide = useRef(false);
   const openGuide = async () => {
     if (openingGuide.current) return;
     openingGuide.current = true;
     try {
-      const mine = findGettingStarted((await api.listDecks()).decks);
-      const id = mine?.id ?? (await api.createDeck(GETTING_STARTED_TITLE, gettingStartedDeck())).deck.id;
-      navigate(`/d/${id}`);
+      navigate(`/d/${(await api.gettingStarted()).deck.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

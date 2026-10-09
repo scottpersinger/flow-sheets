@@ -145,6 +145,8 @@ export const api = {
   deleteSheet: (id: string) => request<{ ok: true }>('DELETE', `/api/sheets/${encodeURIComponent(id)}`),
 
   listDecks: () => request<{ decks: SheetMeta[] }>('GET', '/api/decks'),
+  /** The user's copy of the Getting started guide; the first call makes it. */
+  gettingStarted: () => request<{ deck: SheetMeta }>('POST', '/api/getting-started'),
   createDeck: (title: string, deck?: Deck, folder?: string) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck, folder: folder || undefined }),
   getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck }>('GET', `/api/decks/${encodeURIComponent(id)}`),
   /** rev is the updatedAt the editor loaded; the server refuses (409) when the presentation changed since. */
