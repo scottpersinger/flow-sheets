@@ -11,7 +11,7 @@ import type { FileHub } from './files.ts';
 import { createMcpServer, INSTRUCTIONS, SERVER_CAPABILITIES, SERVER_INFO, type Bundle, type McpOptions } from './mcp.ts';
 import { importLimit, ToolError } from './files.ts';
 import { OAuthError, type OAuthServer } from './oauth.ts';
-import { adaptTransport, discoverResult, isDiscover, presentAsSdkVersion, readJson } from './stateless.ts';
+import { adaptTransport, discoverResult, isDiscover, isStateless, presentAsSdkVersion, readJson } from './stateless.ts';
 
 export interface PluginServerOptions {
   hub: FileHub;
@@ -188,9 +188,11 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           const caps = level === 'minimal' || level === 'tools' ? { tools: { listChanged: true } } : SERVER_CAPABILITIES;
           return json(res, 200, discoverResult(body, SERVER_INFO, caps, INSTRUCTIONS));
         }
+        // A client on the newer version must get `resultType` on every result (Claude Code refuses a tool result without it).
+        const stateless = isStateless(req, body);
         presentAsSdkVersion(req);
         const mcp = createMcpServer(hub.forUser(userId), { bundle, publicUrl, ...opts.mcp });
-        const transport = adaptTransport(new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !process.env.PLUGIN_SSE }), SERVER_INFO, !!process.env.PLUGIN_RESULT_TYPE_ALL);
+        const transport = adaptTransport(new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !process.env.PLUGIN_SSE }), SERVER_INFO, stateless || !!process.env.PLUGIN_RESULT_TYPE_ALL);
         res.on('close', () => {
           void transport.close();
           void mcp.close();

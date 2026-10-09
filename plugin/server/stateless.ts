@@ -42,6 +42,13 @@ export function presentAsSdkVersion(req: IncomingMessage): void {
   for (let i = 0; i < req.rawHeaders.length; i += 2) if (req.rawHeaders[i].toLowerCase() === 'mcp-protocol-version') req.rawHeaders[i + 1] = SDK_VERSION;
 }
 
+/** Whether the request is in the newer protocol: by its version header, or by the version in its `_meta`. */
+export function isStateless(req: IncomingMessage, body: unknown): boolean {
+  if (req.headers['mcp-protocol-version'] === STATELESS_VERSION) return true;
+  const meta = body && typeof body === 'object' && !Array.isArray(body) ? (body as Rpc).params?._meta : undefined;
+  return !!meta && Object.values(meta).includes(STATELESS_VERSION);
+}
+
 export function isDiscover(body: unknown): body is Rpc & { method: 'server/discover' } {
   return !!body && typeof body === 'object' && !Array.isArray(body) && (body as Rpc).method === 'server/discover';
 }
@@ -67,7 +74,8 @@ export function discoverResult(req: Rpc, info: Implementation, capabilities: Rec
 /**
  * Add the fields 2026-07-28 clients expect on the cacheable results the SDK sends: lists and resource reads
  * (ChatGPT validates a resource read as PerRequestReadResourceResult, which requires ttlMs and cacheScope).
- * Other results are left exactly as the SDK made them.
+ * With `everyResult` (a request in the newer protocol) every result also gets `resultType`, which that
+ * protocol requires; otherwise other results are left exactly as the SDK made them.
  */
 export function adaptTransport<T extends StreamableHTTPServerTransport>(transport: T, info: Implementation, everyResult = false): T {
   const send = transport.send.bind(transport);

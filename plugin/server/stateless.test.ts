@@ -1,7 +1,7 @@
 import { IncomingMessage } from 'node:http';
 import { Socket } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { adaptTransport, discoverResult, isDiscover, presentAsSdkVersion, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
+import { adaptTransport, discoverResult, isDiscover, isStateless, presentAsSdkVersion, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
 
 const info = { name: 'docs', version: '1' };
 
@@ -37,5 +37,20 @@ describe('MCP 2026-07-28 compatibility', () => {
     expect(sent[1]).toEqual({ jsonrpc: '2.0', id: 2, result: { content: [], _meta: { x: 1 } } });
     expect((sent[1] as { result: Record<string, unknown> }).result).not.toHaveProperty('ttlMs');
     expect(sent[2]).toEqual({ jsonrpc: '2.0', id: 3, error: { code: -1, message: 'no' } });
+  });
+  it('gives every result resultType for a request in the newer protocol', async () => {
+    const req = { headers: { 'mcp-protocol-version': STATELESS_VERSION }, rawHeaders: [] } as unknown as Parameters<typeof isStateless>[0];
+    const old = { headers: { 'mcp-protocol-version': SDK_VERSION }, rawHeaders: [] } as unknown as Parameters<typeof isStateless>[0];
+    expect(isStateless(req, undefined)).toBe(true);
+    expect(isStateless(old, { method: 'tools/call', params: {} })).toBe(false);
+    expect(isStateless(old, { method: 'tools/call', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': STATELESS_VERSION } } })).toBe(true);
+
+    const sent: unknown[] = [];
+    const fake = { send: async (m: unknown) => void sent.push(m) } as unknown as Parameters<typeof adaptTransport>[0];
+    const t = adaptTransport(fake, info, true);
+    await t.send({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: 'hi' }] } });
+    await t.send({ jsonrpc: '2.0', id: 2, error: { code: -1, message: 'no' } });
+    expect(sent[0]).toEqual({ jsonrpc: '2.0', id: 1, result: { resultType: 'complete', content: [{ type: 'text', text: 'hi' }] } });
+    expect(sent[1]).toEqual({ jsonrpc: '2.0', id: 2, error: { code: -1, message: 'no' } });
   });
 });

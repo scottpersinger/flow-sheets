@@ -103,7 +103,7 @@ Debug switches (environment): `PLUGIN_LEVEL=minimal|tools|render|app|full` regis
 (bisecting what ChatGPT accepts), `PLUGIN_HELLO=1` serves a static page instead of the editor,
 `PLUGIN_HOSTED_ASSETS=1` references the script and stylesheet from the public origin instead of inlining,
 `PLUGIN_LEGACY_MIME=1` uses `text/html+skybridge`, `PLUGIN_RESOURCE_META=full|ui|legacy|none`,
-`PLUGIN_SSE=1` streams responses, `PLUGIN_RESULT_TYPE_ALL=1` adds `resultType` to every result, and
+`PLUGIN_SSE=1` streams responses, `PLUGIN_RESULT_TYPE_ALL=1` adds `resultType` to every result (requests in the 2026-07-28 protocol always get it), and
 `PLUGIN_LOG_BODIES=1` logs request bodies.
 
 ## Accounts and OAuth
