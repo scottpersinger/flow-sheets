@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
-import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, SHEET_EDIT_TOOLS, ToolError, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
+import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
  * The app's resource URI. Hosts capture the HTML by URI when the plugin is created or its tools refreshed, so
@@ -66,7 +66,7 @@ const DOC_ICON = {
 
 const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document), deck (slide presentation) or sheet (spreadsheet).');
 /** For the tools that work on anything in the library, stored files included. */
-const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or file (a PDF or video, which is shown but not edited).');
+const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or file (a PDF, video or image, which is shown but not edited).');
 const fileId = z.string().describe('The file id (from list_files or the app).');
 const optionalDocId = z.string().optional().describe('The document to act on. Defaults to the document open in the app.');
 const optionalDeckId = z.string().optional().describe('The presentation to act on. Defaults to the presentation open in the app.');
@@ -118,7 +118,7 @@ const ANNOTATIONS: Record<EditTool, { readOnlyHint: boolean; destructiveHint: bo
 
 /** Descriptions that differ from the in-app assistant's (which mention things only it has). */
 const DESCRIPTIONS: Partial<Record<EditTool, string>> = {
-  insert_image: 'Add an image block to the document from an https URL, or from an image the user attached in the chat (pass it as file). (Markdown ![alt](src) on its own line in insert_content does the same without a width.)',
+  insert_image: 'Add an image block to the open document from an https URL, or from an image the user attached in the chat (pass it as file). To save a picture as a file of its own, use import_file instead. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)',
   set_cell_image:
     'Show an image inside a cell, scaled to fit the cell: from an https URL, or from an image the user attached in the chat (pass it as file). Replaces the cell\'s value; keeps its formatting. Make the row taller or the column wider (set_row_height, set_column_width) if the image should appear larger.',
   replace_blocks: 'Replace blocks from..to of the document with new content written as Markdown. Use this to rewrite a paragraph or a whole section; prefer replace_text for small wording changes.',
@@ -138,15 +138,6 @@ const attachedFile = z.object({
   mime_type: z.string().optional(),
   file_name: z.string().optional(),
 });
-
-/** The image type from its first bytes (attachments arrive without a reliable type). */
-function sniffImageType(bytes: Buffer): string | null {
-  if (bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) return 'image/png';
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
-  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
-  return null;
-}
 
 /** Fetch an attached file from the host, within limits. Only https, and never an address on a private network. */
 async function download(url: string, fetchFn: typeof fetch, limit: number): Promise<Buffer> {
@@ -218,7 +209,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const appTools = level === 'app' || level === 'full';
   const entrypoint = level === 'full';
 
-  const listFiles = { title: 'List files', description: "The user's documents, presentations, spreadsheets and stored files (PDFs and videos), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+  const listFiles = { title: 'List files', description: "The user's documents, presentations, spreadsheets and stored files (PDFs, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
   server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
   if (level === 'minimal') return server;
 
@@ -337,7 +328,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     {
       title: 'Import a file',
       description:
-        'Import a file the user attached and open it in the app: a Word document (.docx) or Markdown file (.md) as a new document, a PowerPoint presentation (.pptx) as a new presentation, an Excel workbook (.xlsx) or CSV file (.csv) as a new spreadsheet. A PDF (.pdf) or video (.mp4, .mov, .webm) is stored as it is and shown in the app\'s viewer; it cannot be read or edited with the other tools. A CSV, Markdown or video file is recognised by its file name.',
+        'Import any file the user attached and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) or Markdown file (.md) a new document; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer, which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
       inputSchema: {
         file: attachedFile.describe('The attached file.'),
         title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
@@ -359,7 +350,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'open_file',
     {
       title: 'Open file',
-      description: `Open a document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default. A stored file (a PDF or video) is shown in the app's viewer; only its name, type and size come back.`,
+      description: `Open a document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default. A stored file (a PDF, video or image) is shown in the app's viewer; only its name, type and size come back.`,
       inputSchema: { kind: anyKind, id: fileId },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       ...(ui ? { _meta: rendersApp() } : {}),
@@ -377,7 +368,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'rename_file',
     {
       title: 'Rename file',
-      description: 'Change the title of a document, presentation or spreadsheet. Defaults to the open file. A stored PDF or video keeps its name.',
+      description: 'Change the title of a document, presentation or spreadsheet. Defaults to the open file. A stored PDF, video or image keeps its name.',
       inputSchema: { kind: anyKind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -538,7 +529,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
 
   server.registerTool(
     'file_link',
-    { description: 'A stored file (a PDF or video) and an address the app can load it from for the next few hours.', inputSchema: { id: fileId }, ...appOnly(true) },
+    { description: 'A stored file (a PDF, video or image) and an address the app can load it from for the next few hours.', inputSchema: { id: fileId }, ...appOnly(true) },
     async ({ id }) => guard(() => ok({ ...service.fileLink(id) })),
   );
 

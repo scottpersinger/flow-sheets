@@ -44,6 +44,16 @@ export function importLimit(name: string | undefined): number {
 /** How long a link to a stored file's bytes works (the player asks for the file in pieces as it plays). */
 const FILE_LINK_MS = 6 * 60 * 60 * 1000;
 
+/** The image type from its first bytes (attachments arrive without a reliable type). */
+export function sniffImageType(bytes: Buffer): string | null {
+  if (bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+
 /** The text of an uploaded text file (UTF-8, without a byte order mark); refuses bytes that are not text. */
 function textOf(bytes: Buffer): string {
   if (bytes.includes(0)) throw new ToolError('This file is not a text file.');
@@ -342,7 +352,7 @@ export class FileService {
   async importFile(bytes: Buffer, name: string | undefined, title: string | undefined): Promise<{ file: FileSummary; warnings: string[] }> {
     const baseTitle = (title?.trim() || name?.replace(/\.[^.]+$/, '').trim() || '').slice(0, 200);
     const storeImage = (type: string, data: Buffer) => this.images.create(this.userId, type, data);
-    // A PDF or a video is kept as it is and shown in the app's viewer.
+    // A PDF, a video or an image is kept as it is and shown in the app's viewer.
     const fileName = (name ?? '').replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200);
     const videoType = videoTypeOf(fileName);
     if (videoType) {
@@ -355,6 +365,11 @@ export class FileService {
       return { file: fileSummary(await this.hub.files.create(this.userId, pdfName, 'application/pdf', bytes)), warnings: [] };
     }
     if (bytes.length > MAX_IMPORT_BYTES) throw new ToolError(`This file is too large to import (${MAX_IMPORT_BYTES / 1024 / 1024} MB maximum).`);
+    const imageType = sniffImageType(bytes);
+    if (imageType) {
+      const imageName = /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? fileName : `${fileName || baseTitle || 'image'}.${IMAGE_EXT[imageType]}`;
+      return { file: fileSummary(await this.hub.files.create(this.userId, imageName, imageType, bytes)), warnings: [] };
+    }
     try {
       if (await isDocx(bytes)) {
         const { doc, warnings } = await importDocx(bytes, storeImage);
@@ -390,7 +405,9 @@ export class FileService {
       if (e instanceof ImportError || e instanceof CsvError) throw new ToolError(e.message);
       throw e;
     }
-    throw new ToolError('Only Word documents (.docx), PowerPoint presentations (.pptx), Excel workbooks (.xlsx), CSV files (.csv), Markdown files (.md), PDFs (.pdf) and videos (.mp4, .mov, .webm) can be imported.');
+    throw new ToolError(
+      `This type of file${name ? ` (${fileName})` : ''} cannot be imported. Only Word documents (.docx), PowerPoint presentations (.pptx), Excel workbooks (.xlsx), CSV files (.csv), Markdown files (.md), PDFs (.pdf), videos (.mp4, .mov, .webm) and images (PNG, JPEG, GIF, WebP) can be imported.`,
+    );
   }
 
   rename(kind: LibraryKind, id: string, title: string): FileSummary {

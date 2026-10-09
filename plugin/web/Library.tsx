@@ -37,7 +37,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
 
   /** Import: a one-time ticket from the server, then the bytes go straight to its import route. */
   const importFile = async (file: File) => {
-    if (!/\.(xlsx?|docx|pptx|csv|md|markdown|pdf)$/i.test(file.name) && !videoTypeOf(file.name)) return setError('Choose an Excel workbook (.xlsx, .xls), Word document (.docx), PowerPoint presentation (.pptx), CSV file (.csv), Markdown file (.md), PDF (.pdf) or video (.mp4, .mov, .webm).');
+    if (!/\.(xlsx?|docx|pptx|csv|md|markdown|pdf|png|jpe?g|gif|webp)$/i.test(file.name) && !videoTypeOf(file.name)) return setError('Choose an Excel workbook (.xlsx, .xls), Word document (.docx), PowerPoint presentation (.pptx), CSV file (.csv), Markdown file (.md), PDF (.pdf), video (.mp4, .mov, .webm) or image (.png, .jpg, .gif, .webp).');
     setError(null);
     setImporting(file.name);
     try {
@@ -92,9 +92,9 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
           const r = await host.call<{ file: FileSummary }>(CREATE_TOOLS[kind], { title });
           onOpen({ kind, id: r.file.id });
         }}
-        importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${CSV_ACCEPT},${MARKDOWN_ACCEPT},${PDF_ACCEPT},${VIDEO_ACCEPT}`}
+        importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${CSV_ACCEPT},${MARKDOWN_ACCEPT},${PDF_ACCEPT},${VIDEO_ACCEPT},.png,.jpg,.jpeg,.gif,.webp`}
         importLabel="Import a file"
-        importHint="Excel, PowerPoint, Word, CSV, Markdown, PDF or video. You can also attach a file in the chat and ask ChatGPT to import it, or ask it to make something new."
+        importHint="Excel, PowerPoint, Word, CSV, Markdown, PDF, video or image. You can also attach a file in the chat and ask ChatGPT to import it, or ask it to make something new."
         canRename={(item) => item.kind !== 'file'}
         importing={importing}
         onImport={(file) => void importFile(file)}

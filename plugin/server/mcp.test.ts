@@ -51,6 +51,8 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
   return { isError: r.isError === true, data: r.structuredContent as Record<string, unknown> | undefined, text: (r.content as { text?: string }[]).map((c) => c.text ?? '').join('') };
 };
 
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+
 describe('MCP server', () => {
   it('lists tools with the app entrypoint and hides app-only tools from the model', async () => {
     const { tools } = await client.listTools();
@@ -177,6 +179,11 @@ describe('MCP server', () => {
     expect((await call('read_doc')).isError).toBe(true);
     expect((await call('delete_file', { kind: 'file', id: pdfId })).isError).toBe(false);
     expect((await call('list_files', { kind: 'file' })).data?.files).toEqual([]);
+    // An image is a file of its own too (told by its bytes), not a document with a picture in it.
+    attachments.set('https://files.example/photo', Buffer.from(PNG_BASE64, 'base64'));
+    const img = await call('import_file', { file: { download_url: 'https://files.example/photo', file_name: 'photo' } });
+    expect(img.data?.file).toMatchObject({ kind: 'file', title: 'photo.png', type: 'image/png' });
+    expect(((await call('list_files', { kind: 'doc' })).data?.files as unknown[]).length).toBe(2);
     attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
     const txt = await call('import_file', { file: { download_url: 'https://files.example/notes.txt' } });
     expect(txt.isError).toBe(true);
