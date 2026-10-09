@@ -3,6 +3,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest, AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
@@ -12,6 +13,7 @@ import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
+import { checkImageEditRate, editedImageName, EDITABLE_IMAGE_TYPES, ImageEditError, MAX_EDIT_IMAGE_BYTES, MAX_EDIT_PROMPT_CHARS, openaiImageEditor, type ImageEditor } from './imageEdit.ts';
 import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
@@ -81,6 +83,8 @@ export interface AppOptions {
   legacyHosts?: string[];
   /** Checks an OpenAI key before it is saved in Settings. Tests pass a stub; the default asks OpenAI. */
   checkOpenAIKey?: (apiKey: string, model: string) => Promise<void>;
+  /** Edits a picture for the assistant's edit_image. Tests pass a stub; the default asks OpenAI's image model. */
+  imageEditor?: ImageEditor;
   /** Connector overrides (tests pass a fake fetch). */
   connectors?: Partial<Omit<ConnectorServiceOptions, 'keyFile'>>;
   /**
@@ -887,6 +891,27 @@ export async function buildApp(opts: AppOptions) {
       const f = storedFile(req);
       const file = f && (await storedFiles.revert(req.user!.id, f.meta.id));
       return file ? { file } : reply.code(404).send({ error: 'There is no earlier version of this file.' });
+    });
+
+    // Edit a picture with an image-generation model (the assistant's edit_image). The result is a new file
+    // next to the original, which stays as it is.
+    r.post('/api/files/:id/edit-image', async (req, reply) => {
+      const f = storedFile(req);
+      if (!f) return reply.code(404).send({ error: 'File not found' });
+      const prompt = String((req.body as { prompt?: unknown } | null)?.prompt ?? '').trim();
+      if (!prompt || prompt.length > MAX_EDIT_PROMPT_CHARS) return reply.code(400).send({ error: 'Say what to change in the picture.' });
+      if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) return reply.code(400).send({ error: 'Only PNG, JPEG and WebP pictures can be edited.' });
+      if (f.meta.size > MAX_EDIT_IMAGE_BYTES) return reply.code(400).send({ error: 'This picture is too large to edit (20 MB maximum).' });
+      const apiKey = assistantSettings.openaiKey(req.user!.id) ?? process.env.OPENAI_API_KEY;
+      if (!apiKey) return reply.code(400).send({ error: 'Image editing needs an OpenAI API key. The user can add theirs on the Settings page; nothing was changed.' });
+      try {
+        checkImageEditRate(req.user!.id);
+        const edited = await (opts.imageEditor ?? openaiImageEditor)({ apiKey, image: await readFile(f.file), filename: f.meta.filename, type: f.meta.type, prompt });
+        return { file: await storedFiles.create(req.user!.id, editedImageName(f.meta.filename), 'image/png', edited, f.meta.folder ?? '') };
+      } catch (e) {
+        if (e instanceof ImageEditError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
     });
 
     r.delete('/api/files/:id', async (req, reply) => {

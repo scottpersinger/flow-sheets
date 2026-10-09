@@ -13,7 +13,7 @@ import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
 import { useFavicon } from '../favicon.ts';
 import { rememberListing } from '../listing.ts';
-import { checkImportFile, CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, HTML_ACCEPT, isCsvFile, isHtmlFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName, VIDEO_ACCEPT } from '../importFile.ts';
+import { checkImportFile, CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, HTML_ACCEPT, IMAGE_ACCEPT, imageTypeOf, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName, VIDEO_ACCEPT } from '../importFile.ts';
 import { csvTitle } from '../../../shared/csv.ts';
 import { cleanFolderPath, folderTrail } from '../../../shared/folders.ts';
 import { markdownTitle } from '../../../shared/markdown.ts';
@@ -78,6 +78,12 @@ export function HomePage() {
       if (isVideoFile(file)) {
         // Stored as the file it is and played in its own page.
         const stored = await api.uploadFile(file.name, file, folder);
+        navigate(`/f/${stored.id}`);
+        return;
+      }
+      if (isImageFile(file)) {
+        // Stored as the picture it is and shown in its own page.
+        const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), folder);
         navigate(`/f/${stored.id}`);
         return;
       }
@@ -267,9 +273,9 @@ export function HomePage() {
         else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', folder)).doc.id}`);
         else navigate(`/doc/${(await api.createDoc(title, undefined, folder)).doc.id}`);
       }}
-      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT},${HTML_ACCEPT},${VIDEO_ACCEPT}`}
+      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT},${HTML_ACCEPT},${IMAGE_ACCEPT},${VIDEO_ACCEPT}`}
       importLabel="Import Excel, PowerPoint, Word, PDF, Markdown, CSV, HTML or video"
-      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md), CSV (.csv), web page (.html) or video (.mp4, .mov, .webm) file anywhere on this page."
+      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md), CSV (.csv), web page (.html), picture (.png, .jpg, .gif, .webp) or video (.mp4, .mov, .webm) file anywhere on this page."
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => navigate(pathOf(s))}

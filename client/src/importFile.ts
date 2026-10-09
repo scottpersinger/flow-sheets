@@ -3,7 +3,7 @@ import { isHtmlName, MAX_VIDEO_BYTES, VIDEO_TYPES, videoTypeOf } from '../../sha
 
 // Shared helpers for picking and validating files to import: Excel workbooks (.xlsx, legacy .xls), PowerPoint
 // presentations (.pptx), Word documents (.docx), PDFs, Markdown files (.md), CSV files (.csv), web pages (.html)
-// and videos.
+// pictures and videos.
 
 export const EXCEL_ACCEPT = '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
 export const PPTX_ACCEPT = '.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -13,6 +13,12 @@ export const MARKDOWN_ACCEPT = '.md,.markdown,text/markdown';
 export const CSV_ACCEPT = '.csv,text/csv';
 export const HTML_ACCEPT = '.html,.htm,text/html';
 export const VIDEO_ACCEPT = `${Object.keys(VIDEO_TYPES).map((e) => `.${e}`).join(',')},video/*`;
+/** Pictures the app stores and shows, by extension, with the type each is stored as. */
+const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+export const IMAGE_ACCEPT = `${Object.keys(IMAGE_TYPES).map((e) => `.${e}`).join(',')},${[...new Set(Object.values(IMAGE_TYPES))].join(',')}`;
+/** The type of a picture by its name (a dropped file does not always carry one), or null if the name is not a picture's. */
+export const imageTypeOf = (filename: string): string | null => IMAGE_TYPES[/\.([a-z0-9]+)$/i.exec(filename)?.[1].toLowerCase() ?? ''] ?? null;
+export const MAX_IMAGE_MB = 50;
 export const MAX_IMPORT_MB = 20;
 
 function pickFile(accept: string): Promise<File | null> {
@@ -33,7 +39,7 @@ export const pickCsvFile = (): Promise<File | null> => pickFile(CSV_ACCEPT);
 /** Open the browser's file picker for a PowerPoint file; resolves to null if the user cancels. */
 export const pickPptxFile = (): Promise<File | null> => pickFile(PPTX_ACCEPT);
 /** Open the browser's file picker for anything the home page can import. */
-export const pickImportFile = (): Promise<File | null> => pickFile(`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT},${HTML_ACCEPT},${VIDEO_ACCEPT}`);
+export const pickImportFile = (): Promise<File | null> => pickFile(`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT},${HTML_ACCEPT},${IMAGE_ACCEPT},${VIDEO_ACCEPT}`);
 /** Open the browser's file picker for a Word document; resolves to null if the user cancels. */
 export const pickDocxFile = (): Promise<File | null> => pickFile(DOCX_ACCEPT);
 
@@ -43,6 +49,7 @@ export const isPdfFile = (file: File): boolean => /\.pdf$/i.test(file.name);
 export const isMarkdownFile = (file: File): boolean => /\.(md|markdown)$/i.test(file.name);
 export const isCsvFile = (file: File): boolean => /\.csv$/i.test(file.name);
 export const isHtmlFile = (file: File): boolean => isHtmlName(file.name);
+export const isImageFile = (file: File): boolean => imageTypeOf(file.name) !== null;
 export const isVideoFile = (file: File): boolean => videoTypeOf(file.name) !== null;
 
 function checkSize(file: File): string | null {
@@ -73,7 +80,8 @@ export function checkDocxFile(file: File): string | null {
 /** Checks for the home page, which takes any kind. */
 export function checkImportFile(file: File): string | null {
   if (isVideoFile(file)) return file.size > MAX_VIDEO_BYTES ? `This video is too large to upload (${MAX_VIDEO_BYTES / 1024 / 1024} MB maximum).` : null;
-  if (!/\.(xlsx?|pptx|docx|pdf|md|markdown|csv|html?)$/i.test(file.name)) return 'Please choose an Excel workbook (.xlsx or .xls), a PowerPoint presentation (.pptx), a Word document (.docx), a PDF (.pdf), a Markdown file (.md), a CSV file (.csv), a web page (.html) or a video (.mp4, .mov, .webm).';
+  if (isImageFile(file)) return file.size > MAX_IMAGE_MB * 1024 * 1024 ? `This picture is too large to upload (${MAX_IMAGE_MB} MB maximum).` : null;
+  if (!/\.(xlsx?|pptx|docx|pdf|md|markdown|csv|html?)$/i.test(file.name)) return 'Please choose an Excel workbook (.xlsx or .xls), a PowerPoint presentation (.pptx), a Word document (.docx), a PDF (.pdf), a Markdown file (.md), a CSV file (.csv), a web page (.html), a picture (.png, .jpg, .gif, .webp) or a video (.mp4, .mov, .webm).';
   if (isCsvFile(file) && file.size > MAX_CSV_CHARS) return 'This file is too large to import (10 MB maximum).';
   return checkSize(file);
 }

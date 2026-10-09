@@ -407,6 +407,13 @@ describe('app context', () => {
     expect(page).toContain('Open file: "index.html" (id f1), text/html, 250000 bytes');
     expect(page).toContain('read_file with this id returns its text, and edit_file changes it.');
     expect(renderContext({ page: 'file', fileId: 'f2', filename: 'clip.mp4', type: 'video/mp4', size: 10 })).toContain('read_file and edit_file cannot work on it');
+    expect(renderContext({ page: 'file', fileId: 'f3', filename: 'logo.png', type: 'image/png', size: 10 })).toContain('view_image with this id shows it to you, and edit_image makes an edited copy');
+    const boxed = renderContext({ page: 'file', fileId: 'f3', filename: 'logo.png', type: 'image/png', size: 10, selectedRegion: { x: 500, y: 250, width: 1000, height: 500, imageWidth: 2000, imageHeight: 1000 } });
+    expect(boxed).toContain('1000×500 pixels with its top left corner at x 500, y 250, in the 2000×1000 picture');
+    expect(boxed).toContain('from 25% to 75% of the width and from 25% to 75% of the height');
+    // A region only means something on a picture, and a nonsense one is left out.
+    expect(renderContext({ page: 'file', fileId: 'f1', filename: 'index.html', type: 'text/html', size: 1, selectedRegion: { x: 0, y: 0, width: 5, height: 5, imageWidth: 10, imageHeight: 10 } })).not.toContain('Selected region');
+    expect(renderContext({ page: 'file', fileId: 'f3', filename: 'logo.png', type: 'image/png', size: 10, selectedRegion: { x: 0, y: 0, width: 5, height: 5, imageWidth: 0, imageHeight: 10 } })).not.toContain('Selected region');
     const picked = renderContext({ page: 'file', fileId: 'f1', filename: 'index.html', type: 'text/html', size: 250, selectedElement: '<h1 class="title">Hi</h1>' });
     expect(picked).toContain('Selected element');
     expect(picked).toContain(JSON.stringify('<h1 class="title">Hi</h1>'));

@@ -288,6 +288,19 @@ export const schemas = {
     .describe(
       "Change a stored text file (a web page, .txt, .json, .svg, ...): find-and-replace edits, a whole new content, or undo of the last change. Read the part you are changing with read_file first so find matches exactly. The preview the user sees reloads by itself. Give exactly one of edits, content or undo. PDFs, images and videos cannot be edited.",
     ),
+  view_image: z
+    .object({ file_id: z.string() })
+    .describe(
+      'Look at a stored picture (PNG, JPEG, GIF or WebP). It is attached to the message right after the tool results for you to see. Use it before describing or editing a picture: you cannot see the picture the user has open otherwise. Find ids with list_files.',
+    ),
+  edit_image: z
+    .object({
+      file_id: z.string().describe('The picture to edit (PNG, JPEG or WebP).'),
+      prompt: z.string().min(1).max(4000).describe('What the edited picture should look like: say what to change and what must stay the same. An image-generation model follows it, so be specific and complete.'),
+    })
+    .describe(
+      'Edit a stored picture with an image-generation model: change, add or remove things in it, restyle it, replace its background and so on. The result is a new file next to the original (which is not changed); it opens in the app and is attached after the tool results so you can check it. It takes up to a minute or two. The model redraws the picture, so small details can shift: look at the result, and call edit_image again on the original with a better prompt if it is wrong.',
+    ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),

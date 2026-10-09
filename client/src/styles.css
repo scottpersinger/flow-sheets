@@ -2283,16 +2283,71 @@ button.agent-tool-label:hover {
   min-width: 0;
   gap: 8px;
 }
-.deck-canvas {
+/* The canvas and the zoom controls over its corner, which stay put while a zoomed-in slide scrolls. */
+.deck-canvas-frame {
   flex: 1;
   min-height: 0;
-  display: grid;
-  place-items: center;
+  position: relative;
+  display: flex;
+}
+.deck-canvas {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   background: #e3e6ea;
   border-radius: var(--radius);
   overflow: hidden;
   position: relative;
   user-select: none;
+}
+/* Centered while it fits; auto margins (unlike centering) keep every edge reachable once it is larger. */
+.deck-canvas > .slide-scaler {
+  margin: auto;
+}
+.deck-canvas.zoomed {
+  overflow: auto;
+  padding: 24px;
+}
+/* In a document the controls clear the page column's scrollbar. */
+.doc-body-row > .zoom-controls {
+  right: 24px;
+}
+.zoom-controls {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  user-select: none;
+}
+.zoom-controls button {
+  border: none;
+  background: none;
+  height: 30px;
+  min-width: 32px;
+  padding: 0 8px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.zoom-controls button.zoom-level {
+  min-width: 52px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.zoom-controls button:hover:not(:disabled) {
+  background: #f1f3f4;
+}
+.zoom-controls button:disabled {
+  cursor: default;
+}
+.zoom-controls button:not(.zoom-level):disabled {
+  opacity: 0.35;
 }
 .deck-canvas:focus {
   outline: none;
@@ -3337,6 +3392,58 @@ button.agent-tool-label:hover {
   background: #fff;
   width: 100%;
 }
+/* A stored picture: zoomable, with the box the user drags on it for the assistant. The zoom controls stay
+   over the corner of the frame while a zoomed-in picture scrolls inside it. */
+.image-select-frame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+}
+.image-select {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: auto;
+  padding: 16px;
+}
+/* Auto margins center the picture while it fits and keep every edge reachable once it is larger. */
+.image-select-stage {
+  position: relative;
+  flex-shrink: 0;
+  margin: auto;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+}
+.image-select-stage > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+.image-select-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #1a73e8;
+  background: rgba(26, 115, 232, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+}
+.image-select-box span {
+  position: absolute;
+  left: -2px;
+  top: 100%;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #1a73e8;
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+}
 /* Editing a stored web page: a bar of actions for the selected element over the page. */
 .html-editor {
   flex: 1;
@@ -3794,4 +3901,9 @@ img.thumb-image {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+@media print {
+  .zoom-controls {
+    display: none;
+  }
 }

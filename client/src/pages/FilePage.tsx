@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
 import { HtmlEditor } from '../components/HtmlEditor.tsx';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
+import { ImageSelector } from '../components/ImageSelector.tsx';
+import type { ImageRegion } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { FILE_CHANGED_EVENT, useRegisterFile } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
@@ -61,10 +63,13 @@ export function FilePage() {
   // told to the assistant), with its scripts and links off.
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  // On a picture the user can drag a box, which is told to the assistant too.
+  const [region, setRegion] = useState<ImageRegion | null>(null);
   useEffect(() => {
     setFile(null);
     setError(null);
     setEditing(false);
+    setRegion(null);
     api.getFile(id).then((r) => setFile(r.file), (e: Error) => setError(e.message));
   }, [id]);
   useEffect(() => {
@@ -81,7 +86,7 @@ export function FilePage() {
     if (file) document.title = file.filename;
   }, [file]);
   // The assistant is told which file is showing.
-  useRegisterFile(file, editing ? selected : null);
+  useRegisterFile(file, editing ? selected : null, region);
 
   const previewable = !!file && PREVIEW_FILE_TYPES.includes(file.type);
   return (
@@ -124,7 +129,7 @@ export function FilePage() {
           // The browser's own player; it asks the server for the parts of the file it needs.
           <video className="file-preview-video" src={file.url} controls autoPlay playsInline />
         ) : previewable ? (
-          <img className="file-preview-image" src={file.url} alt={file.filename} />
+          <ImageSelector key={file.id} url={file.url} alt={file.filename} region={region} onChange={setRegion} />
         ) : (
           <div className="file-info">
             <div className="file-chip-icon" aria-hidden="true">

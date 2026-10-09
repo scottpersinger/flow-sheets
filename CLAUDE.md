@@ -55,6 +55,11 @@ A user can run the assistant on an OpenAI model with their own API key instead (
 stay in the Claude message format; `server/agent/openai.ts` translates each request to the Responses API
 and the reply back. The model choices are `OPENAI_MODELS` in `shared/agent/protocol.ts`.
 
+Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
+model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,
+`server/imageEdit.ts`) for an edited copy from OpenAI's image model, with the user's OpenAI key or the
+server's `OPENAI_API_KEY`. The copy is a new stored file; the original never changes.
+
 Two kinds of tools:
 
 - **Browser tools** act on the open spreadsheet. The server pauses the turn, the browser runs the tool against

@@ -3,10 +3,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, type AgentContext, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, ApiError } from '../api.ts';
+import { prepareImage } from './images.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
@@ -72,7 +73,7 @@ interface AgentState {
   doc: OpenDoc | null;
   /** The Markdown page reports the open Markdown document (no tools act on it; the assistant only knows it is open). */
   setOpenMarkdown(doc: OpenMarkdown | null): void;
-  setOpenFile(file: StoredFile | null, selectedElement?: string | null): void;
+  setOpenFile(file: StoredFile | null, selectedElement?: string | null, selectedRegion?: ImageRegion | null): void;
   /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
   job: AgentJob | null;
   /** Hide a finished job's card. */
@@ -127,6 +128,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const fileRef = useRef<StoredFile | null>(null);
   /** The HTML of the element selected in it, when it is a web page being edited. */
   const fileSelectionRef = useRef<string | null>(null);
+  /** The box dragged on it, when it is a picture. */
+  const fileRegionRef = useRef<ImageRegion | null>(null);
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Pending open_sheet / open_deck calls, resolved with the controller once the page has loaded the document.
@@ -274,9 +277,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const setOpenFile = useCallback((file: StoredFile | null, selectedElement: string | null = null) => {
+  const setOpenFile = useCallback((file: StoredFile | null, selectedElement: string | null = null, selectedRegion: ImageRegion | null = null) => {
     fileRef.current = file;
     fileSelectionRef.current = file ? selectedElement : null;
+    fileRegionRef.current = file ? selectedRegion : null;
   }, []);
 
   const setOpenMarkdown = useCallback((doc: OpenMarkdown | null) => {
@@ -321,7 +325,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     const f = fileRef.current;
     if (!s && f) {
       const el = fileSelectionRef.current;
-      return { page: 'file', fileId: f.id, filename: f.filename, type: f.type, size: f.size, ...(el ? { selectedElement: shortenHtml(el) } : {}) };
+      const region = fileRegionRef.current;
+      return { page: 'file', fileId: f.id, filename: f.filename, type: f.type, size: f.size, ...(el ? { selectedElement: shortenHtml(el) } : {}), ...(region ? { selectedRegion: region } : {}) };
     }
     if (!s) return { page: 'home' };
     return {
@@ -512,6 +517,17 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
             return file;
           },
+          toAgentImage: async (file, data) => {
+            const { mediaType, data: base64 } = await prepareImage(new File([data], file.filename, { type: file.type }));
+            return { mediaType, data: base64 };
+          },
+          editImage: async (id, prompt) => {
+            try {
+              return (await api.editImage(id, prompt)).file;
+            } catch (e) {
+              throw new ToolError(e instanceof ApiError ? e.message : 'The picture could not be edited.');
+            }
+          },
           attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
           group,
           openSheet: openSheetById,
@@ -523,7 +539,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           fetchConnectorData: api.fetchConnectorData,
         });
         results.push({ id: call.id, content });
-        updateTool(call.id, { status: 'ok', ...(call.name === 'export_deck' ? { result: content } : {}) });
+        updateTool(call.id, { status: 'ok', ...(call.name === 'export_deck' || call.name === 'edit_image' ? { result: content } : {}) });
       } catch (e) {
         const message = e instanceof ToolError ? e.message : `The tool failed: ${e instanceof Error ? e.message : String(e)}`;
         if (!(e instanceof ToolError)) console.error(e);
@@ -583,8 +599,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           req = {
             context: context(),
             toolResults,
-            // The API only takes text in tool results here, so slide pictures follow them in the same message.
-            ...(rendered.length ? { images: rendered, message: `[render_slide: ${rendered.length === 1 ? 'the rendered slide is' : 'the rendered slides are'} attached above, in call order. Added by the app, not written by the user.]` } : {}),
+            // The API only takes text in tool results here, so the tools' pictures follow them in the same message.
+            ...(rendered.length
+              ? { images: rendered, message: `[render_slide, view_image, edit_image: ${rendered.length === 1 ? 'the picture is' : 'the pictures are'} attached above, in call order. Added by the app, not written by the user.]` }
+              : {}),
           };
         }
       } catch (e) {
@@ -680,13 +698,13 @@ export function useRegisterMarkdown(ctl: MarkdownController, meta: SheetMeta): v
 /** Fired on the window (detail: the file id) when the assistant changed a stored file. */
 export const FILE_CHANGED_EVENT = 'stored-file-changed';
 
-/** Report the stored file being previewed, and the element selected in it, to the agent while its page is mounted. */
-export function useRegisterFile(file: StoredFile | null, selectedElement: string | null = null): void {
+/** Report the stored file being previewed, and the element or region selected in it, to the agent while its page is mounted. */
+export function useRegisterFile(file: StoredFile | null, selectedElement: string | null = null, selectedRegion: ImageRegion | null = null): void {
   const { setOpenFile } = useAgent();
   useEffect(() => {
-    setOpenFile(file, selectedElement);
+    setOpenFile(file, selectedElement, selectedRegion);
     return () => setOpenFile(null);
-  }, [file, selectedElement, setOpenFile]);
+  }, [file, selectedElement, selectedRegion, setOpenFile]);
 }
 
 /** Report the open presentation to the agent while a deck page is mounted. */

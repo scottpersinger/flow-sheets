@@ -2,6 +2,7 @@
 // are moved and resized with the mouse (one undo step per drag), text is edited inline on double-click, and
 // image files dropped on the slide become image elements.
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { fitZoomActions, useWheelZoom, ZoomControls } from '../components/ZoomControls.tsx';
 import { SLIDE_H, SLIDE_W, THEMES, type LineElement, type SlideElement } from '../../../shared/deck.ts';
 import { boxFromEnds, compactLine, DEFAULT_LINE_WIDTH, lineEnds, lineGeometry, nearSites, SITES, sitePoint, snapAngle, type SiteHit } from '../../../shared/lines.ts';
 import type { DeckController } from './controller.ts';
@@ -76,8 +77,13 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
   const dragRef = useRef<Drag | null>(null);
   const caretRef = useRef<{ x: number; y: number } | null>(null); // where a click-to-edit landed, for the caret
 
+  // 1 fits the slide to the window. It is how the user looks at the deck, not part of it, so it is not saved.
+  const [zoom, setZoom] = useState(1);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  // The frame is measured rather than the canvas inside it, whose own size changes when scrollbars come and go.
   useLayoutEffect(() => {
-    const el = wrapRef.current;
+    const el = frameRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
@@ -85,7 +91,9 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
     return () => ro.disconnect();
   }, []);
 
-  const scale = Math.max(0.1, Math.min((size.w - 48) / SLIDE_W, (size.h - 48) / SLIDE_H));
+  const scale = Math.max(0.1, Math.min((size.w - 48) / SLIDE_W, (size.h - 48) / SLIDE_H)) * zoom;
+
+  useWheelZoom(frameRef, setZoom);
   const slide = ctl.slide;
   const selected = ctl.selected;
 
@@ -314,9 +322,10 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
   const hs = 10 / scale; // handles keep their screen size
 
   return (
+    <div ref={frameRef} className="deck-canvas-frame">
     <div
       ref={wrapRef}
-      className={`deck-canvas${drag ? ` dragging ${drag.kind}` : ''}${ctl.tool ? ' drawing' : ''}`}
+      className={`deck-canvas${zoom > 1 ? ' zoomed' : ''}${drag ? ` dragging ${drag.kind}` : ''}${ctl.tool ? ' drawing' : ''}`}
       tabIndex={-1}
       onMouseDown={(e) => {
         if (e.button === 0 && ctl.tool) {
@@ -395,6 +404,8 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
             );
           })}
       </SlideView>
+    </div>
+      <ZoomControls percent={scale * 100} {...fitZoomActions(zoom, setZoom)} />
     </div>
   );
 }

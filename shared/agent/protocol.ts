@@ -55,7 +55,20 @@ export type AgentContext =
       size: number;
       /** The HTML of the element the user selected in a web page they are editing (shortened). */
       selectedElement?: string;
+      /** The box the user dragged on a picture. */
+      selectedRegion?: ImageRegion;
     };
+
+/** A rectangle of a picture, in the picture's own pixels from its top left corner. */
+export interface ImageRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** The size of the whole picture. */
+  imageWidth: number;
+  imageHeight: number;
+}
 
 /** A tool call the browser must run (sheet tools and navigation), forwarded by the server. */
 export interface ClientToolCall {
@@ -217,6 +230,9 @@ export const CLIENT_TOOLS = new Set([
   'open_file',
   'read_file',
   'edit_file',
+  // Pictures among the stored files: look at one, or make an edited copy with an image-generation model.
+  'view_image',
+  'edit_image',
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',

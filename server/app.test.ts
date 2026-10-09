@@ -1,3 +1,5 @@
+import type { ImageEditRequest } from './imageEdit.ts';
+import { OPENAI_MODELS } from '../shared/agent/protocol.ts';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,12 +15,15 @@ let app: Awaited<ReturnType<typeof buildApp>>;
 const box = mailbox();
 const sentMail = box.sent;
 
+/** What the stub image model was asked to edit. */
+const imageEdits: ImageEditRequest[] = [];
+
 beforeAll(async () => {
   // The default app must not pick up Google credentials from the environment.
   delete process.env.GOOGLE_CLIENT_ID;
   delete process.env.GOOGLE_CLIENT_SECRET;
   dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-test-'));
-  app = await buildApp({ dataDir: dir, sendMail: box.send, appUrl: 'https://sheets.test' });
+  app = await buildApp({ dataDir: dir, sendMail: box.send, appUrl: 'https://sheets.test', imageEditor: async (req) => (imageEdits.push(req), Buffer.from(`edited:${req.prompt}`)), checkOpenAIKey: async () => {} });
 });
 
 afterAll(async () => {
@@ -627,6 +632,39 @@ describe('presentations', () => {
 });
 
 describe('stored files', () => {
+  it('makes an edited copy of a picture with the image model, using the user\'s OpenAI key', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const { cookie } = await signUp(app, box, 'pictures@x.com');
+    const upload = (name: string, type: string, body: string) => app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': type, 'x-filename': name }, payload: Buffer.from(body) });
+    const photo = (await upload('logo.jpg', 'image/jpeg', 'jpeg bytes')).json().file;
+    const edit = (url: string, prompt: unknown) => app.inject({ method: 'POST', url: `${url}/edit-image`, headers: { cookie }, payload: { prompt } });
+
+    // Without a key nothing is sent to the model.
+    let res = await edit(photo.url, 'Make the background blue');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('OpenAI API key');
+    res = await app.inject({ method: 'PUT', url: '/api/settings/assistant', headers: { cookie }, payload: { provider: 'default', openaiModel: OPENAI_MODELS[0].id, openaiKey: 'sk-test-pictures' } });
+    expect(res.statusCode).toBe(200);
+
+    res = await edit(photo.url, 'Make the background blue');
+    expect(res.statusCode).toBe(200);
+    const made = res.json().file;
+    expect(made).toMatchObject({ filename: 'logo-edited.png', type: 'image/png' });
+    expect(made.id).not.toBe(photo.id);
+    expect(imageEdits.at(-1)).toMatchObject({ apiKey: 'sk-test-pictures', filename: 'logo.jpg', type: 'image/jpeg', prompt: 'Make the background blue' });
+    expect(imageEdits.at(-1)!.image.toString()).toBe('jpeg bytes');
+    expect((await app.inject({ method: 'GET', url: made.url, headers: { cookie } })).payload).toBe('edited:Make the background blue');
+    // The original is untouched.
+    expect((await app.inject({ method: 'GET', url: photo.url, headers: { cookie } })).payload).toBe('jpeg bytes');
+
+    const before = imageEdits.length;
+    expect((await edit(photo.url, '  ')).statusCode).toBe(400);
+    const page = (await upload('a.html', 'application/octet-stream', '<p>x</p>')).json().file;
+    expect((await edit(page.url, 'Make it blue')).json().error).toContain('Only PNG, JPEG and WebP');
+    expect((await app.inject({ method: 'POST', url: `${photo.url}/edit-image`, payload: { prompt: 'x' } })).statusCode).toBe(401);
+    expect(imageEdits).toHaveLength(before);
+  });
+
   it('stores PDFs per owner, serves them inline and as downloads, and lists them newest first', async () => {
     const { cookie } = await signUp(app, box, 'files@x.com');
     const { cookie: other } = await signUp(app, box, 'files2@x.com');

@@ -18,6 +18,7 @@ import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { DocController, useDocController } from '../doc/controller.ts';
 import { DocEditor, DocPrint } from '../doc/DocEditor.tsx';
 import { PageThumbnails } from '../doc/PageThumbnails.tsx';
+import { ZoomControls } from '../components/ZoomControls.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { DOC_TRAY } from '../panelSize.ts';
 import { PageSetupDialog } from '../doc/PageSetupDialog.tsx';
@@ -107,7 +108,7 @@ type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial:
 
 const LINE_SPACINGS: [string, number | null][] = [['Default', null], ['Single', 1.15], ['1.5', 1.5], ['Double', 2]];
 
-const ZOOMS = [50, 75, 100, 125, 150] as const;
+const ZOOMS = [50, 75, 100, 125, 150, 200] as const;
 const THUMBS_KEY = 'ui.docThumbs';
 
 function loadShowThumbs(): boolean {
@@ -154,6 +155,10 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
+  // The size the pages are drawn at, which the zoom controls show and step from (fitting can land between levels).
+  const [pageScale, setPageScale] = useState(1);
+  const zoomOut = [...ZOOMS].reverse().find((z) => z < pageScale * 100 - 0.5);
+  const zoomIn = ZOOMS.find((z) => z > pageScale * 100 + 0.5);
 
   useEffect(() => {
     document.title = `${meta.title} - FreeFlow Docs`;
@@ -484,8 +489,17 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
             if (e.dataTransfer.types.includes('Files')) e.preventDefault();
           }}
         >
-          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
+          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} onScale={setPageScale} />
         </div>
+        {/* Pages have a size to zoom; a pageless document always fills the window. */}
+        {ctl.pageSetup().mode === 'pages' && (
+          <ZoomControls
+            percent={pageScale * 100}
+            onOut={zoomOut === undefined ? undefined : () => ctl.setZoom(zoomOut)}
+            onIn={zoomIn === undefined ? undefined : () => ctl.setZoom(zoomIn)}
+            onFit={ctl.zoom === 'fit' ? undefined : () => ctl.setZoom('fit')}
+          />
+        )}
       </div>
       {printing && ctl.pageSetup().mode === 'pages' && <DocPrint ctl={ctl} />}
 

@@ -109,6 +109,8 @@ export const api = {
     if (!res.ok || !data.file) throw new ApiError(res.status, res.status === 413 ? 'This file is too large to save.' : (data.error ?? `Saving the file failed (${res.status})`));
     return data.file;
   },
+  /** Make an edited copy of a stored picture with the image model; resolves with the new file. */
+  editImage: (id: string, prompt: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/edit-image`, { prompt }),
   revertFile: (id: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/revert`),
   getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),

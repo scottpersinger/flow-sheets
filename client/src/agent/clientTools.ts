@@ -2,7 +2,7 @@
 // Edits go through SheetController.runAgent, so they recalculate, render and autosave like the user's
 // own edits, and everything from one agent request undoes as a single step.
 import { MAX_COLS, colToName, nameToCol, rangeToString, type Range } from '../../../shared/cellref.ts';
-import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
+import { IMAGE_MEDIA_TYPES, MAX_IMAGES_PER_MESSAGE, type AgentImage, type ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { toCellInput, type FetchResult } from '../../../shared/connectors.ts';
 import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '../../../shared/agent/sheetRead.ts';
 import { hyperlinkFormula, safeLinkUrl } from '../../../shared/links.ts';
@@ -53,6 +53,10 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   /** Replace a stored text file's contents, or (revert) put back the version before the last replacement. */
   writeFile?(id: string, text: string): Promise<StoredFile>;
   revertFile?(id: string): Promise<StoredFile>;
+  /** A stored picture made ready for Claude to look at (scaled down if it is large). */
+  toAgentImage?(file: StoredFile, data: ArrayBuffer): Promise<AgentImage>;
+  /** Make an edited copy of a stored picture with the image model; resolves with the new file. */
+  editImage?(id: string, prompt: string): Promise<StoredFile>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
   /** Queue a background research task; resolves with the job id. */
@@ -155,6 +159,15 @@ export function confirmationFor(call: ClientToolCall, ctl: SheetController | nul
 }
 
 /** Run a client tool. Returns the result for Claude; throws ToolError for errors Claude should see. */
+/** Attach a stored picture to the message that carries the tool results; returns what to tell Claude about it. */
+async function attachPicture(env: ClientToolEnv, file: StoredFile, data: ArrayBuffer): Promise<string> {
+  if (!IMAGE_MEDIA_TYPES.has(file.type)) throw new ToolError(`${file.filename} is not a picture that can be shown (PNG, JPEG, GIF or WebP).`);
+  if (!env.toAgentImage || !env.attachImage) throw new ToolError('Pictures cannot be looked at here.');
+  return env.attachImage(await env.toAgentImage(file, data))
+    ? 'Attached to this message after the tool results. Look at it before answering.'
+    : `Not attached: at most ${MAX_IMAGES_PER_MESSAGE} pictures fit in one message. Call view_image again for this file.`;
+}
+
 export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): Promise<string> {
   const i = call.input;
   if (call.name === 'request_app_change') {
@@ -212,6 +225,25 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     const offset = Math.min(typeof i.offset === 'number' ? i.offset : 0, text.length);
     const end = Math.min(text.length, offset + (typeof i.max_chars === 'number' ? i.max_chars : 30_000));
     return JSON.stringify({ file_id: file.id, filename: file.filename, type: file.type, total_chars: text.length, offset, text: text.slice(offset, end), ...(end < text.length ? { more: true, next_offset: end } : {}) });
+  }
+  if (call.name === 'view_image') {
+    if (!env.readFile) throw new ToolError('Stored files are not available here.');
+    const { file, data } = await env.readFile(String(i.file_id));
+    return JSON.stringify({ file_id: file.id, filename: file.filename, type: file.type, size: file.size, image: await attachPicture(env, file, data) });
+  }
+  if (call.name === 'edit_image') {
+    if (!env.editImage || !env.readFile) throw new ToolError('Pictures cannot be edited here.');
+    const made = await env.editImage(String(i.file_id), String(i.prompt));
+    // Show the user the result, and Claude too; the edit stands even if either fails.
+    let opened = false;
+    let image = 'Not attached. Call view_image to look at it.';
+    try {
+      opened = !!(await env.openFile?.(made.id));
+      image = await attachPicture(env, made, (await env.readFile(made.id)).data);
+    } catch {
+      // Reported in the result.
+    }
+    return JSON.stringify({ edited: true, file_id: made.id, filename: made.filename, source_file_id: String(i.file_id), note: `A new file${opened ? ', open now' : ''}; the original is unchanged.`, image });
   }
   if (call.name === 'edit_file') {
     if (!env.readFile || !env.writeFile || !env.revertFile) throw new ToolError('Stored files cannot be edited here.');

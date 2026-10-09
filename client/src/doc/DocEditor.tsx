@@ -173,7 +173,7 @@ function LinkBubble({ ctl }: { ctl: DocController }) {
   );
 }
 
-export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFiles(files: File[]): void }) {
+export function DocEditor({ ctl, onImageFiles, onScale }: { ctl: DocController; onImageFiles(files: File[]): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const filesRef = useRef(onImageFiles);
@@ -245,6 +245,7 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
   const { pageCount } = ctl.pagination();
   const scale = paged ? (ctl.zoom === 'fit' ? Math.min(1, Math.max(0.25, (available - 32) / m.pageW)) : ctl.zoom / 100) : 1;
   const columnH = pageCount * m.stride - PAGE_GAP;
+  useEffect(() => onScale?.(scale), [scale, onScale]);
 
   const onMarginClick = (e: React.MouseEvent) => {
     // Clicking the page below the text puts the cursor at the end.
@@ -257,8 +258,13 @@ export function DocEditor({ ctl, onImageFiles }: { ctl: DocController; onImageFi
   // One tree for both modes: the editor element must stay the same DOM node across View → Pages / Pageless,
   // since the ProseMirror view is mounted in it once.
   return (
-    <div className="doc-pages-outer" ref={outerRef} style={paged ? { height: columnH * scale + 24 } : undefined}>
-      <div className={paged ? 'doc-pages' : 'doc-sheet'} style={paged ? { width: m.pageW, height: columnH, transform: `scale(${scale})`, transformOrigin: 'top center' } : undefined}>
+    <div className="doc-pages-outer" ref={outerRef} style={paged ? { height: columnH * scale + 24, justifyContent: 'flex-start' } : undefined}>
+      {/* Scaled from its top left corner, with margins that center it while it fits and give it its drawn width
+          (a transform does not), so pages zoomed wider than the window scroll instead of losing their left edge. */}
+      <div
+        className={paged ? 'doc-pages' : 'doc-sheet'}
+        style={paged ? { width: m.pageW, height: columnH, transform: `scale(${scale})`, transformOrigin: 'top left', marginLeft: Math.max(0, (available - m.pageW * scale) / 2), marginRight: m.pageW * (scale - 1) } : undefined}
+      >
         {paged
           ? Array.from({ length: pageCount }, (_, k) => (
               <div key={k} className="doc-page-frame" style={{ top: k * m.stride, height: m.pageH }} aria-hidden="true">

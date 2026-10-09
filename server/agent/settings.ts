@@ -45,6 +45,12 @@ export class AssistantSettingsStore {
     return { apiKey: decrypt(this.key, row.openai_key).api_key, model: isModel(row.openai_model) ? row.openai_model : DEFAULT_OPENAI_MODEL };
   }
 
+  /** The user's stored OpenAI key, whatever the assistant runs on (image editing uses it), or null. */
+  openaiKey(userId: string): string | null {
+    const row = this.row(userId);
+    return row?.openai_key ? decrypt(this.key, row.openai_key).api_key : null;
+  }
+
   /**
    * Validate and save. `check` is called with the key that will be in effect when the provider is OpenAI,
    * so a wrong key or a model the key cannot use is reported here rather than in the chat.

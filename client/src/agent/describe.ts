@@ -105,6 +105,10 @@ export function toolLabel(name: string, i: Input): string {
       return 'Opened a file';
     case 'edit_file':
       return i.undo ? 'Undid the last change to a file' : 'Edited a file';
+    case 'view_image':
+      return 'Looked at a picture';
+    case 'edit_image':
+      return 'Made an edited copy of a picture';
     case 'read_file':
       return i.offset ? 'Read more of a file' : 'Read a file';
     case 'render_slide':

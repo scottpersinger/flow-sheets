@@ -277,6 +277,35 @@ describe('stored files', () => {
     await expect(call('read_file', { file_id: 'h' })).rejects.toThrow(/not a text file/);
   });
 
+  it('shows Claude a stored picture, and makes an edited copy of one', async () => {
+    const { env, call } = setup();
+    const meta = (id: string, filename: string, type: string) => ({ id, filename, type, size: 10, createdAt: '2026-01-01', url: `/api/files/${id}`, downloadUrl: `/api/files/${id}/download` });
+    const files = { p: meta('p', 'logo.jpg', 'image/jpeg'), e: meta('e', 'logo-edited.png', 'image/png'), d: meta('d', 'a.pdf', 'application/pdf') };
+    const attached: string[] = [];
+    const opened: string[] = [];
+    env.readFile = async (id) => ({ file: files[id as keyof typeof files], data: new TextEncoder().encode(`bytes of ${id}`).buffer as ArrayBuffer });
+    env.toAgentImage = async (file, data) => ({ mediaType: 'image/png', data: `${file.id}:${new TextDecoder().decode(data)}` });
+    env.attachImage = (img) => attached.length < 2 && attached.push(img.data) > 0;
+    env.openFile = async (id) => (opened.push(id), files[id as keyof typeof files]);
+    env.editImage = async (id, prompt) => {
+      if (id !== 'p') throw new ToolError('Only PNG, JPEG and WebP pictures can be edited.');
+      expect(prompt).toBe('Make the background blue');
+      return files.e;
+    };
+
+    expect(await call('view_image', { file_id: 'p' })).toMatchObject({ file_id: 'p', filename: 'logo.jpg', image: expect.stringContaining('Attached') });
+    expect(attached).toEqual(['p:bytes of p']);
+    await expect(call('view_image', { file_id: 'd' })).rejects.toThrow(/not a picture/);
+
+    // The copy is opened for the user and attached for Claude.
+    expect(await call('edit_image', { file_id: 'p', prompt: 'Make the background blue' })).toMatchObject({ edited: true, file_id: 'e', filename: 'logo-edited.png', source_file_id: 'p', note: 'A new file, open now; the original is unchanged.', image: expect.stringContaining('Attached') });
+    expect(opened).toEqual(['e']);
+    expect(attached).toEqual(['p:bytes of p', 'e:bytes of e']);
+    await expect(call('edit_image', { file_id: 'd', prompt: 'x' })).rejects.toThrow(/Only PNG, JPEG and WebP/);
+    // No room left in the message: the tool says so instead of failing.
+    expect(await call('view_image', { file_id: 'p' })).toMatchObject({ image: expect.stringContaining('Not attached') });
+  });
+
   it('edits a text file with exact replacements, saving nothing unless every one matches', async () => {
     const { env, call } = setup();
     const file = { id: 'h', filename: 'index.html', type: 'text/html', size: 10, createdAt: '2026-01-01', url: '/api/files/h', downloadUrl: '/api/files/h/download' };
