@@ -489,6 +489,22 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             if (!res.ok) throw new ToolError(`Could not read ${file.filename} (${res.status}).`);
             return { file, data: await res.arrayBuffer() };
           },
+          // After a change the file's preview page shows the new version.
+          writeFile: async (id, text) => {
+            const file = await api.updateFile(id, text);
+            window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
+            return file;
+          },
+          revertFile: async (id) => {
+            let file: StoredFile;
+            try {
+              file = (await api.revertFile(id)).file;
+            } catch {
+              throw new ToolError('There is no earlier version of this file to go back to.');
+            }
+            window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
+            return file;
+          },
           attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
           group,
           openSheet: openSheetById,
@@ -653,6 +669,9 @@ export function useRegisterMarkdown(ctl: MarkdownController, meta: SheetMeta): v
     return () => setOpenMarkdown(null);
   }, [doc, setOpenMarkdown]);
 }
+
+/** Fired on the window (detail: the file id) when the assistant changed a stored file. */
+export const FILE_CHANGED_EVENT = 'stored-file-changed';
 
 /** Report the stored file being previewed to the agent while its page is mounted. */
 export function useRegisterFile(file: StoredFile | null): void {

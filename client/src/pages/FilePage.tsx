@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
 import { AgentButton } from '../agent/AgentPanel.tsx';
-import { useRegisterFile } from '../agent/AgentProvider.tsx';
+import { FILE_CHANGED_EVENT, useRegisterFile } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
 import { fileIcon, formatFileSize } from '../components/FileChip.tsx';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
@@ -54,10 +54,21 @@ export function FilePage() {
     }
   };
 
+  // Counts the assistant's changes to this file, so the preview shows each new version.
+  const [version, setVersion] = useState(0);
   useEffect(() => {
     setFile(null);
     setError(null);
     api.getFile(id).then((r) => setFile(r.file), (e: Error) => setError(e.message));
+  }, [id]);
+  useEffect(() => {
+    const changed = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== id) return;
+      setVersion((v) => v + 1);
+      api.getFile(id).then((r) => setFile(r.file), () => {});
+    };
+    window.addEventListener(FILE_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(FILE_CHANGED_EVENT, changed);
   }, [id]);
 
   useEffect(() => {
@@ -95,7 +106,7 @@ export function FilePage() {
         ) : file.type === 'application/pdf' ? (
           <iframe className="file-preview" src={file.url} title={file.filename} />
         ) : file.type === HTML_TYPE ? (
-          <HtmlPreview url={file.url} title={file.filename} />
+          <HtmlPreview key={version} url={file.url} title={file.filename} />
         ) : file.type.startsWith('video/') ? (
           // The browser's own player; it asks the server for the parts of the file it needs.
           <video className="file-preview-video" src={file.url} controls autoPlay playsInline />

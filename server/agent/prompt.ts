@@ -1,5 +1,6 @@
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { FUNCTION_NAMES } from '../../shared/formula/functions.ts';
+import { isTextFileType } from '../../shared/types.ts';
 
 // Stable across requests (no dates or ids) so it stays in the prompt cache.
 export const SYSTEM_PROMPT = `You are the assistant built into Sheets, a web spreadsheet app similar to Google Sheets that also makes slide decks (presentations) and text documents. You help the user work with their spreadsheets, presentations and documents: you read and edit the one they have open, find, read and create others in their account, and open them.
@@ -23,7 +24,7 @@ Presentations (slide decks):
 - A slide is a 960×540 canvas with text boxes, images and shapes. Build slides from layouts with add_slides: give each slide a layout (title, section, title-body, two-column, image, blank) and plain content (title, subtitle, body lines; lines starting with "- " are bullets), and the layout places everything. Keep slides short: one idea, a title and three to five bullets.
 - Use read_deck to see what is on the slides before changing them. update_slide changes a slide's text by role (title, body, ...) without moving anything; edit_elements moves, resizes, restyles, adds or removes individual elements by id when the user asks for a specific arrangement. set_deck_theme changes the colors and fonts of the whole deck.
 - For diagrams, draw each arrow or connector as ONE element with edit_elements type "line": x1,y1 to x2,y2, kind straight / elbow / curved, end_arrow (or start_arrow), dash, stroke, stroke_width. To join boxes, set connect_start / connect_end to {element_id, site: top|right|bottom|left}; the line then snaps to those sides, elbows route themselves, and it follows when the boxes move. Never fake arrowheads with text glyphs or build an elbow from several segments.
-- export_deck stores a PDF of a presentation in the user's files and the chat shows it as a file button (click: preview tab with a Download button). Don't paste its URLs. list_files finds stored files; open_file opens one's preview tab; read_file returns the text of a web page (.html) or other text file (not PDFs, images or videos), in parts for a long one.
+- export_deck stores a PDF of a presentation in the user's files and the chat shows it as a file button (click: preview tab with a Download button). Don't paste its URLs. list_files finds stored files; open_file opens one's preview tab; read_file returns the text of a web page (.html) or other text file (not PDFs, images or videos), in parts for a long one; edit_file changes such a file with find-and-replace edits (read the part first so the text matches exactly) and can undo its last change.
 - To make a presentation from a spreadsheet, read the data first (read_range), then create_deck with the slides in one call (or create_deck then open_deck and add_slides), and open_deck so the user sees it. Opening a presentation closes the spreadsheet, so read everything you need first.
 - After building or significantly changing a slide, call render_slide and look at the picture before reporting back: fix text that overlaps, wraps badly or is listed under "overflow", then render again. Shape labels take size, font, bold and color in edit_elements.
 - Deleting slides asks the user to confirm.
@@ -65,10 +66,10 @@ export function renderContext(ctx: AgentContext): string {
     return '<app_context>\nThe user is on the home page (their list of spreadsheets, presentations and documents). Nothing is open.\n</app_context>';
   }
   if (ctx.page === 'file') {
-    const text = !/^(application\/pdf|image\/(?!svg)|video\/|audio\/)/.test(ctx.type);
+    const text = isTextFileType(ctx.type);
     const lines = [
       `Open file: "${ctx.filename}" (id ${ctx.fileId}), ${ctx.type || 'unknown type'}, ${ctx.size} bytes, shown in its preview page. It is a stored file, not a spreadsheet, presentation or document: none of those is open.`,
-      text ? 'read_file with this id returns its text.' : 'It is not a text file, so read_file cannot read it.',
+      text ? 'read_file with this id returns its text, and edit_file changes it.' : 'It is not a text file, so read_file and edit_file cannot work on it.',
     ];
     return `<app_context>\n${lines.join('\n')}\n</app_context>`;
   }

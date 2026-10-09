@@ -657,6 +657,15 @@ describe('stored files', () => {
     expect(res.headers['content-disposition']).toContain('attachment');
     expect(res.payload).toBe('<script>alert(1)</script>');
     expect((await app.inject({ method: 'GET', url: page.downloadUrl, headers: { cookie } })).headers['content-disposition']).toContain('attachment');
+    // A text file can be rewritten, and the version before comes back with a revert; a PDF cannot be rewritten.
+    res = await app.inject({ method: 'PUT', url: page.url, headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('<p>light</p>') });
+    expect(res.json().file).toMatchObject({ id: page.id, size: 12 });
+    expect((await app.inject({ method: 'GET', url: page.url, headers: { cookie } })).payload).toBe('<p>light</p>');
+    expect((await app.inject({ method: 'POST', url: `${page.url}/revert`, headers: { cookie } })).json().file).toMatchObject({ size: 25 });
+    expect((await app.inject({ method: 'GET', url: page.url, headers: { cookie } })).payload).toBe('<script>alert(1)</script>');
+    expect((await app.inject({ method: 'PUT', url: file.url, headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('x') })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `${file.url}/revert`, headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url: page.url, headers: { 'content-type': 'application/octet-stream' }, payload: Buffer.from('x') })).statusCode).toBe(401);
     await app.inject({ method: 'DELETE', url: page.url, headers: { cookie } });
 
     res = await app.inject({ method: 'GET', url: '/api/files', headers: { cookie } });

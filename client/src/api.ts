@@ -102,6 +102,14 @@ export const api = {
   uploadImage,
   uploadFile,
   listFiles: () => request<{ files: StoredFile[] }>('GET', '/api/files'),
+  /** Replace a stored text file's contents. */
+  updateFile: async (id: string, text: string): Promise<StoredFile> => {
+    const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob([text]) });
+    const data = (await res.json().catch(() => ({}))) as { file?: StoredFile; error?: string };
+    if (!res.ok || !data.file) throw new ApiError(res.status, res.status === 413 ? 'This file is too large to save.' : (data.error ?? `Saving the file failed (${res.status})`));
+    return data.file;
+  },
+  revertFile: (id: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/revert`),
   getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
   me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string } }>('GET', '/api/auth/me'),

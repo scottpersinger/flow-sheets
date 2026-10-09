@@ -203,5 +203,8 @@ export function videoTypeOf(filename: string): string | null {
 export const HTML_TYPE = 'text/html';
 export const isHtmlName = (filename: string): boolean => /\.html?$/i.test(filename);
 
+/** True for a stored file that holds text (a web page, JSON, SVG, ...), which can be read and rewritten; PDFs, pictures and videos cannot. */
+export const isTextFileType = (type: string): boolean => !/^(application\/pdf|image\/(?!svg)|video\/|audio\/)/.test(type);
+
 /** Largest video that can be uploaded. */
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;

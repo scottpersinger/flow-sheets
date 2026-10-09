@@ -276,6 +276,30 @@ describe('stored files', () => {
     env.readFile = async () => ({ file: meta('a.bin', 'application/octet-stream'), data: new Uint8Array([1, 0, 2]).buffer });
     await expect(call('read_file', { file_id: 'h' })).rejects.toThrow(/not a text file/);
   });
+
+  it('edits a text file with exact replacements, saving nothing unless every one matches', async () => {
+    const { env, call } = setup();
+    const file = { id: 'h', filename: 'index.html', type: 'text/html', size: 10, createdAt: '2026-01-01', url: '/api/files/h', downloadUrl: '/api/files/h/download' };
+    let text = '<style>:root{--bg:#000;--fg:#fff}</style><p class="a">Hi</p><p class="a">Bye</p>';
+    const saves: string[] = [];
+    let reverted = 0;
+    env.readFile = async () => ({ file, data: new TextEncoder().encode(text).buffer as ArrayBuffer });
+    env.writeFile = async (_id, next) => ((text = next), saves.push(next), file);
+    env.revertFile = async () => (reverted++, file);
+    expect(await call('edit_file', { file_id: 'h', edits: [{ find: '--bg:#000', replace: '--bg:#fff' }, { find: 'class="a"', replace: 'class="b"', all: true }] })).toMatchObject({ edited: true, replacements: 3 });
+    expect(text).toBe('<style>:root{--bg:#fff;--fg:#fff}</style><p class="b">Hi</p><p class="b">Bye</p>');
+    // An edit that matches nothing, or more than one place, changes nothing (the first edit of the call included).
+    await expect(call('edit_file', { file_id: 'h', edits: [{ find: 'Hi', replace: 'Hello' }, { find: 'nope', replace: 'x' }] })).rejects.toThrow(/Edit 2: the text to find is not in the file/);
+    await expect(call('edit_file', { file_id: 'h', edits: [{ find: 'class="b"', replace: 'x' }] })).rejects.toThrow(/occurs 2 times/);
+    expect(saves).toHaveLength(1);
+    expect(await call('edit_file', { file_id: 'h', content: '<p>New</p>' })).toMatchObject({ edited: true, total_chars: 10 });
+    expect(text).toBe('<p>New</p>');
+    expect(await call('edit_file', { file_id: 'h', undo: true })).toMatchObject({ undone: true });
+    expect(reverted).toBe(1);
+    await expect(call('edit_file', { file_id: 'h' })).rejects.toThrow(/exactly one of/);
+    env.readFile = async () => ({ file: { ...file, filename: 'a.pdf', type: 'application/pdf' }, data: new TextEncoder().encode('%PDF').buffer as ArrayBuffer });
+    await expect(call('edit_file', { file_id: 'h', content: 'x' })).rejects.toThrow(/cannot be edited/);
+  });
 });
 
 describe('ingest_connector_data', () => {

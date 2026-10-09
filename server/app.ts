@@ -12,7 +12,7 @@ import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
-import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
+import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { checkOpenAIKey, openaiErrorMessage } from './agent/openai.ts';
@@ -870,6 +870,23 @@ export async function buildApp(opts: AppOptions) {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
       return attachment(reply, f.meta.filename, f.meta.type || 'application/octet-stream').send(createReadStream(f.file));
+    });
+
+    // Rewrite a text file (the assistant's edit_file). PDFs, pictures and videos are never rewritten: they are
+    // served as files that do not change.
+    r.put('/api/files/:id', async (req, reply) => {
+      const f = storedFile(req);
+      if (!f) return reply.code(404).send({ error: 'File not found' });
+      if (!isTextFileType(f.meta.type) || PREVIEW_FILE_TYPES.includes(f.meta.type)) return reply.code(400).send({ error: 'Only text files can be edited.' });
+      if (!Buffer.isBuffer(req.body) || req.body.includes(0)) return reply.code(400).send({ error: 'Send the new text as the request body.' });
+      return { file: await storedFiles.update(req.user!.id, f.meta.id, req.body) };
+    });
+
+    // Put back the version before the last rewrite (the two swap, so reverting twice redoes it).
+    r.post('/api/files/:id/revert', async (req, reply) => {
+      const f = storedFile(req);
+      const file = f && (await storedFiles.revert(req.user!.id, f.meta.id));
+      return file ? { file } : reply.code(404).send({ error: 'There is no earlier version of this file.' });
     });
 
     r.delete('/api/files/:id', async (req, reply) => {

@@ -456,6 +456,11 @@ export class LocalFileStore extends FileStore {
 
   override async init(): Promise<void> {}
 
+  /** The folder is the user's own: no copies of earlier versions are left in it. */
+  protected override previousPath(): string | null {
+    return null;
+  }
+
   private relOf(r: Pick<StoredFileRow, 'filename' | 'folder'>): string {
     return joinFolder(r.folder ?? '', r.filename);
   }

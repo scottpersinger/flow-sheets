@@ -268,6 +268,26 @@ export const schemas = {
     .describe(
       "Read the text of a stored file: a web page (.html), or any other text file such as .txt, .json, .svg or .xml. Returns the text from offset, total_chars and whether more follows (read on with offset). It cannot read PDFs, images or videos, and it does not change the file. Find ids with list_files.",
     ),
+  edit_file: z
+    .object({
+      file_id: z.string(),
+      edits: z
+        .array(
+          z.object({
+            find: z.string().min(1).describe('Text to find, exactly as it is in the file (including spaces and line breaks). Include enough around it to match one place only.'),
+            replace: z.string().describe('What to put there instead; an empty string deletes the text.'),
+            all: z.boolean().optional().describe('Replace every occurrence instead of requiring exactly one.'),
+          }),
+        )
+        .max(100)
+        .optional()
+        .describe('Replacements, applied in order. Nothing is saved if any of them does not match.'),
+      content: z.string().max(5_000_000).optional().describe('Instead of edits: the whole new text of the file. Only for short files or a full rewrite.'),
+      undo: z.boolean().optional().describe('Instead of edits: put back the version from before the last edit_file call on this file.'),
+    })
+    .describe(
+      "Change a stored text file (a web page, .txt, .json, .svg, ...): find-and-replace edits, a whole new content, or undo of the last change. Read the part you are changing with read_file first so find matches exactly. The preview the user sees reloads by itself. Give exactly one of edits, content or undo. PDFs, images and videos cannot be edited.",
+    ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),

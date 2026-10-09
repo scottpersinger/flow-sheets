@@ -1,7 +1,8 @@
 // Stored files (generated PDFs, uploads). The bytes live next to the sheets as files named by id; the table
 // holds the metadata. Files are only readable by their owner.
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { StoredFile } from '../shared/types.ts';
 import type { DB } from './db.ts';
@@ -85,10 +86,41 @@ export class FileStore {
     return r ? { meta: toFileMeta(r), file: path.join(this.dir, id) } : null;
   }
 
+  /** Where the version before the last rewrite of a file is kept, or null when this store keeps none. */
+  protected previousPath(file: string): string | null {
+    return `${file}.prev`;
+  }
+
+  /** Replace a file's bytes (a text file the assistant edited). The version it replaces is kept, for one step of undo. */
+  async update(ownerId: string, id: string, data: Buffer): Promise<StoredFile | null> {
+    const f = this.get(ownerId, id);
+    if (!f) return null;
+    const prev = this.previousPath(f.file);
+    if (prev) await copyFile(f.file, prev);
+    await writeFile(`${f.file}.tmp`, data);
+    await rename(`${f.file}.tmp`, f.file);
+    this.db.prepare('UPDATE stored_files SET size = ? WHERE id = ?').run(data.length, id);
+    return { ...f.meta, size: data.length };
+  }
+
+  /** Swap a file with the version before its last rewrite. Null when there is no file, or no earlier version of it. */
+  async revert(ownerId: string, id: string): Promise<StoredFile | null> {
+    const f = this.get(ownerId, id);
+    const prev = f && this.previousPath(f.file);
+    if (!f || !prev || !existsSync(prev)) return null;
+    await rename(f.file, `${f.file}.tmp`);
+    await rename(prev, f.file);
+    await rename(`${f.file}.tmp`, prev);
+    const size = (await stat(f.file)).size;
+    this.db.prepare('UPDATE stored_files SET size = ? WHERE id = ?').run(size, id);
+    return { ...f.meta, size };
+  }
+
   async delete(ownerId: string, id: string): Promise<boolean> {
     const r = this.db.prepare('DELETE FROM stored_files WHERE id = ? AND owner_id = ?').run(id, ownerId);
     if (!r.changes) return false;
     await rm(path.join(this.dir, id), { force: true });
+    await rm(path.join(this.dir, `${id}.prev`), { force: true });
     return true;
   }
 }

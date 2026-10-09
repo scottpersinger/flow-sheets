@@ -214,6 +214,7 @@ export const CLIENT_TOOLS = new Set([
   'list_files',
   'open_file',
   'read_file',
+  'edit_file',
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',

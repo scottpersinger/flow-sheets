@@ -6,7 +6,7 @@ import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { toCellInput, type FetchResult } from '../../../shared/connectors.ts';
 import { findTab, readRange, resolveRange, sheetOverview, splitTabRange } from '../../../shared/agent/sheetRead.ts';
 import { hyperlinkFormula, safeLinkUrl } from '../../../shared/links.ts';
-import { checkCellImage, hasContent, isDataImage, type CellStyle, type StoredFile, type Tab } from '../../../shared/types.ts';
+import { checkCellImage, hasContent, isDataImage, isTextFileType, type CellStyle, type StoredFile, type Tab } from '../../../shared/types.ts';
 import { CellError } from '../../../shared/values.ts';
 import { deckOutline } from '../../../shared/deck.ts';
 import type { DeckController } from '../deck/controller.ts';
@@ -50,6 +50,9 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   openFile?(id: string): Promise<StoredFile>;
   /** A stored file with its bytes. */
   readFile?(id: string): Promise<{ file: StoredFile; data: ArrayBuffer }>;
+  /** Replace a stored text file's contents, or (revert) put back the version before the last replacement. */
+  writeFile?(id: string, text: string): Promise<StoredFile>;
+  revertFile?(id: string): Promise<StoredFile>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
   /** Queue a background research task; resolves with the job id. */
@@ -202,13 +205,39 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     const { file, data } = await env.readFile(String(i.file_id));
     const bytes = new Uint8Array(data);
     // Text only: a PDF, picture or video has nothing to read as characters.
-    if (/^(application\/pdf|image\/(?!svg)|video\/|audio\/)/.test(file.type) || bytes.subarray(0, 8000).includes(0)) {
+    if (!isTextFileType(file.type) || bytes.subarray(0, 8000).includes(0)) {
       throw new ToolError(`${file.filename} is not a text file, so it cannot be read. Only web pages and other text files can.`);
     }
     const text = new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
     const offset = Math.min(typeof i.offset === 'number' ? i.offset : 0, text.length);
     const end = Math.min(text.length, offset + (typeof i.max_chars === 'number' ? i.max_chars : 30_000));
     return JSON.stringify({ file_id: file.id, filename: file.filename, type: file.type, total_chars: text.length, offset, text: text.slice(offset, end), ...(end < text.length ? { more: true, next_offset: end } : {}) });
+  }
+  if (call.name === 'edit_file') {
+    if (!env.readFile || !env.writeFile || !env.revertFile) throw new ToolError('Stored files cannot be edited here.');
+    const id = String(i.file_id);
+    const edits = Array.isArray(i.edits) ? (i.edits as { find: string; replace: string; all?: boolean }[]) : [];
+    const modes = Number(edits.length > 0) + Number(typeof i.content === 'string') + Number(i.undo === true);
+    if (modes !== 1) throw new ToolError('Give exactly one of edits, content or undo.');
+    if (i.undo === true) {
+      const f = await env.revertFile(id);
+      return JSON.stringify({ undone: true, file_id: f.id, filename: f.filename, size: f.size });
+    }
+    const { file, data } = await env.readFile(id);
+    const bytes = new Uint8Array(data);
+    if (!isTextFileType(file.type) || bytes.subarray(0, 8000).includes(0)) throw new ToolError(`${file.filename} is not a text file, so it cannot be edited.`);
+    let text = new TextDecoder('utf-8').decode(bytes);
+    let replacements = 0;
+    if (typeof i.content === 'string') text = i.content;
+    edits.forEach((e, k) => {
+      const count = text.split(e.find).length - 1;
+      if (count === 0) throw new ToolError(`Edit ${k + 1}: the text to find is not in the file. Nothing was changed. Read that part with read_file and copy it exactly.`);
+      if (count > 1 && !e.all) throw new ToolError(`Edit ${k + 1}: the text to find occurs ${count} times. Nothing was changed. Include more of the text around it, or set all to replace every one.`);
+      text = text.split(e.find).join(e.replace);
+      replacements += count;
+    });
+    const saved = await env.writeFile(id, text);
+    return JSON.stringify({ edited: true, file_id: saved.id, filename: saved.filename, ...(edits.length ? { replacements } : {}), total_chars: text.length });
   }
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
   if (call.name === 'open_doc') {
