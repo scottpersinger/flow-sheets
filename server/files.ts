@@ -1,6 +1,6 @@
 // Stored files (generated PDFs, uploads). The bytes live next to the sheets as files named by id; the table
 // holds the metadata. Files are only readable by their owner.
-import { randomUUID } from 'node:crypto';
+import { newFileId } from './ids.ts';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -41,8 +41,13 @@ export class FileStore {
     await mkdir(this.dir, { recursive: true });
   }
 
+  /** An id no stored file has yet. */
+  protected newId(): string {
+    return newFileId((id) => !!this.db.prepare('SELECT 1 FROM stored_files WHERE id = ?').get(id));
+  }
+
   async create(ownerId: string, filename: string, type: string, data: Buffer, folder = ''): Promise<StoredFile> {
-    const id = randomUUID();
+    const id = this.newId();
     const target = path.join(this.dir, id);
     await writeFile(`${target}.tmp`, data);
     await rename(`${target}.tmp`, target);

@@ -29,6 +29,7 @@ import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
 import { openDb } from './db.ts';
 import { EXPORT_FORMATS, ExportError, exportAll, exportFile, imageSource, loadFile, type ExportFormat } from './export.ts';
 import { openGettingStarted } from './gettingStarted.ts';
+import { isFileId } from './ids.ts';
 import { ImageStore } from './images.ts';
 import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder } from '../shared/folders.ts';
@@ -842,7 +843,7 @@ export async function buildApp(opts: AppOptions) {
 
     const storedFile = (req: { user?: { id: string } | null; params: unknown }) => {
       const { id } = req.params as { id: string };
-      return /^[0-9a-f-]{36}$/.test(id) ? storedFiles.get(req.user!.id, id) : null;
+      return isFileId(id) ? storedFiles.get(req.user!.id, id) : null;
     };
 
     r.get('/api/files/:id/meta', async (req, reply) => {
@@ -943,7 +944,7 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       let loaded;
       try {
-        loaded = /^[0-9a-f-]{36}$/.test(id) ? await loadFile(sheets, req.user!.id, id) : null;
+        loaded = isFileId(id) ? await loadFile(sheets, req.user!.id, id) : null;
       } catch {
         // A file that cannot be read (a CSV too large to open, say) has no picture.
         return { preview: { kind: 'empty' } satisfies FilePreview };
@@ -990,7 +991,7 @@ export async function buildApp(opts: AppOptions) {
     // Move a document (any kind) or a stored file into the request's folder.
     r.post('/api/library/move', async (req, reply) => {
       const { id, kind } = (req.body ?? {}) as { id?: unknown; kind?: unknown };
-      if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) return reply.code(404).send({ error: 'File not found' });
+      if (!isFileId(id)) return reply.code(404).send({ error: 'File not found' });
       const moved = kind === 'file' ? storedFiles.move(req.user!.id, id, req.folder) : sheets.move(req.user!.id, id, req.folder);
       if (!moved) return reply.code(404).send({ error: 'File not found' });
       return { ok: true };
@@ -1002,7 +1003,7 @@ export async function buildApp(opts: AppOptions) {
     r.post('/api/trash/:id/restore', async (req, reply) => {
       if (!backup) return reply.code(404).send({ error: 'No backup store is configured' });
       const { id } = req.params as { id: string };
-      if (!/^[0-9a-f-]{36}$/.test(id)) return reply.code(404).send({ error: 'File not found' });
+      if (!isFileId(id)) return reply.code(404).send({ error: 'File not found' });
       const entry = (await backup.listDeleted(req.user!.id)).find((f) => f.id === id);
       if (!entry) return reply.code(404).send({ error: 'File not found in the trash' });
       if (sheets.get(req.user!.id, id)) return reply.code(409).send({ error: 'This file is not deleted' });

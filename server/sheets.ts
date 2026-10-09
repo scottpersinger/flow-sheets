@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { newFileId } from './ids.ts';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Deck } from '../shared/deck.ts';
@@ -171,8 +172,13 @@ export class SheetStore {
     return r ? toMeta(r) : null;
   }
 
+  /** An id no document has yet. */
+  protected newId(): string {
+    return newFileId((id) => !!this.db.prepare('SELECT 1 FROM sheets WHERE id = ?').get(id));
+  }
+
   private async insert(ownerId: string, kind: DocKind, wanted: string, doc: Stored, folder = '', format: 'csv' | null = null): Promise<SheetMeta> {
-    const id = randomUUID();
+    const id = this.newId();
     const { file, title } = this.newFile(id, kind, format, wanted, folder);
     const json = await this.writeDoc(file, doc);
     const now = this.stamp(file);
@@ -219,7 +225,7 @@ export class SheetStore {
   async branch(ownerId: string, sourceId: string, wanted: string): Promise<SheetMeta | null> {
     const src = await this.load(ownerId, sourceId);
     if (!src) return null;
-    const id = randomUUID();
+    const id = this.newId();
     // A branch starts next to its original.
     const folder = src.meta.folder ?? '';
     const { file, title } = this.newFile(id, 'sheet', null, wanted, folder);

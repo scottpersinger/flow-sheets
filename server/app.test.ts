@@ -631,6 +631,25 @@ describe('presentations', () => {
   });
 });
 
+describe('file ids', () => {
+  it('gives new files a short id that every route takes', async () => {
+    const { cookie } = await signUp(app, box, 'ids@x.com');
+    let res = await app.inject({ method: 'POST', url: '/api/decks', headers: { cookie }, payload: { title: 'Short' } });
+    const { id } = res.json().deck;
+    expect(id).toMatch(/^[0-9a-z]{12}$/);
+    res = await app.inject({ method: 'GET', url: `/api/decks/${id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/files/${id}/export?format=json`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'POST', url: '/api/library/move', headers: { cookie }, payload: { id, kind: 'deck', folder: '' } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'POST', url: '/api/docs', headers: { cookie }, payload: { title: 'Also short' } });
+    expect(res.json().doc.id).toMatch(/^[0-9a-z]{12}$/);
+    res = await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'And this' } });
+    expect(res.json().sheet.id).toMatch(/^[0-9a-z]{12}$/);
+  });
+});
+
 describe('getting started', () => {
   afterEach(() => {
     delete process.env.GETTING_STARTED_DECK_ID;

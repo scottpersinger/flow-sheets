@@ -4,7 +4,6 @@
 // Office files are listed as stored files, and its directories are the library's folders. SQLite still
 // holds the metadata (ids, branch links), brought in line with a directory each time it is listed, so
 // everything built on SheetStore and FileStore works as is.
-import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import { mkdir, readdir, rename, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -327,7 +326,7 @@ export class LocalSheetStore extends SheetStore {
       if (!r) {
         this.db
           .prepare('INSERT INTO sheets (id, owner_id, kind, format, title, folder, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(randomUUID(), ownerId, type.kind, type.format, title, folder, f.rel, f.birthtime, f.mtime);
+          .run(this.newId(), ownerId, type.kind, type.format, title, folder, f.rel, f.birthtime, f.mtime);
       } else if (r.updated_at !== f.mtime || r.title !== title || r.folder !== folder) {
         this.db.prepare('UPDATE sheets SET updated_at = ?, title = ?, folder = ? WHERE id = ?').run(f.mtime, title, folder, r.id);
       }
@@ -484,7 +483,7 @@ export class LocalFileStore extends FileStore {
       if (!r) {
         this.db
           .prepare('INSERT INTO stored_files (id, owner_id, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(randomUUID(), ownerId, filename, folder, FILE_TYPES[f.ext], f.size, f.mtime);
+          .run(this.newId(), ownerId, filename, folder, FILE_TYPES[f.ext], f.size, f.mtime);
       } else if (r.size !== f.size || r.created_at !== f.mtime) {
         this.db.prepare('UPDATE stored_files SET size = ?, created_at = ? WHERE id = ?').run(f.size, f.mtime, r.id);
       }
@@ -512,7 +511,7 @@ export class LocalFileStore extends FileStore {
     const ext = path.extname(filename);
     const rel = this.folder.freePath(folder, filename.slice(0, filename.length - ext.length), ext);
     await writeAtomic(this.folder.abs(rel), data);
-    const row: StoredFileRow = { id: randomUUID(), filename: path.posix.basename(rel), folder, type, size: data.length, created_at: this.folder.mtime(rel) ?? new Date().toISOString() };
+    const row: StoredFileRow = { id: this.newId(), filename: path.posix.basename(rel), folder, type, size: data.length, created_at: this.folder.mtime(rel) ?? new Date().toISOString() };
     this.db
       .prepare('INSERT INTO stored_files (id, owner_id, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(row.id, ownerId, row.filename, folder, row.type, row.size, row.created_at);
