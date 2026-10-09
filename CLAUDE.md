@@ -30,6 +30,18 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   (formatting, images, column sizes, frozen panes, filters, more tabs) and the page offers to convert the
   file to a native spreadsheet (`POST /api/sheets/:id/convert`); the assistant's tools get a `ToolError`
   telling it to ask the user to convert.
+- The desktop app (`desktop/`, `npm run desktop`) is Electron around the same server and client. `main.js`
+  starts `desktop/server.ts` as a child process for the folder being opened (the command-line argument or
+  the current directory) and loads it in a window. `buildApp({ local: { dir, token } })` swaps in the
+  folder-backed stores of `server/localStore.ts` (`LocalSheetStore` and `LocalFileStore`, subclasses that
+  override the on-disk hooks of `SheetStore` and `FileStore`: real `.md`/`.csv` files, `.ffsheet`/`.ffslides`/
+  `.ffdoc` for the JSON formats, the tables synced with the folder on every list) and makes every request
+  the one local user. The client learns it is local from `useAuth().local`.
+- Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
+  carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
+  rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app
+  (`LocalFolders`). The home page lists one folder through `GET /api/library?folder=`; a request that
+  names a `folder` (query or body) has it checked and put on `req.folder` by `requireUser`.
 
 Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a change is finished.
 

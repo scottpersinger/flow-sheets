@@ -6,6 +6,8 @@ interface AuthState {
   loading: boolean;
   /** Whether the server offers "Continue with Google". */
   googleLogin: boolean;
+  /** Set in the desktop app: the folder whose files are the library. There is no account to sign in or out of. */
+  local: { dir: string } | null;
   login(email: string, password: string): Promise<void>;
   /** Creates the account; the user is signed in by the link in the verification email, not here. */
   register(email: string, password: string): Promise<void>;
@@ -20,6 +22,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [googleLogin, setGoogleLogin] = useState(false);
+  const [local, setLocal] = useState<{ dir: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!cancelled) {
             setUser(r.user);
             setGoogleLogin(!!r.googleLogin);
+            setLocal(r.local ?? null);
           }
           break;
         } catch (e) {
@@ -61,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading, googleLogin, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, googleLogin, local, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

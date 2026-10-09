@@ -1,9 +1,13 @@
-// Convert an uploaded .pptx file into a deck. Keeps text boxes (with bullets, sizes, colors and alignment, including
-// what they inherit from the master and layout), pictures, simple shapes, lines with arrowheads, slide backgrounds
-// and speaker notes. Tables, charts, SmartArt, gradients and animations are dropped and reported as warnings.
+// Convert an uploaded .pptx file into a deck. Keeps text boxes (with bullets, sizes, colors, alignment, rotation,
+// outlined and capitalised text, including what they inherit from the master and layout), pictures (cropped and
+// cut to their shape), shapes, freeforms, gradients, lines with arrowheads, slide backgrounds, the artwork of the
+// slide's layout and master, and speaker notes. Tables become text boxes with rules between them, and SmartArt
+// the shapes PowerPoint last drew for it. Charts, picture color effects and animations are dropped and reported
+// as warnings.
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import {
+  fillColor as firstColor,
   newId,
   SLIDE_H,
   SLIDE_W,
@@ -11,6 +15,7 @@ import {
   type ArrowStyle,
   type ConnectionSite,
   type Deck,
+  type ImageElement,
   type LayoutId,
   type LineElement,
   type Paragraph,
@@ -58,6 +63,28 @@ const textOf = (n: XNode | undefined): string =>
     .map((c) => ('#text' in c ? String(c['#text']) : ''))
     .join('');
 const num = (v: string | undefined): number | undefined => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
+
+/** The first node with a tag anywhere under the given nodes. */
+function findDeep(nodes: XNode[], name: string): XNode | undefined {
+  for (const n of nodes) {
+    if ('#text' in n) continue;
+    if (tagOf(n) === name) return n;
+    const found = findDeep(kids(n), name);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** A copy of a tree with one namespace prefix swapped for another (SmartArt drawings are slide shapes under dsp:). */
+function retag(n: XNode, from: string, to: string): XNode {
+  if ('#text' in n) return n;
+  const tag = tagOf(n);
+  const out: XNode = { [tag.startsWith(from) ? to + tag.slice(from.length) : tag]: kids(n).map((c) => retag(c, from, to)) };
+  if (n[':@']) out[':@'] = n[':@'];
+  return out;
+}
+
+const truthy = (v: string | undefined) => v === '1' || v === 'true';
 
 function parseXml(xml: string): XNode[] {
   return parser.parse(xml) as XNode[];
@@ -192,6 +219,12 @@ class Importer {
     const cSld = child(sld ?? undefined, 'p:cSld');
     this.idMap = new Map();
     this.pending = [];
+    // The artwork of the master and the layout (everything that is not a placeholder) sits under the slide's own shapes.
+    if (sld && attrs(sld).showMasterSp !== '0') {
+      if (master && masterFile && attrs(layout ?? undefined).showMasterSp !== '0') await this.shapes(path(master, 'p:cSld', 'p:spTree'), await this.rels(masterFile), [], elements, null, true);
+      if (layout && layoutFile) await this.shapes(path(layout, 'p:cSld', 'p:spTree'), await this.rels(layoutFile), master ? [master] : [], elements, null, true);
+      this.connect(elements);
+    }
     if (sld) await this.shapes(child(cSld, 'p:spTree'), rels, inherit, elements, null);
     this.connect(elements);
     if (elements.length > MAX_SHAPES) {
@@ -201,20 +234,28 @@ class Importer {
 
     assignRoles(elements);
     const slide: Slide = { id: newId(), layout: guessLayout(elements), elements };
-    const bgPr = path(cSld, 'p:bg', 'p:bgPr');
-    const bg = this.colorOf(bgPr);
-    if (bg && bg !== 'none') slide.bg = bg;
-    else if (bgPr) {
-      // A picture background becomes a full-slide image behind everything; a gradient keeps its first color.
-      const embed = attrs(path(bgPr, 'a:blipFill', 'a:blip'))['r:embed'];
-      const target = embed ? rels.find((r) => r.id === embed)?.target : undefined;
-      const src = target ? await this.image(target) : null;
-      const gradient = this.solidColorIn(path(bgPr, 'a:gradFill', 'a:gsLst'));
-      if (src) elements.unshift({ id: newId(), type: 'image', x: 0, y: 0, w: SLIDE_W, h: SLIDE_H, src, fit: 'cover' });
-      else if (gradient) {
-        slide.bg = gradient;
-        this.note('Gradient slide backgrounds were flattened to their first color.');
-      } else if (!bg) this.note('Some slide backgrounds could not be converted and were dropped.');
+    // The slide's own background, else its layout's, else its master's.
+    const parts: [XNode | null | undefined, string | undefined][] = [[sld, file], [layout, layoutFile], [master, masterFile]];
+    for (const [part, partFile] of parts) {
+      const bgNode = path(part ?? undefined, 'p:cSld', 'p:bg');
+      if (!bgNode || !partFile) continue;
+      const own = part === sld;
+      const bgPr = child(bgNode, 'p:bgPr');
+      const bg = bgPr ? this.colorOf(bgPr) : this.colorNode(child(bgNode, 'p:bgRef'));
+      // A plain white background from the master is our theme's own.
+      if (bg && bg !== 'none') {
+        if (own || bg !== '#ffffff') slide.bg = bg;
+      } else if (bgPr) {
+        // A picture background becomes a full-slide image behind everything.
+        const embed = attrs(path(bgPr, 'a:blipFill', 'a:blip'))['r:embed'];
+        const target = embed ? (await this.rels(partFile)).find((r) => r.id === embed)?.target : undefined;
+        const src = target ? await this.image(target) : null;
+        const gradient = this.gradientOf(bgPr, false, false);
+        if (src) elements.unshift({ id: newId(), type: 'image', x: 0, y: 0, w: SLIDE_W, h: SLIDE_H, src, fit: 'cover' });
+        else if (gradient) slide.bg = gradient;
+        else if (!bg) this.note('Some slide backgrounds could not be converted and were dropped.');
+      }
+      break;
     }
 
     const notesFile = rels.find((r) => r.type.endsWith('/notesSlide'))?.target;
@@ -239,33 +280,149 @@ class Importer {
   }
 
   /** Convert a shape tree (a slide's spTree or a group) into elements. */
-  private async shapes(tree: XNode | undefined, rels: Rel[], inherit: XNode[], out: SlideElement[], group: GroupTransform | null): Promise<void> {
+  private async shapes(tree: XNode | undefined, rels: Rel[], inherit: XNode[], out: SlideElement[], group: GroupTransform | null, decor = false): Promise<void> {
     for (const node of kids(tree)) {
       const tag = tagOf(node);
+      // Of a layout or master only the artwork is drawn: its placeholders are what the slide's own shapes fill in.
+      if (decor && (path(node, 'p:nvSpPr', 'p:nvPr', 'p:ph') || path(node, 'p:nvPicPr', 'p:nvPr', 'p:ph'))) continue;
       if (tag === 'p:sp') {
         const made = await this.shape(node, rels, inherit, group);
         out.push(...made);
         this.remember(attrs(path(node, 'p:nvSpPr', 'p:cNvPr')).id, made[0]);
       } else if (tag === 'p:pic') {
-        const el = await this.picture(node, rels, group);
+        const el = await this.picture(node, rels, inherit, group);
         if (el) out.push(el);
         this.remember(attrs(path(node, 'p:nvPicPr', 'p:cNvPr')).id, el ?? undefined);
+        // A picture's outline is a frame drawn over it.
+        const ln = path(node, 'p:spPr', 'a:ln');
+        const stroke = this.solidColor(ln);
+        if (el && stroke && !el.clip) {
+          const frame: ShapeElement = { id: newId(), type: 'shape', shape: 'rect', x: el.x, y: el.y, w: el.w, h: el.h, fill: 'none', stroke, strokeWidth: Math.max(1, Math.round((((num(attrs(ln).w) ?? 9525) / EMU_PER_PX) * this.scale))) };
+          if (el.rot) frame.rot = el.rot;
+          out.push(frame);
+        }
       } else if (tag === 'p:cxnSp') {
         const el = this.connector(node, group);
         if (el) out.push(el);
       } else if (tag === 'p:grpSp') {
         const inner = this.groupTransform(child(node, 'p:grpSpPr'), group);
-        await this.shapes(node, rels, inherit, out, inner);
+        await this.shapes(node, rels, inherit, out, inner, decor);
       } else if (tag === 'p:graphicFrame') {
         const data = path(node, 'a:graphic', 'a:graphicData');
         const uri = attrs(data).uri ?? '';
-        this.note(uri.includes('/table') ? 'Tables were dropped.' : uri.includes('/chart') ? 'Charts were dropped.' : uri.includes('/diagram') ? 'SmartArt was dropped.' : 'Embedded objects were dropped.');
+        if (uri.includes('/table')) this.table(node, child(data, 'a:tbl'), rels, inherit, group, out);
+        else if (uri.includes('/diagram')) await this.diagram(node, data, rels, group, out);
+        else this.note(uri.includes('/chart') ? 'Charts were dropped.' : 'Embedded objects were dropped.');
       }
     }
   }
 
-  /** Box of an xfrm in our slide units, through any group transforms. */
-  private box(xfrm: XNode | undefined, group: GroupTransform | null): { x: number; y: number; w: number; h: number } | null {
+  /** A table: a filled rectangle per colored cell, a text box per cell with text, and the cell borders as lines. */
+  private table(frame: XNode, tbl: XNode | undefined, rels: Rel[], inherit: XNode[], group: GroupTransform | null, out: SlideElement[]): void {
+    const inner = this.frameTransform(child(frame, 'p:xfrm'), group);
+    const cols = children(child(tbl, 'a:tblGrid'), 'a:gridCol').map((c) => (num(attrs(c).w) ?? 0) / EMU_PER_PX);
+    const rows = children(tbl, 'a:tr');
+    const heights = rows.map((r) => (num(attrs(r).h) ?? 0) / EMU_PER_PX);
+    if (!inner || !cols.length || !rows.length) {
+      this.note('Some tables could not be converted and were dropped.');
+      return;
+    }
+    const xs = cols.reduce<number[]>((acc, w) => [...acc, acc[acc.length - 1] + w], [0]);
+    const ys = heights.reduce<number[]>((acc, h) => [...acc, acc[acc.length - 1] + h], [0]);
+    const at = (x0: number, y0: number, x1: number, y1: number) => this.place({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, 0, false, false, inner);
+    const fills: SlideElement[] = [];
+    const texts: SlideElement[] = [];
+    // Borders by position, so the edge two cells share is drawn once (the later cell's wins, as in PowerPoint).
+    const edges = new Map<string, { vertical: boolean; at: number; from: number; to: number; color: string; width: number }>();
+    const defaults = this.textDefaults(undefined, undefined, 'body', inherit);
+    rows.forEach((row, r) => {
+      let c = 0;
+      for (const tc of children(row, 'a:tc')) {
+        const a = attrs(tc);
+        const span = Math.max(1, num(a.gridSpan) ?? 1);
+        const rowSpan = Math.max(1, num(a.rowSpan) ?? 1);
+        const col = c;
+        c += span;
+        if (truthy(a.hMerge) || truthy(a.vMerge) || col >= cols.length) continue;
+        const [x0, y0, x1, y1] = [xs[col], ys[r], xs[Math.min(cols.length, col + span)], ys[Math.min(rows.length, r + rowSpan)]];
+        const tcPr = child(tc, 'a:tcPr');
+        const fill = this.colorOf(tcPr);
+        if (fill && fill !== 'none') fills.push({ id: newId(), type: 'shape', shape: 'rect', ...boxOf(at(x0, y0, x1, y1)), fill });
+        const sides: [string, boolean, number, number, number][] = [['a:lnL', true, x0, y0, y1], ['a:lnR', true, x1, y0, y1], ['a:lnT', false, y0, x0, x1], ['a:lnB', false, y1, x0, x1]];
+        for (const [name, vertical, pos, from, to] of sides) {
+          const ln = child(tcPr, name);
+          if (!ln) continue;
+          const key = `${vertical ? 'v' : 'h'}:${Math.round(pos)}:${Math.round(from)}`;
+          const color = this.solidColor(ln);
+          if (color) edges.set(key, { vertical, at: pos, from, to, color, width: Math.max(1, Math.round((((num(attrs(ln).w) ?? 12700) / EMU_PER_PX) * this.scale))) });
+          else if (child(ln, 'a:noFill')) edges.delete(key);
+        }
+        const txBody = child(tc, 'a:txBody');
+        if (!children(txBody, 'a:p').some((p) => paragraphText(p).trim() !== '')) continue;
+        const ta = attrs(tcPr);
+        const bp = { lIns: ta.marL ?? '91440', rIns: ta.marR ?? '91440', tIns: ta.marT ?? '45720', bIns: ta.marB ?? '45720', ...(ta.anchor ? { anchor: ta.anchor } : {}) };
+        texts.push(this.textElement(txBody, at(x0, y0, x1, y1), 'body', { size: 1800, ...defaults, bullet: false }, rels, bp, false));
+      }
+    });
+    const lines: SlideElement[] = [];
+    if (!edges.size && !fills.length) {
+      // A table that leaves its look to a table style: a plain grid.
+      for (const x of xs) lines.push(this.rule(at(x, 0, x, ys[ys.length - 1]), '#9aa0a6', 1));
+      for (const y of ys) lines.push(this.rule(at(0, y, xs[xs.length - 1], y), '#9aa0a6', 1));
+    }
+    // Borders that continue each other in the same color and width join into one line.
+    const sorted = [...edges.values()].sort((a, b) => Number(a.vertical) - Number(b.vertical) || a.at - b.at || a.from - b.from);
+    for (let i = 0; i < sorted.length; i++) {
+      const e = { ...sorted[i] };
+      while (i + 1 < sorted.length) {
+        const n = sorted[i + 1];
+        if (n.vertical !== e.vertical || Math.abs(n.at - e.at) > 0.5 || Math.abs(n.from - e.to) > 0.5 || n.color !== e.color || n.width !== e.width) break;
+        e.to = n.to;
+        i++;
+      }
+      lines.push(this.rule(e.vertical ? at(e.at, e.from, e.at, e.to) : at(e.from, e.at, e.to, e.at), e.color, e.width));
+    }
+    out.push(...fills, ...texts, ...lines);
+  }
+
+  private rule(p: Placed, color: string, width: number): LineElement {
+    return { id: newId(), type: 'line', kind: 'straight', ...boxOf(p), strokeColor: color, strokeWidth: width };
+  }
+
+  /** SmartArt: the shapes PowerPoint saved for it (its drawing part), placed inside the frame. */
+  private async diagram(frame: XNode, data: XNode | undefined, rels: Rel[], group: GroupTransform | null, out: SlideElement[]): Promise<void> {
+    const drawings = rels.filter((r) => r.type.endsWith('/diagramDrawing'));
+    let file = drawings.length === 1 ? drawings[0].target : undefined;
+    if (!file && drawings.length) {
+      // Several diagrams on the slide: each one's data part names its drawing.
+      const dataFile = rels.find((r) => r.id === attrs(child(data, 'dgm:relIds'))['r:dm'])?.target;
+      const ext = findDeep((dataFile && (await this.xml(dataFile))) || [], 'dsp:dataModelExt');
+      file = drawings.find((r) => r.id === attrs(ext).relId)?.target;
+    }
+    const doc = file ? await this.xml(file) : null;
+    const tree = child(root(doc ?? [], 'dsp:drawing'), 'dsp:spTree');
+    const inner = this.frameTransform(child(frame, 'p:xfrm'), group);
+    if (!file || !tree || !inner) {
+      this.note('SmartArt without a saved drawing was dropped.');
+      return;
+    }
+    await this.shapes(retag(tree, 'dsp:', 'p:'), await this.rels(file), [], out, inner);
+  }
+
+  /** The transform of a graphic frame: what is inside is measured from the frame's corner. */
+  private frameTransform(xfrm: XNode | undefined, parent: GroupTransform | null): GroupTransform | null {
+    const off = attrs(child(xfrm, 'a:off'));
+    const x = num(off.x);
+    const y = num(off.y);
+    if (x === undefined || y === undefined) return null;
+    return { parent, cx: 0, cy: 0, rot: 0, flipH: false, flipV: false, apply: (b) => ({ ...b, x: b.x + x / EMU_PER_PX, y: b.y + y / EMU_PER_PX }) };
+  }
+
+  /**
+   * Where an xfrm puts its shape in our slide units, through any group transforms: the box before rotation, the
+   * rotation about the box's center in degrees clockwise, and whether the shape is mirrored.
+   */
+  private placed(xfrm: XNode | undefined, group: GroupTransform | null): Placed | null {
     const off = attrs(child(xfrm, 'a:off'));
     const ext = attrs(child(xfrm, 'a:ext'));
     const x = num(off.x);
@@ -273,13 +430,45 @@ class Importer {
     const cx = num(ext.cx);
     const cy = num(ext.cy);
     if (x === undefined || y === undefined || cx === undefined || cy === undefined) return null;
-    let b = { x: x / EMU_PER_PX, y: y / EMU_PER_PX, w: cx / EMU_PER_PX, h: cy / EMU_PER_PX };
-    for (let g = group; g; g = g.parent) b = g.apply(b);
+    const a = attrs(xfrm);
+    return this.place({ x: x / EMU_PER_PX, y: y / EMU_PER_PX, w: cx / EMU_PER_PX, h: cy / EMU_PER_PX }, (num(a.rot) ?? 0) / 60000, truthy(a.flipH), truthy(a.flipV), group);
+  }
+
+  /** A box in the file's pixels (inside `group`) as a placement on our slide. */
+  private place(b: { x: number; y: number; w: number; h: number }, rot: number, flipH: boolean, flipV: boolean, group: GroupTransform | null): Placed {
+    for (let g = group; g; g = g.parent) {
+      b = g.apply(b);
+      // A mirrored or rotated group moves its members around its own center and turns them with it.
+      let mx = b.x + b.w / 2;
+      let my = b.y + b.h / 2;
+      if (g.flipH) {
+        mx = 2 * g.cx - mx;
+        flipH = !flipH;
+        rot = -rot;
+      }
+      if (g.flipV) {
+        my = 2 * g.cy - my;
+        flipV = !flipV;
+        rot = -rot;
+      }
+      if (g.rot) {
+        const t = (g.rot * Math.PI) / 180;
+        const [dx, dy] = [mx - g.cx, my - g.cy];
+        mx = g.cx + dx * Math.cos(t) - dy * Math.sin(t);
+        my = g.cy + dx * Math.sin(t) + dy * Math.cos(t);
+        rot += g.rot;
+      }
+      b = { x: mx - b.w / 2, y: my - b.h / 2, w: b.w, h: b.h };
+    }
+    rot = ((rot % 360) + 360) % 360;
     return {
       x: Math.round(this.ox + b.x * this.scale),
       y: Math.round(this.oy + b.y * this.scale),
       w: Math.round(b.w * this.scale),
       h: Math.round(b.h * this.scale),
+      rot: Math.round((rot > 180 ? rot - 360 : rot) * 100) / 100,
+      flipH,
+      flipV,
     };
   }
 
@@ -299,17 +488,23 @@ class Importer {
     const cox = num(chOff.x) ?? 0;
     const coy = num(chOff.y) ?? 0;
     const px = EMU_PER_PX;
+    const xa = attrs(xfrm);
     return {
       parent,
+      cx: (ox + (num(ext.cx) ?? cw) / 2) / px,
+      cy: (oy + (num(ext.cy) ?? ch) / 2) / px,
+      rot: (num(xa.rot) ?? 0) / 60000,
+      flipH: truthy(xa.flipH),
+      flipV: truthy(xa.flipV),
       apply: (b) => ({ x: (ox + (b.x * px - cox) * sx) / px, y: (oy + (b.y * px - coy) * sy) / px, w: b.w * sx, h: b.h * sy }),
     };
   }
 
-  /** The placeholder's box from the layout or master when the slide's shape has no xfrm of its own. */
-  private inheritedBox(ph: Record<string, string>, inherit: XNode[], group: GroupTransform | null) {
+  /** The placeholder's placement from the layout or master when the slide's shape has no xfrm of its own. */
+  private inheritedPlace(ph: Record<string, string>, inherit: XNode[], group: GroupTransform | null): Placed | null {
     for (const part of inherit) {
       const sp = this.placeholderIn(part, ph);
-      const b = sp && this.box(path(sp, 'p:spPr', 'a:xfrm'), group);
+      const b = sp && this.placed(path(sp, 'p:spPr', 'a:xfrm'), group);
       if (b) return b;
     }
     return null;
@@ -355,26 +550,60 @@ class Importer {
     return fill ? this.colorNode(fill) : undefined;
   }
 
-  /** The color given by an a:srgbClr or a:schemeClr child of `parent` (see colorOf for the result). */
-  private colorNode(parent: XNode | undefined): string | undefined {
-    const node = child(parent, 'a:srgbClr') ?? child(parent, 'a:schemeClr');
+  /** The color child of `parent` (a:srgbClr, a:schemeClr, ...) with its lightness and alpha changes applied. */
+  private rgba(parent: XNode | undefined): Rgba | undefined {
+    const node = kids(parent).find((c) => ['a:srgbClr', 'a:schemeClr', 'a:sysClr', 'a:prstClr', 'a:scrgbClr'].includes(tagOf(c)));
     if (!node) return undefined;
-    const hex = tagOf(node) === 'a:srgbClr' ? attrs(node).val : this.colors[attrs(node).val];
-    if (!hex || !/^[0-9A-Fa-f]{6}$/.test(hex)) return undefined;
-    const alpha = num(attrs(child(node, 'a:alpha')).val);
-    if (alpha === undefined || alpha >= 100000) return `#${hex.toLowerCase()}`;
-    if (alpha <= 0) return 'none';
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-    return `rgba(${r}, ${g}, ${b}, ${Math.round(alpha / 1000) / 100})`;
+    const a = attrs(node);
+    const tag = tagOf(node);
+    let rgb: number[];
+    if (tag === 'a:scrgbClr') rgb = [a.r, a.g, a.b].map((v) => Math.round(((num(v) ?? 0) / 100000) * 255));
+    else {
+      const hex = tag === 'a:srgbClr' ? a.val : tag === 'a:schemeClr' ? this.colors[a.val] : tag === 'a:sysClr' ? a.lastClr : PRESET_COLORS[a.val];
+      if (!hex || !/^[0-9A-Fa-f]{6}$/.test(hex)) return undefined;
+      rgb = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    }
+    let alpha = 1;
+    for (const m of kids(node)) {
+      const v = (num(attrs(m).val) ?? 100000) / 100000;
+      const mod = tagOf(m);
+      if (mod === 'a:alpha') alpha = Math.max(0, Math.min(1, v));
+      else if (mod === 'a:lumMod') rgb = retone(rgb, (sat, l) => [sat, l * v]);
+      else if (mod === 'a:lumOff') rgb = retone(rgb, (sat, l) => [sat, l + v]);
+      else if (mod === 'a:satMod') rgb = retone(rgb, (sat, l) => [sat * v, l]);
+      else if (mod === 'a:shade') rgb = rgb.map((c) => c * v);
+      else if (mod === 'a:tint') rgb = rgb.map((c) => c * v + 255 * (1 - v));
+    }
+    const [r, g, b] = rgb.map((c) => Math.max(0, Math.min(255, Math.round(c))));
+    return { r, g, b, a: Math.round(alpha * 100) / 100 };
   }
 
-  /** The first opaque color among a gradient's stops. */
-  private solidColorIn(gsLst: XNode | undefined): string | undefined {
-    for (const gs of children(gsLst, 'a:gs')) {
-      const col = this.colorNode(gs);
-      if (col && col !== 'none') return col;
-    }
-    return undefined;
+  /** The color given by a color child of `parent` (see colorOf for the result). */
+  private colorNode(parent: XNode | undefined): string | undefined {
+    const c = this.rgba(parent);
+    if (!c) return undefined;
+    return c.a <= 0 ? 'none' : cssColor(c);
+  }
+
+  /**
+   * The gradient fill of a node (its a:gradFill child) as a CSS gradient. Flips mirror a gradient that turns
+   * with its shape.
+   */
+  private gradientOf(parent: XNode | undefined, flipH: boolean, flipV: boolean): string | undefined {
+    const grad = child(parent, 'a:gradFill');
+    const stops = children(child(grad, 'a:gsLst'), 'a:gs')
+      .map((gs) => ({ pos: (num(attrs(gs).pos) ?? 0) / 1000, color: this.rgba(gs) }))
+      .filter((s): s is { pos: number; color: Rgba } => !!s.color)
+      .sort((a, b) => a.pos - b.pos)
+      .slice(0, 10);
+    if (stops.length < 2) return undefined;
+    const list = stops.map((s) => `${cssColor(s.color)} ${Math.round(s.pos * 10) / 10}%`).join(', ');
+    if (child(grad, 'a:path')) return `radial-gradient(${list})`;
+    // PowerPoint measures the angle clockwise from "left to right"; CSS from "bottom to top".
+    let ang = (num(attrs(child(grad, 'a:lin')).ang) ?? 5400000) / 60000;
+    if (flipH) ang = 180 - ang;
+    if (flipV) ang = -ang;
+    return `linear-gradient(${Math.round(((((ang + 90) % 360) + 360) % 360) * 10) / 10}deg, ${list})`;
   }
 
   /** colorOf without the "none" case, for text and outlines. */
@@ -385,8 +614,11 @@ class Importer {
 
   /** True for the theme's main text color (dk1/tx1): text in it keeps our theme's text color instead. */
   private isTextColor(color: string | undefined): boolean {
-    if (!color) return false;
+    if (!color || !/^#[0-9a-f]{6}$/.test(color)) return false;
     const hex = color.slice(1);
+    // A light text color (a dark deck) is kept: our theme's text would vanish on the deck's own background.
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    if (0.299 * r + 0.587 * g + 0.114 * b > 128) return false;
     return hex === this.colors.tx1 || hex === this.colors.dk1 || hex === '000000';
   }
 
@@ -405,11 +637,22 @@ class Importer {
     const a = attrs(lvl);
     if (a.algn) d.algn = a.algn;
     const pct = num(attrs(path(lvl, 'a:lnSpc', 'a:spcPct')).val);
-    if (pct !== undefined) d.lineSpc = pct;
+    const pts = num(attrs(path(lvl, 'a:lnSpc', 'a:spcPts')).val);
+    if (pct !== undefined) [d.lineSpc, d.linePts] = [pct, undefined];
+    else if (pts !== undefined) [d.lineSpc, d.linePts] = [undefined, pts];
     const bef = num(attrs(path(lvl, 'a:spcBef', 'a:spcPts')).val);
     if (bef !== undefined) d.spcBef = bef;
     const aft = num(attrs(path(lvl, 'a:spcAft', 'a:spcPts')).val);
     if (aft !== undefined) d.spcAft = aft;
+    if (child(lvl, 'a:buNone')) d.bullet = false;
+    else if (child(lvl, 'a:buChar') || child(lvl, 'a:buAutoNum')) {
+      d.bullet = true;
+      d.bulletChar = attrs(child(lvl, 'a:buChar')).char;
+    }
+    const buFont = attrs(child(lvl, 'a:buFont')).typeface;
+    if (buFont) d.bulletFont = buFont;
+    const buColor = this.colorNode(child(lvl, 'a:buClr'));
+    if (buColor && buColor !== 'none') d.bulletColor = buColor;
     const rPr = child(lvl, 'a:defRPr');
     if (!rPr) return;
     const r = attrs(rPr);
@@ -417,6 +660,10 @@ class Importer {
     if (sz) d.size = sz;
     if (r.b !== undefined) d.bold = r.b === '1';
     if (r.i !== undefined) d.italic = r.i === '1';
+    if (r.cap !== undefined) d.caps = r.cap !== 'none';
+    if (num(r.spc) !== undefined) d.spc = num(r.spc);
+    const outline = this.outlineOf(rPr);
+    if (outline !== undefined) d.outline = outline ?? undefined;
     const color = this.solidColor(rPr);
     if (color) d.color = this.isTextColor(color) ? undefined : color;
     const face = this.fontName(rPr);
@@ -429,10 +676,11 @@ class Importer {
    * the master's and the layout's matching placeholder, then the shape's own list style. A styled shape's font
    * reference (the light text PowerPoint draws on filled shapes) sits underneath all of them.
    */
-  private textDefaults(sp: XNode, ph: Record<string, string> | undefined, role: TextRole, inherit: XNode[]): TextDefaults {
+  private textDefaults(sp: XNode | undefined, ph: Record<string, string> | undefined, role: TextRole, inherit: XNode[]): TextDefaults {
     const d: TextDefaults = {};
     const styles = inherit.map((n) => child(n, 'p:txStyles')).find((n) => !!n);
-    const styleName = !ph ? 'p:otherStyle' : role === 'title' ? 'p:titleStyle' : 'p:bodyStyle';
+    // Footers and slide numbers are placeholders, but not part of the title or the body.
+    const styleName = !ph || role === 'caption' ? 'p:otherStyle' : role === 'title' ? 'p:titleStyle' : 'p:bodyStyle';
     this.applyLevel(d, child(child(styles, styleName), 'a:lvl1pPr'));
     if (ph) {
       // The master first, then the layout: the layout's placeholder overrides the master's.
@@ -448,6 +696,16 @@ class Importer {
     return d;
   }
 
+  /**
+   * Outlined text: the color of a run's outline when its letters have no fill, null when the run sets a fill (so
+   * it is not outlined whatever it inherits), and undefined when it says nothing.
+   */
+  private outlineOf(rPr: XNode | undefined): string | null | undefined {
+    if (child(rPr, 'a:solidFill') || child(rPr, 'a:gradFill')) return null;
+    const color = this.solidColor(child(rPr, 'a:ln'));
+    return color && child(rPr, 'a:noFill') ? color : undefined;
+  }
+
   /** The placeholder shape in a layout or master that a slide's placeholder inherits from. */
   private placeholderIn(part: XNode, ph: Record<string, string>): XNode | undefined {
     const sps = children(path(part, 'p:cSld', 'p:spTree'), 'p:sp');
@@ -458,57 +716,86 @@ class Importer {
         const a = attrs(node);
         return byIdx ? ph.idx !== undefined && a.idx === ph.idx : sameType(a.type, ph.type);
       });
-    return match(true) ?? match(false);
+    // An idx pairs a slide's placeholder with its layout's; the master's are found by type (its idx 4 is the slide number).
+    return (tagOf(part) === 'p:sldMaster' ? undefined : match(true)) ?? match(false);
   }
 
-  /** A shape becomes a shape element, a text element, or both (a filled shape with text keeps its text styling). */
+  /**
+   * A shape becomes a shape element, a text element, or both (a filled shape with text keeps its text styling);
+   * one filled with a picture becomes an image.
+   */
   private async shape(sp: XNode, rels: Rel[], inherit: XNode[], group: GroupTransform | null): Promise<SlideElement[]> {
     const ph = path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph');
     const phAttrs = attrs(ph);
     const phType = ph ? (phAttrs.type ?? 'body') : undefined;
-    // Dates, footers, slide numbers and empty picture placeholders are chrome, not content.
-    if (phType && ['dt', 'ftr', 'sldNum', 'pic', 'media', 'clipArt', 'tbl', 'chart', 'dgm'].includes(phType)) return [];
-    const spPr = child(sp, 'p:spPr');
-    const xfrm = child(spPr, 'a:xfrm');
-    let box = this.box(xfrm, group);
-    if (!box && ph) box = this.inheritedBox(phAttrs, inherit, group);
-    if (!box) return [];
-    if (box.w <= 0 && box.h <= 0) return [];
-
+    // Dates and empty picture placeholders are chrome, not content.
+    if (phType && ['dt', 'pic', 'media', 'clipArt', 'tbl', 'chart', 'dgm'].includes(phType)) return [];
+    const chrome = phType === 'ftr' || phType === 'sldNum';
     const txBody = child(sp, 'p:txBody');
     const paragraphs = children(txBody, 'a:p');
     const hasText = paragraphs.some((p) => paragraphText(p).trim() !== '');
-    const role: TextRole = phType === 'title' || phType === 'ctrTitle' ? 'title' : phType === 'subTitle' ? 'subtitle' : 'body';
+    if (chrome && !hasText) return [];
 
-    const prst = attrs(child(spPr, 'a:prstGeom')).prst;
-    const fillRaw = this.colorOf(spPr);
+    // A placeholder takes what it leaves unsaid from the matching placeholder of the layout, then the master.
+    const phShapes = ph ? inherit.map((part) => this.placeholderIn(part, phAttrs)).filter((n): n is XNode => !!n) : [];
+    const spPr = child(sp, 'p:spPr');
+    const spPrs = [spPr, ...phShapes.map((n) => child(n, 'p:spPr'))];
+    const having = (...names: string[]) => spPrs.find((pr) => kids(pr).some((c) => names.includes(tagOf(c))));
+    const xfrm = child(spPr, 'a:xfrm');
+    let at = this.placed(xfrm, group);
+    if (!at && ph) at = this.inheritedPlace(phAttrs, inherit, group);
+    if (!at) return [];
+    if (at.w <= 0 && at.h <= 0) return [];
+    const role: TextRole = chrome ? 'caption' : phType === 'title' || phType === 'ctrTitle' ? 'title' : phType === 'subTitle' ? 'subtitle' : 'body';
+
+    const geomPr = having('a:prstGeom', 'a:custGeom');
+    const prst = attrs(child(geomPr, 'a:prstGeom')).prst;
+    const custom = child(geomPr, 'a:custGeom');
+    const fillPr = having('a:solidFill', 'a:noFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill');
+    const fillRaw = this.colorOf(fillPr);
     const fillColor = fillRaw === 'none' ? undefined : fillRaw;
-    const noFill = !!child(spPr, 'a:noFill') || fillRaw === 'none';
+    const gradient = this.gradientOf(fillPr, at.flipH, at.flipV);
+    const noFill = !!child(fillPr, 'a:noFill') || fillRaw === 'none';
     const style = child(sp, 'p:style');
-    const styledFill = !!style && attrs(child(style, 'a:fillRef')).idx !== '0' && !!attrs(child(style, 'a:fillRef')).idx;
-    const ln = child(spPr, 'a:ln');
+    const styledFill = !fillPr && !!style && attrs(child(style, 'a:fillRef')).idx !== '0' && !!attrs(child(style, 'a:fillRef')).idx;
+    const ln = child(having('a:ln'), 'a:ln');
     const strokeColor = this.solidColor(ln);
     const noLine = !!child(ln, 'a:noFill');
     const styledLine = !!style && attrs(child(style, 'a:lnRef')).idx !== '0' && !!attrs(child(style, 'a:lnRef')).idx;
-    const filled = !!fillColor || (!noFill && styledFill);
+    const filled = !!fillColor || !!gradient || (!noFill && styledFill);
     const stroked = !!strokeColor || (!noLine && styledLine);
-    const geometric = !!prst && prst !== 'rect';
+    const geometric = (!!prst && prst !== 'rect') || !!custom;
 
     if (!ph && prst && LINE_PRESETS.test(prst)) {
-      const line = this.lineElement(prst, box, xfrm, ln);
+      const line = this.lineElement(prst, at, ln, style);
       if (!line.strokeColor && stroked) line.strokeColor = '#5f6368';
       return [line];
     }
 
+    const made: SlideElement[] = [];
+    const picture = fillPr === spPr ? child(spPr, 'a:blipFill') : undefined;
+    if (picture) {
+      const img = await this.imageElement(picture, rels, at, geomPr);
+      if (img) made.push(img);
+    }
+
     let onShape: ShapeElement | null = null;
-    if (!ph && (filled || stroked || geometric)) {
-      const el: ShapeElement = { id: newId(), type: 'shape', shape: shapeKind(prst, (m) => this.note(m)), ...box };
+    if (!picture && (filled || stroked || (!ph && geometric && !custom))) {
+      const el: ShapeElement = { id: newId(), type: 'shape', shape: custom ? 'rect' : shapeKind(prst, (m) => this.note(m)), ...boxOf(at) };
+      const outline = custom ? customPath(custom, at.flipH, at.flipV, at.w, at.h) : undefined;
+      if (outline) el.path = outline.d;
+      const plain = !outline && ['rect', 'rounded', 'ellipse'].includes(el.shape);
+      const refFill = this.colorNode(child(style, 'a:fillRef'));
       if (fillColor) el.fill = fillColor;
+      else if (gradient) el.fill = plain ? gradient : (firstColor(gradient) ?? 'none');
       else if (!filled) el.fill = 'none';
+      else if (refFill && refFill !== 'none') el.fill = refFill;
+      const refLine = this.colorNode(child(style, 'a:lnRef'));
       if (strokeColor) el.stroke = strokeColor;
+      else if (stroked && refLine && refLine !== 'none') el.stroke = refLine;
       else if (stroked && !filled) el.stroke = '#5f6368';
       const w = num(attrs(ln).w);
-      if (w !== undefined && (strokeColor || el.shape === 'line')) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
+      if (w !== undefined && (el.stroke || el.shape === 'line')) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
       if (el.shape === 'arc') {
         // An arc is stroke only. Rotation and flips are folded into the angles (the box is rotated about its center).
         el.fill = 'none';
@@ -529,35 +816,63 @@ class Importer {
         const norm = (a: number) => Math.round((((a + rot) % 360) + 360) % 360 * 100) / 100;
         el.startAngle = norm(a1);
         el.endAngle = norm(a2);
-      }
-      if (!hasText) return [el];
+      } else if (at.rot) el.rot = at.rot;
+      made.push(el);
       onShape = el; // the text goes in its own element on top, so sizes, fonts and colors survive
     }
-    if (!hasText && !ph) return [];
+    if (!hasText && (made.length || !ph)) return made;
 
+    // SmartArt says where a shape's text goes; text set vertically is a box turned on its side.
+    let textAt = this.placed(child(sp, 'p:txXfrm'), group) ?? at;
+    const bp: Record<string, string> = Object.assign({}, ...[...phShapes].reverse().map((n) => attrs(path(n, 'p:txBody', 'a:bodyPr'))), attrs(child(txBody, 'a:bodyPr')));
+    if (bp.vert === 'vert' || bp.vert === 'eaVert' || bp.vert === 'vert270') {
+      const turn = bp.vert === 'vert270' ? -90 : 90;
+      const rot = (((textAt.rot + turn) % 360) + 360) % 360;
+      textAt = { ...textAt, x: Math.round(textAt.x + textAt.w / 2 - textAt.h / 2), y: Math.round(textAt.y + textAt.h / 2 - textAt.w / 2), w: textAt.h, h: textAt.w, rot: rot > 180 ? rot - 360 : rot };
+    }
+    const defaults = this.textDefaults(sp, ph ? phAttrs : undefined, role, inherit);
+    made.push(this.textElement(txBody, textAt, role, defaults, rels, bp, !!onShape, role === 'body' && !!ph));
+    return made;
+  }
+
+  /**
+   * The text element of a text body in a box. `bp` is the body's properties (insets, anchor) with what it inherits;
+   * `phBullets` is true for body placeholders, whose paragraphs are bullets unless something says otherwise.
+   */
+  private textElement(txBody: XNode | undefined, at: Placed, role: TextRole, defaults: TextDefaults, rels: Rel[], bp: Record<string, string>, onShape: boolean, phBullets = false): TextElement {
+    const paragraphs = children(txBody, 'a:p');
+    let box = boxOf(at);
     // Text sits inside the box's insets (PowerPoint's defaults are 0.1in left/right and 0.05in top/bottom).
-    const bodyPr = child(txBody, 'a:bodyPr');
     if (txBody) {
-      const bp = attrs(bodyPr);
       const inset = (k: string, dflt: number) => ((num(bp[k]) ?? dflt) / EMU_PER_PX) * this.scale;
       const [l, r, t, b] = [inset('lIns', 91440), inset('rIns', 91440), inset('tIns', 45720), inset('bIns', 45720)];
       box = { x: Math.round(box.x + l), y: Math.round(box.y + t), w: Math.max(1, Math.round(box.w - l - r)), h: Math.max(1, Math.round(box.h - t - b)) };
     }
     // Shrink-on-overflow text is stored at its full size with the scale PowerPoint last applied.
-    const fontScale = (num(attrs(child(bodyPr, 'a:normAutofit')).fontScale) ?? 100000) / 100000;
-    const defaults = this.textDefaults(sp, ph ? phAttrs : undefined, role, inherit);
+    const fontScale = (num(attrs(path(txBody, 'a:bodyPr', 'a:normAutofit')).fontScale) ?? 100000) / 100000;
 
-    const bodyBullets = role === 'body';
     const ps: Paragraph[] = [];
+    let bulletChar = defaults.bulletChar;
+    let bulletFont = defaults.bulletFont;
+    let bulletColor = defaults.bulletColor;
+    let bulletSeen = false;
     for (const p of paragraphs) {
       const pPr = child(p, 'a:pPr');
       const text = paragraphText(p);
       let bullet: boolean;
       if (child(pPr, 'a:buNone')) bullet = false;
       else if (child(pPr, 'a:buChar') || child(pPr, 'a:buAutoNum') || child(pPr, 'a:buBlip')) bullet = text.trim() !== '';
-      else bullet = bodyBullets && !!ph && text.trim() !== '';
+      else bullet = phBullets && (defaults.bullet ?? true) && text.trim() !== '';
+      if (bullet && !bulletSeen) {
+        // The first bullet's look stands for the box.
+        bulletSeen = true;
+        bulletChar = attrs(child(pPr, 'a:buChar')).char ?? (child(pPr, 'a:buAutoNum') ? undefined : bulletChar);
+        bulletFont = attrs(child(pPr, 'a:buFont')).typeface ?? bulletFont;
+        const own = this.colorNode(child(pPr, 'a:buClr'));
+        if (own && own !== 'none') bulletColor = own;
+      }
       const level = Math.min(4, num(attrs(pPr).lvl) ?? 0);
-      const runs = this.linkRuns(p, rels);
+      const runs = this.linkRuns(p, rels, defaults);
       ps.push({ text, ...(runs ? { runs } : {}), ...(bullet ? { bullet: true } : {}), ...(bullet && level ? { level } : {}) });
     }
     // Trailing empty paragraphs are noise.
@@ -565,7 +880,13 @@ class Importer {
     if (!ps.length) ps.push({ text: '' });
 
     const el: TextElement = { id: newId(), type: 'text', role, ...box, paragraphs: ps };
-    const st = this.textStyle(paragraphs, txBody, role, defaults, fontScale) ?? {};
+    if (at.rot) el.rot = at.rot;
+    const st = this.textStyle(paragraphs, bp, role, defaults, fontScale) ?? {};
+    if (bulletSeen) {
+      // Bullets from a symbol font (Wingdings' "§" is a square) only mean something in that font.
+      if (bulletChar && bulletChar !== '•' && bulletChar.length <= 2 && !/wingdings|webdings|symbol/i.test(bulletFont ?? '')) st.bulletChar = bulletChar;
+      if (bulletColor) st.bulletColor = bulletColor;
+    }
     if (onShape) {
       // PowerPoint centers text in shapes.
       st.align ??= 'center';
@@ -591,16 +912,16 @@ class Importer {
         if (r.italic === (p.italic ?? base.italic)) delete r.italic;
       }
     }
-    return onShape ? [onShape, el] : [el];
+    return el;
   }
 
   /**
-   * The runs of a paragraph that holds a hyperlink, so the link (and the look of each run) survives; undefined
-   * for paragraphs without links, which stay plain text.
+   * The runs of a paragraph that holds a hyperlink or words in different colors or weights, so the look of each
+   * run survives; undefined for paragraphs that look the same throughout, which stay plain text.
    */
-  private linkRuns(p: XNode, rels: Rel[]): TextRun[] | undefined {
+  private linkRuns(p: XNode, rels: Rel[], d: TextDefaults): TextRun[] | undefined {
     const nodes = kids(p).filter((n) => ['a:r', 'a:fld', 'a:br'].includes(tagOf(n)));
-    if (!nodes.some((n) => child(child(n, 'a:rPr'), 'a:hlinkClick'))) return undefined;
+    const linked = nodes.some((n) => child(child(n, 'a:rPr'), 'a:hlinkClick'));
     const runs: TextRun[] = [];
     for (const n of nodes) {
       if (tagOf(n) === 'a:br') {
@@ -618,7 +939,9 @@ class Importer {
       if (rPr.b !== undefined) run.bold = rPr.b === '1';
       if (rPr.i !== undefined) run.italic = rPr.i === '1';
       if (!link && rPr.u && rPr.u !== 'none') run.underline = true;
-      const color = this.solidColor(rPrNode);
+      // A run that names no color has the box's inherited one, whatever its neighbours say.
+      const own = this.solidColor(rPrNode);
+      const color = own ? (this.isTextColor(own) && !link ? d.color : own) : link ? undefined : d.color;
       if (color) run.color = color;
       // Neighbouring runs that look the same (PowerPoint splits text at spelling marks and edits) join up.
       const prev = runs[runs.length - 1];
@@ -626,6 +949,7 @@ class Importer {
       if (prev && same(prev, run)) prev.text += text;
       else runs.push(run);
     }
+    if (!linked && runs.filter((r) => r.text !== '\n').length < 2) return undefined;
     return runs.length ? runs : undefined;
   }
 
@@ -656,7 +980,7 @@ class Importer {
   }
 
   /** The style of the first run (sizes and colors are per run in PowerPoint; we keep one per text box). */
-  private textStyle(paragraphs: XNode[], txBody: XNode | undefined, role: TextRole, d: TextDefaults, fontScale: number): TextStyle | undefined {
+  private textStyle(paragraphs: XNode[], bp: Record<string, string>, role: TextRole, d: TextDefaults, fontScale: number): TextStyle | undefined {
     const st: TextStyle = {};
     const first = paragraphs.find((p) => paragraphText(p).trim() !== '') ?? paragraphs[0];
     const run = firstRun(first);
@@ -671,20 +995,31 @@ class Importer {
     const bold = rPr.b !== undefined ? rPr.b === '1' : face.bold ? true : d.bold;
     // Our titles are bold unless told otherwise; other text is regular unless told otherwise.
     if (bold === true && role !== 'title') st.bold = true;
-    if (bold === false && role === 'title') st.bold = false;
+    if (bold !== true && role === 'title') st.bold = false;
+    // Titling fonts have capitals only; whatever stands in for them should too.
+    if (font && CAPS_FONTS.test(font)) st.caps = true;
     if ((rPr.i !== undefined ? rPr.i === '1' : d.italic) === true) st.italic = true;
     const color = this.runColor(paragraphs) ?? d.color;
     if (color) st.color = color;
+    // Our subtitles and captions are gray; PowerPoint's are the text color unless they say otherwise.
+    else if (role === 'subtitle' || role === 'caption') st.color = `#${this.colors.tx1 ?? '000000'}`;
+    const outline = this.outlineOf(rPrNode);
+    if (outline ?? (outline === undefined ? d.outline : undefined)) st.outline = (outline ?? d.outline)!;
+    if (rPr.cap !== undefined ? rPr.cap !== 'none' : d.caps) st.caps = true;
+    const spc = num(rPr.spc) ?? d.spc;
+    if (spc) st.spacing = Math.max(-20, Math.min(100, Math.round((spc / 100) * (4 / 3) * this.scale * 10) / 10));
     const pPr = child(first, 'a:pPr');
     const algn = attrs(pPr).algn ?? d.algn;
     if (algn === 'ctr') st.align = 'center';
     else if (algn === 'r') st.align = 'right';
     // Line spacing: PowerPoint's 100% is about 1.2 × the font size.
-    const pct = num(attrs(path(pPr, 'a:lnSpc', 'a:spcPct')).val) ?? d.lineSpc;
-    if (pct) {
-      const lh = Math.round((pct / 100000) * 1.2 * 100) / 100;
-      if (Math.abs(lh - 1.25) > 0.06) st.lineHeight = Math.min(4, Math.max(0.5, lh)); // single spacing is ours
-    }
+    const ownPct = num(attrs(path(pPr, 'a:lnSpc', 'a:spcPct')).val);
+    const ownPts = num(attrs(path(pPr, 'a:lnSpc', 'a:spcPts')).val);
+    const pct = ownPct ?? (ownPts === undefined ? d.lineSpc : undefined);
+    // An exact line pitch in points is a multiple of the font size for us.
+    const exact = ownPts ?? (ownPct === undefined ? d.linePts : undefined);
+    const lh = pct ? (pct / 100000) * 1.2 : exact && sz ? exact / (sz * fontScale) : undefined;
+    if (lh && Math.abs(lh - 1.25) > 0.06) st.lineHeight = Math.min(4, Math.max(0.5, Math.round(lh * 100) / 100)); // single spacing is ours
     // Space between paragraphs is per paragraph in PowerPoint; the widest gap stands for the box.
     if (paragraphs.length > 1) {
       let gap: number | undefined;
@@ -698,7 +1033,7 @@ class Importer {
       });
       if (gap !== undefined) st.paraSpacing = Math.min(200, Math.round((gap / 100) * (4 / 3) * this.scale * 10) / 10);
     }
-    const anchor = attrs(child(txBody, 'a:bodyPr')).anchor;
+    const anchor = bp.anchor;
     if (anchor === 'ctr') st.valign = 'middle';
     else if (anchor === 'b') st.valign = 'bottom';
     return Object.keys(st).length ? st : undefined;
@@ -717,7 +1052,7 @@ class Importer {
         const rPr = child(r, 'a:rPr');
         const c = this.solidColor(rPr);
         if (child(rPr, 'a:hlinkClick')) link ??= c;
-        else if (c) return c;
+        else if (c) return plain ? undefined : this.isTextColor(c) ? undefined : c;
         else plain = true;
       }
     }
@@ -725,18 +1060,29 @@ class Importer {
   }
 
   /** A line, arrow or connector (preset `prst`) in a box: its route, flips, arrowheads, dash, color and width. */
-  private lineElement(prst: string | undefined, box: { x: number; y: number; w: number; h: number }, xfrm: XNode | undefined, ln: XNode | undefined): LineElement {
+  private lineElement(prst: string | undefined, at: Placed, ln: XNode | undefined, style?: XNode): LineElement {
     const kind = /^bentConnector/.test(prst ?? '') ? 'elbow' : /^curvedConnector/.test(prst ?? '') ? 'curved' : 'straight';
-    const el: LineElement = { id: newId(), type: 'line', kind, ...box };
+    let { x, y, w, h, flipH, flipV } = at;
+    if (at.rot) {
+      // A turned line is the line between its two ends, each turned about the middle of the box.
+      const t = (at.rot * Math.PI) / 180;
+      const [cx, cy] = [x + w / 2, y + h / 2];
+      const turn = (px: number, py: number) => [cx + (px - cx) * Math.cos(t) - (py - cy) * Math.sin(t), cy + (px - cx) * Math.sin(t) + (py - cy) * Math.cos(t)];
+      const a = turn(flipH ? x + w : x, flipV ? y + h : y);
+      const b = turn(flipH ? x : x + w, flipV ? y : y + h);
+      [x, y, w, h] = [Math.round(Math.min(a[0], b[0])), Math.round(Math.min(a[1], b[1])), Math.round(Math.abs(a[0] - b[0])), Math.round(Math.abs(a[1] - b[1]))];
+      flipH = a[0] > b[0] + 0.5;
+      flipV = a[1] > b[1] + 0.5;
+    }
+    const el: LineElement = { id: newId(), type: 'line', kind, x, y, w, h };
     if (kind === 'straight' && !(el.w > 2 && el.h > 2)) {
       // A horizontal or vertical line: the thin side is the stroke, not a size.
       if (el.h > el.w) el.w = 0;
       else el.h = 0;
     }
-    const x = attrs(xfrm);
     // The line starts at the top-left corner of its box (headEnd is there); a flip moves the start to the other side.
-    if ((x.flipH === '1' || x.flipH === 'true') && el.w > 0) el.flipH = true;
-    if ((x.flipV === '1' || x.flipV === 'true') && el.h > 0) el.flipV = true;
+    if (flipH && el.w > 0) el.flipH = true;
+    if (flipV && el.h > 0) el.flipV = true;
     const head = (end: string): ArrowStyle | undefined => {
       const type = attrs(child(ln, end)).type;
       return !type || type === 'none' ? undefined : ({ triangle: 'triangle', stealth: 'arrow', arrow: 'open', oval: 'circle', diamond: 'diamond' } as Record<string, ArrowStyle>)[type] ?? 'arrow';
@@ -747,10 +1093,12 @@ class Importer {
     if (end) el.endArrow = end;
     const dash = attrs(child(ln, 'a:prstDash')).val;
     if (dash && dash !== 'solid') el.dash = /dot/i.test(dash) && !/dash/i.test(dash) ? 'dot' : 'dash';
-    const color = this.solidColor(ln);
+    // A line that names no color takes the one its style refers to.
+    const refColor = child(ln, 'a:noFill') ? undefined : this.colorNode(child(style, 'a:lnRef'));
+    const color = this.solidColor(ln) ?? (refColor === 'none' ? undefined : refColor);
     if (color) el.strokeColor = color;
-    const w = num(attrs(ln).w);
-    if (w !== undefined) el.strokeWidth = Math.max(1, Math.round((w / EMU_PER_PX) * this.scale));
+    const lw = num(attrs(ln).w);
+    if (lw !== undefined) el.strokeWidth = Math.max(1, Math.round((lw / EMU_PER_PX) * this.scale));
     return el;
   }
 
@@ -786,26 +1134,57 @@ class Importer {
 
   private connector(cxn: XNode, group: GroupTransform | null): SlideElement | null {
     const spPr = child(cxn, 'p:spPr');
-    const xfrm = child(spPr, 'a:xfrm');
-    const box = this.box(xfrm, group);
-    if (!box) return null;
-    const el = this.lineElement(attrs(child(spPr, 'a:prstGeom')).prst, box, xfrm, child(spPr, 'a:ln'));
+    const at = this.placed(child(spPr, 'a:xfrm'), group);
+    if (!at) return null;
+    const el = this.lineElement(attrs(child(spPr, 'a:prstGeom')).prst, at, child(spPr, 'a:ln'), child(cxn, 'p:style'));
     this.queueConnections(el, cxn);
     return el;
   }
 
-  private async picture(pic: XNode, rels: Rel[], group: GroupTransform | null): Promise<SlideElement | null> {
-    const box = this.box(path(pic, 'p:spPr', 'a:xfrm'), group);
-    if (!box) return null;
-    const embed = attrs(path(pic, 'p:blipFill', 'a:blip'))['r:embed'];
-    const target = rels.find((r) => r.id === embed)?.target;
+  private async picture(pic: XNode, rels: Rel[], inherit: XNode[], group: GroupTransform | null): Promise<ImageElement | null> {
+    // A picture in a placeholder takes its box and its outline from the layout when it has none of its own.
+    const ph = path(pic, 'p:nvPicPr', 'p:nvPr', 'p:ph');
+    const phShapes = ph ? inherit.map((part) => this.placeholderIn(part, attrs(ph))).filter((n): n is XNode => !!n) : [];
+    const spPr = child(pic, 'p:spPr');
+    const at = this.placed(child(spPr, 'a:xfrm'), group) ?? (ph ? this.inheritedPlace(attrs(ph), inherit, group) : null);
+    if (!at) return null;
+    const geomPr = [spPr, ...phShapes.map((n) => child(n, 'p:spPr'))].find((pr) => child(pr, 'a:prstGeom') || child(pr, 'a:custGeom'));
+    return this.imageElement(child(pic, 'p:blipFill'), rels, at, geomPr);
+  }
+
+  /** The image of a picture fill: cropped to its source rectangle and cut to the outline of its shape. */
+  private async imageElement(blipFill: XNode | undefined, rels: Rel[], at: Placed, geomPr: XNode | undefined): Promise<ImageElement | null> {
+    const blip = child(blipFill, 'a:blip');
+    const target = rels.find((r) => r.id === attrs(blip)['r:embed'])?.target;
     if (!target) {
       this.note('Linked pictures (not stored in the file) were dropped.');
       return null;
     }
     const src = await this.image(target);
     if (!src) return null;
-    return { id: newId(), type: 'image', ...box, src };
+    const el: ImageElement = { id: newId(), type: 'image', ...boxOf(at), src };
+    if (at.rot) el.rot = at.rot;
+    const sr = attrs(child(blipFill, 'a:srcRect'));
+    const side = (v: string | undefined) => Math.max(-10, Math.min(0.99, Math.round(((num(v) ?? 0) / 100000) * 10000) / 10000));
+    const crop = { l: side(sr.l), t: side(sr.t), r: side(sr.r), b: side(sr.b) };
+    if ((crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 1 && crop.t + crop.b < 1) el.crop = crop;
+    const prst = attrs(child(geomPr, 'a:prstGeom')).prst;
+    const custom = child(geomPr, 'a:custGeom');
+    if (prst === 'ellipse') el.clip = 'ellipse(50% 50% at 50% 50%)';
+    else if (prst === 'roundRect') el.clip = 'inset(0 round 10%)';
+    else if (custom) {
+      const outline = customPath(custom, at.flipH, at.flipV, at.w, at.h);
+      if (outline && outline.poly.length >= 3) el.clip = `polygon(${outline.poly.map(([x, y]) => `${x}% ${y}%`).join(', ')})`;
+    }
+    const alpha = num(attrs(child(blip, 'a:alphaModFix')).amt);
+    if (alpha !== undefined && alpha < 100000) el.opacity = Math.max(0, Math.round(alpha / 1000) / 100);
+    // Duotone redraws the picture from its dark color to its light one; grayscale is the same from black to white.
+    const duo = child(blip, 'a:duotone');
+    const tones = duo ? kids(duo).map((c) => this.rgba({ 'a:duotone': [c] })).filter((c): c is Rgba => !!c) : [];
+    if (tones.length === 2) el.duotone = [cssColor({ ...tones[0], a: 1 }), cssColor({ ...tones[1], a: 1 })];
+    else if (child(blip, 'a:grayscl')) el.duotone = ['#000000', '#ffffff'];
+    if (kids(blip).some((c) => ['a:biLevel', 'a:clrChange'].includes(tagOf(c)))) this.note('Picture recoloring effects were dropped.');
+    return el;
   }
 
   private image(file: string): Promise<string | null> {
@@ -852,16 +1231,152 @@ interface TextDefaults {
   algn?: string;
   /** Line spacing in thousandths of a percent. */
   lineSpc?: number;
+  /** Line spacing as an exact pitch, in hundredths of a point. */
+  linePts?: number;
   /** Space before and after a paragraph, in hundredths of a point. */
   spcBef?: number;
   spcAft?: number;
+  /** The color of outlined (unfilled) letters. */
+  outline?: string;
+  caps?: boolean;
+  /** Letter spacing in hundredths of a point. */
+  spc?: number;
+  /** Whether paragraphs are bullets, and the bullet's character, font and color. */
+  bullet?: boolean;
+  bulletChar?: string;
+  bulletFont?: string;
+  bulletColor?: string;
 }
+
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A box on our slide with its rotation (degrees clockwise about its center) and mirroring. */
+interface Placed extends Box {
+  rot: number;
+  flipH: boolean;
+  flipV: boolean;
+}
+
+const boxOf = (p: Placed): Box => ({ x: p.x, y: p.y, w: p.w, h: p.h });
 
 interface GroupTransform {
   parent: GroupTransform | null;
-  apply(b: { x: number; y: number; w: number; h: number }): { x: number; y: number; w: number; h: number };
+  /** The group's center in its parent's pixels, its rotation in degrees and its mirroring. */
+  cx: number;
+  cy: number;
+  rot: number;
+  flipH: boolean;
+  flipV: boolean;
+  /** A member's box in the group's pixels, in the parent's. */
+  apply(b: Box): Box;
 }
 
+interface Rgba {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+const cssColor = (c: Rgba): string => (c.a >= 1 ? `#${[c.r, c.g, c.b].map((v) => v.toString(16).padStart(2, '0')).join('')}` : `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`);
+
+const PRESET_COLORS: Record<string, string> = { black: '000000', white: 'ffffff', red: 'ff0000', green: '008000', blue: '0000ff', yellow: 'ffff00', gray: '808080', grey: '808080' };
+
+/** Change the saturation and lightness (0 to 1, in HSL) of an RGB color. */
+function retone(rgb: number[], change: (sat: number, l: number) => [number, number]): number[] {
+  const [r, g, b] = rgb.map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const sat = d === 0 || l === 0 || l === 1 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  const hue = d === 0 ? 0 : max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const [ns, nl] = change(sat, l).map((v) => Math.max(0, Math.min(1, v)));
+  const c = (1 - Math.abs(2 * nl - 1)) * ns;
+  const x = c * (1 - Math.abs((hue % 2) - 1));
+  const m = nl - c / 2;
+  const [r1, g1, b1] = hue < 1 ? [c, x, 0] : hue < 2 ? [x, c, 0] : hue < 3 ? [0, c, x] : hue < 4 ? [0, x, c] : hue < 5 ? [x, 0, c] : [c, 0, x];
+  return [r1, g1, b1].map((v) => (v + m) * 255);
+}
+
+/**
+ * A freeform's outline (a:custGeom) as SVG path data in a 100×100 box, plus its first figure flattened to points
+ * (percentages) for cutting a picture to it. Undefined when the path uses formulas instead of plain coordinates.
+ */
+function customPath(custGeom: XNode, flipH: boolean, flipV: boolean, boxW: number, boxH: number): { d: string; poly: [number, number][] } | undefined {
+  const out: string[] = [];
+  const poly: [number, number][] = [];
+  let figures = 0;
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  for (const p of children(child(custGeom, 'a:pathLst'), 'a:path')) {
+    const pw = num(attrs(p).w) || boxW || 1;
+    const ph = num(attrs(p).h) || boxH || 1;
+    const X = (v: number) => (flipH ? 100 - (v / pw) * 100 : (v / pw) * 100);
+    const Y = (v: number) => (flipV ? 100 - (v / ph) * 100 : (v / ph) * 100);
+    let cur: [number, number] = [0, 0]; // in path units
+    const points = (cmd: XNode): [number, number][] | undefined => {
+      const pts = children(cmd, 'a:pt').map((pt) => [num(attrs(pt).x), num(attrs(pt).y)]);
+      return pts.every((q) => q[0] !== undefined && q[1] !== undefined) ? (pts as [number, number][]) : undefined;
+    };
+    const mark = (q: [number, number]) => {
+      if (figures === 1) poly.push([r2(X(q[0])), r2(Y(q[1]))]);
+    };
+    for (const cmd of kids(p)) {
+      const tag = tagOf(cmd);
+      if (tag === 'a:close') {
+        out.push('Z');
+        continue;
+      }
+      if (tag === 'a:arcTo') {
+        const a = attrs(cmd);
+        const [wR, hR, st, sw] = [num(a.wR), num(a.hR), num(a.stAng), num(a.swAng)];
+        if (wR === undefined || hR === undefined || st === undefined || sw === undefined) return undefined;
+        const t0 = (st / 60000) * (Math.PI / 180);
+        const [ox, oy] = [cur[0] - wR * Math.cos(t0), cur[1] - hR * Math.sin(t0)];
+        // In pieces of at most a quarter turn, so a full circle is drawn too.
+        const steps = Math.max(1, Math.ceil(Math.abs(sw) / 60000 / 90));
+        for (let i = 1; i <= steps; i++) {
+          const t = t0 + ((sw / 60000) * (Math.PI / 180) * i) / steps;
+          cur = [ox + wR * Math.cos(t), oy + hR * Math.sin(t)];
+          const clockwise = sw > 0 !== (flipH !== flipV);
+          out.push(`A${r2((wR / pw) * 100)},${r2((hR / ph) * 100)} 0 0 ${clockwise ? 1 : 0} ${r2(X(cur[0]))},${r2(Y(cur[1]))}`);
+          mark(cur);
+        }
+        continue;
+      }
+      const pts = points(cmd);
+      if (!pts) return undefined;
+      const xy = pts.map((q) => `${r2(X(q[0]))},${r2(Y(q[1]))}`).join(' ');
+      if (tag === 'a:moveTo' && pts.length === 1) {
+        figures++;
+        out.push(`M${xy}`);
+        mark(pts[0]);
+      } else if (tag === 'a:lnTo' && pts.length === 1) {
+        out.push(`L${xy}`);
+        mark(pts[0]);
+      } else if ((tag === 'a:cubicBezTo' && pts.length === 3) || (tag === 'a:quadBezTo' && pts.length === 2)) {
+        out.push(`${pts.length === 3 ? 'C' : 'Q'}${xy}`);
+        // Flattened for the clip outline: points along the curve.
+        const ctrl = [cur, ...pts];
+        for (let i = 1; i <= 6; i++) {
+          const t = i / 6;
+          let level = ctrl;
+          while (level.length > 1) level = level.slice(1).map((q, k) => [level[k][0] + (q[0] - level[k][0]) * t, level[k][1] + (q[1] - level[k][1]) * t] as [number, number]);
+          mark(level[0]);
+        }
+      } else continue;
+      cur = pts[pts.length - 1];
+    }
+  }
+  return out.length ? { d: out.join(' '), poly: poly.slice(0, 400) } : undefined;
+}
+
+const CAPS_FONTS = /^(felix titling|trajan( pro)?|castellar|engravers mt|copperplate gothic( bold| light)?|stencil)$/i;
 const FONT_WEIGHT = /\s+(Black|Extra ?Bold|Heavy|Bold|Semi ?Bold|Medium|Regular|Light|Extra ?Light|Thin)$/i;
 
 /** Split "Poppins Black" into the family and whether that weight counts as bold. */
@@ -874,7 +1389,7 @@ function fontOf(typeface: string | undefined): { name?: string; bold: boolean } 
 }
 
 function sameType(a: string | undefined, b: string | undefined): boolean {
-  const norm = (t: string | undefined) => (t === 'ctrTitle' ? 'title' : t === 'obj' || t === undefined ? 'body' : t);
+  const norm = (t: string | undefined) => (t === 'ctrTitle' ? 'title' : t === 'obj' || t === 'subTitle' || t === undefined ? 'body' : t);
   return norm(a) === norm(b);
 }
 

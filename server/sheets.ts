@@ -10,13 +10,15 @@ import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workboo
 import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
 
-interface SheetRow {
+export interface SheetRow {
   id: string;
   owner_id: string;
   kind: DocKind;
   /** 'csv' for a spreadsheet stored as CSV text; null otherwise. */
   format: string | null;
   title: string;
+  /** Path of the folder the document is in; '' at the top. */
+  folder: string;
   file: string;
   created_at: string;
   updated_at: string;
@@ -37,6 +39,7 @@ const toMeta = (r: SheetRow): SheetMeta => ({
   kind: r.kind,
   ...(r.format === 'csv' ? { format: 'csv' as const } : {}),
   title: r.title,
+  ...(r.folder ? { folder: r.folder } : {}),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   ...(r.parent_id
@@ -53,7 +56,7 @@ const toMeta = (r: SheetRow): SheetMeta => ({
 
 const baseFileOf = (id: string) => `${id}.base.json`;
 
-type Stored = Workbook | Deck | Doc | MarkdownDoc | CsvDoc;
+export type Stored = Workbook | Deck | Doc | MarkdownDoc | CsvDoc;
 
 /** Structural validation of an uploaded workbook (guards against malformed saves, not a full schema). */
 export function validateWorkbook(wb: unknown): string | null {
@@ -96,8 +99,8 @@ export function validateWorkbook(wb: unknown): string | null {
  * load still returns a workbook, and save writes CSV for as long as the workbook fits in one.
  */
 export class SheetStore {
-  private db: DB;
-  private dir: string;
+  protected db: DB;
+  protected dir: string;
   // Serialize writes per document so concurrent saves can't interleave on disk.
   private writeChains = new Map<string, Promise<void>>();
   /** The off-box copy (backup.ts): every write, base and delete is reported to it when set. */
@@ -112,8 +115,41 @@ export class SheetStore {
     await mkdir(this.dir, { recursive: true });
   }
 
-  private filePath(file: string): string {
+  protected filePath(file: string): string {
     return path.join(this.dir, file);
+  }
+
+  // --- How documents are laid out on disk. The folder-backed store of the desktop app (server/localStore.ts)
+  // overrides these to keep real files (.md, .csv, ...) under the names the user gave them. ---
+
+  /** The file for a new document, relative to the store's directory, and the title it ends up with. */
+  protected newFile(id: string, _kind: DocKind, _format: 'csv' | null, title: string, _folder: string): { file: string; title: string } {
+    return { file: `${id}.json`, title };
+  }
+
+  /** The text written to a document's file. */
+  protected encode(_file: string, doc: Stored): string {
+    return JSON.stringify(doc);
+  }
+
+  /** The document read from the text of its file. */
+  protected decode(_file: string, text: string): Stored {
+    return JSON.parse(text) as Stored;
+  }
+
+  /** Where a branch's snapshot of its original is kept. */
+  protected basePath(id: string): string {
+    return this.filePath(baseFileOf(id));
+  }
+
+  /** The modification time recorded for a file that was just written. */
+  protected stamp(_file: string): string {
+    return new Date().toISOString();
+  }
+
+  /** Remove a deleted document's file. */
+  protected async removeFile(r: SheetRow): Promise<void> {
+    await rm(this.filePath(r.file), { force: true });
   }
 
   /** Documents of one kind (spreadsheets by default), most recently edited first. */
@@ -124,7 +160,7 @@ export class SheetStore {
     return rows.map(toMeta);
   }
 
-  private row(ownerId: string, id: string, kind?: DocKind): SheetRow | undefined {
+  protected row(ownerId: string, id: string, kind?: DocKind): SheetRow | undefined {
     const r = this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ? AND s.owner_id = ?`).get(id, ownerId) as SheetRow | undefined;
     return r && (!kind || r.kind === kind) ? r : undefined;
   }
@@ -135,43 +171,67 @@ export class SheetStore {
     return r ? toMeta(r) : null;
   }
 
-  private async insert(ownerId: string, kind: DocKind, title: string, doc: Stored, format: 'csv' | null = null): Promise<SheetMeta> {
+  private async insert(ownerId: string, kind: DocKind, wanted: string, doc: Stored, folder = '', format: 'csv' | null = null): Promise<SheetMeta> {
     const id = randomUUID();
-    const file = `${id}.json`;
-    const json = await this.writeAtomic(file, doc);
-    const now = new Date().toISOString();
+    const { file, title } = this.newFile(id, kind, format, wanted, folder);
+    const json = await this.writeDoc(file, doc);
+    const now = this.stamp(file);
     this.db
-      .prepare('INSERT INTO sheets (id, owner_id, kind, format, title, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, ownerId, kind, format, title, file, now, now);
+      .prepare('INSERT INTO sheets (id, owner_id, kind, format, title, folder, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, ownerId, kind, format, title, folder, file, now, now);
     this.backup?.putFile(ownerId, kind, id, now, json);
-    return { id, kind, ...(format ? { format } : {}), title, createdAt: now, updatedAt: now };
+    return { id, kind, ...(format ? { format } : {}), title, ...(folder ? { folder } : {}), createdAt: now, updatedAt: now };
+  }
+
+  /** Documents of every kind in one folder, most recently edited first. */
+  listIn(ownerId: string, folder: string): SheetMeta[] {
+    const rows = this.db.prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? AND s.folder = ? ORDER BY s.updated_at DESC`).all(ownerId, folder) as unknown as SheetRow[];
+    return rows.map(toMeta);
+  }
+
+  /** Documents of every kind, in any folder, whose title contains the text; most recently edited first. */
+  async search(ownerId: string, text: string, limit = 200): Promise<SheetMeta[]> {
+    const rows = this.db
+      .prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? AND instr(lower(s.title), lower(?)) > 0 ORDER BY s.updated_at DESC LIMIT ?`)
+      .all(ownerId, text, limit) as unknown as SheetRow[];
+    return rows.map(toMeta);
+  }
+
+  /** Put a document in another folder. */
+  move(ownerId: string, id: string, folder: string): SheetMeta | null {
+    const r = this.row(ownerId, id);
+    if (!r) return null;
+    this.db.prepare('UPDATE sheets SET folder = ? WHERE id = ?').run(folder, id);
+    return toMeta({ ...r, folder });
   }
 
   /** Create a spreadsheet stored as CSV text. Throws CsvError if the text cannot be opened as one. */
-  async createCsv(ownerId: string, title: string, csv: string): Promise<SheetMeta> {
+  async createCsv(ownerId: string, title: string, csv: string, folder = ''): Promise<SheetMeta> {
     csvToWorkbook(csv);
-    return this.insert(ownerId, 'sheet', title, newCsvDoc(csv), 'csv');
+    return this.insert(ownerId, 'sheet', title, newCsvDoc(csv), folder, 'csv');
   }
 
-  async create(ownerId: string, title: string, workbook?: Workbook): Promise<SheetMeta> {
-    return this.insert(ownerId, 'sheet', title, workbook ?? newWorkbook(randomUUID()));
+  async create(ownerId: string, title: string, workbook?: Workbook, folder = ''): Promise<SheetMeta> {
+    return this.insert(ownerId, 'sheet', title, workbook ?? newWorkbook(randomUUID()), folder);
   }
 
   /** Create a branch: a copy of the sheet that remembers its original and keeps a snapshot (base) of it. */
-  async branch(ownerId: string, sourceId: string, title: string): Promise<SheetMeta | null> {
+  async branch(ownerId: string, sourceId: string, wanted: string): Promise<SheetMeta | null> {
     const src = await this.load(ownerId, sourceId);
     if (!src) return null;
     const id = randomUUID();
-    const file = `${id}.json`;
-    const json = await this.writeAtomic(file, src.workbook);
-    await this.writeAtomic(baseFileOf(id), src.workbook);
-    const now = new Date().toISOString();
+    // A branch starts next to its original.
+    const folder = src.meta.folder ?? '';
+    const { file, title } = this.newFile(id, 'sheet', null, wanted, folder);
+    const json = await this.writeDoc(file, src.workbook);
+    await writeAtomic(this.basePath(id), JSON.stringify(src.workbook));
+    const now = this.stamp(file);
     this.db
       .prepare(
-        `INSERT INTO sheets (id, owner_id, kind, title, file, created_at, updated_at, parent_id, parent_title, branched_at)
-         VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sheets (id, owner_id, kind, title, folder, file, created_at, updated_at, parent_id, parent_title, branched_at)
+         VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, ownerId, title, file, now, now, sourceId, src.meta.title, now);
+      .run(id, ownerId, title, folder, file, now, now, sourceId, src.meta.title, now);
     this.backup?.putFile(ownerId, 'sheet', id, now, json);
     this.backup?.putBase(ownerId, id, json);
     return this.get(ownerId, id);
@@ -182,14 +242,14 @@ export class SheetStore {
     const r = this.row(ownerId, id, 'sheet');
     if (!r) return null;
     if (!r.parent_id) return 'not-branch';
-    const base = JSON.parse(await readFile(this.filePath(baseFileOf(id)), 'utf8')) as Workbook;
+    const base = JSON.parse(await readFile(this.basePath(id), 'utf8')) as Workbook;
     const parent = await this.load(ownerId, r.parent_id);
     return { meta: toMeta(r), base, original: parent?.workbook ?? null, parent: parent?.meta ?? null };
   }
 
   private async read<T>(r: SheetRow): Promise<T> {
     await this.writeChains.get(r.id);
-    return JSON.parse(await readFile(this.filePath(r.file), 'utf8')) as T;
+    return this.decode(r.file, await readFile(this.filePath(r.file), 'utf8')) as T;
   }
 
   async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook } | null> {
@@ -202,17 +262,17 @@ export class SheetStore {
     return { meta: toMeta(r), workbook: csv ? csvToWorkbook(stored.csv) : stored };
   }
 
-  private setFormat(r: SheetRow, format: 'csv' | null): void {
+  protected setFormat(r: SheetRow, format: 'csv' | null): void {
     this.db.prepare('UPDATE sheets SET format = ? WHERE id = ?').run(format, r.id);
     r.format = format;
   }
 
   private async write(r: SheetRow, doc: Stored): Promise<SheetMeta> {
     const prev = this.writeChains.get(r.id) ?? Promise.resolve();
-    const next = prev.then(() => this.writeAtomic(r.file, doc));
+    const next = prev.then(() => this.writeDoc(r.file, doc));
     this.writeChains.set(r.id, next.then(() => {}, () => {}));
     const json = await next;
-    const now = new Date().toISOString();
+    const now = this.stamp(r.file);
     this.db.prepare('UPDATE sheets SET updated_at = ? WHERE id = ?').run(now, r.id);
     this.backup?.putFile(r.owner_id, r.kind, r.id, now, json);
     return { ...toMeta(r), updatedAt: now };
@@ -244,8 +304,8 @@ export class SheetStore {
 
   // --- Slide decks -------------------------------------------------------------
 
-  async createDeck(ownerId: string, title: string, deck: Deck): Promise<SheetMeta> {
-    return this.insert(ownerId, 'deck', title, deck);
+  async createDeck(ownerId: string, title: string, deck: Deck, folder = ''): Promise<SheetMeta> {
+    return this.insert(ownerId, 'deck', title, deck, folder);
   }
 
   async loadDeck(ownerId: string, id: string): Promise<{ meta: SheetMeta; deck: Deck } | null> {
@@ -261,8 +321,8 @@ export class SheetStore {
 
   // --- Text documents ------------------------------------------------------------
 
-  async createDoc(ownerId: string, title: string, doc: Doc): Promise<SheetMeta> {
-    return this.insert(ownerId, 'doc', title, doc);
+  async createDoc(ownerId: string, title: string, doc: Doc, folder = ''): Promise<SheetMeta> {
+    return this.insert(ownerId, 'doc', title, doc, folder);
   }
 
   async loadDoc(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: Doc } | null> {
@@ -278,8 +338,8 @@ export class SheetStore {
 
   // --- Markdown documents --------------------------------------------------------
 
-  async createMarkdown(ownerId: string, title: string, doc: MarkdownDoc): Promise<SheetMeta> {
-    return this.insert(ownerId, 'markdown', title, doc);
+  async createMarkdown(ownerId: string, title: string, doc: MarkdownDoc, folder = ''): Promise<SheetMeta> {
+    return this.insert(ownerId, 'markdown', title, doc, folder);
   }
 
   async loadMarkdown(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: MarkdownDoc } | null> {
@@ -309,8 +369,8 @@ export class SheetStore {
     this.db.prepare('DELETE FROM sheets WHERE id = ?').run(id);
     await this.writeChains.get(id);
     this.writeChains.delete(id);
-    await rm(this.filePath(r.file), { force: true });
-    await rm(this.filePath(baseFileOf(id)), { force: true });
+    await this.removeFile(r);
+    await rm(this.basePath(id), { force: true });
     this.backup?.markDeleted(r.owner_id, r.kind, id, r.title);
     return true;
   }
@@ -319,10 +379,7 @@ export class SheetStore {
   async restore(ownerId: string, kind: DocKind, id: string, title: string, json: string): Promise<SheetMeta> {
     if (this.db.prepare('SELECT 1 FROM sheets WHERE id = ?').get(id)) throw new Error('A file with this id already exists');
     const file = `${id}.json`;
-    const target = this.filePath(file);
-    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmp, json);
-    await rename(tmp, target);
+    await writeAtomic(this.filePath(file), json);
     const now = new Date().toISOString();
     // CSV files are written as {"version":1,"csv":...}; load corrects the column if this guess is ever wrong.
     const format = kind === 'sheet' && /^\s*\{"version":1,"csv":/.test(json) ? 'csv' : null;
@@ -333,13 +390,17 @@ export class SheetStore {
     return { id, kind, ...(format ? { format } : {}), title, createdAt: now, updatedAt: now };
   }
 
-  /** Writes the file (temp file, then rename) and returns the JSON written. */
-  private async writeAtomic(file: string, doc: Stored): Promise<string> {
-    const target = this.filePath(file);
-    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    const json = JSON.stringify(doc);
-    await writeFile(tmp, json);
-    await rename(tmp, target);
-    return json;
+  /** Writes the document to its file and returns the text written. */
+  private async writeDoc(file: string, doc: Stored): Promise<string> {
+    const text = this.encode(file, doc);
+    await writeAtomic(this.filePath(file), text);
+    return text;
   }
+}
+
+/** Writes a file so a reader never sees half of it: a temp file next to it, then a rename. */
+export async function writeAtomic(target: string, data: string | Buffer): Promise<void> {
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, data);
+  await rename(tmp, target);
 }

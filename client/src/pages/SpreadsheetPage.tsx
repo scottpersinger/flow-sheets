@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
 import { cellKey } from '../../../shared/cellref.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterSheet } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
-import { useAuth } from '../auth.tsx';
+import { Account } from '../components/Account.tsx';
 import {
   cellContextItems,
   dataItems,
@@ -123,7 +124,6 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
   useController(ctl);
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout } = useAuth();
   // Notes from an Excel import: arrive via navigation state (home-page import) or from File → Import.
   const [importWarnings, setImportWarnings] = useState<string[]>(
     () => (location.state as { importWarnings?: string[] } | null)?.importWarnings ?? [],
@@ -331,11 +331,12 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
   return (
     <div className="workbench">
       <header className="wb-header">
-        <Link to="/" className="wb-logo" title="Back to spreadsheets" onClick={() => void ctl.saver.flush()}>
+        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
           <Logo size={32} />
         </Link>
         <div className="wb-titles">
           <div className="wb-title-row">
+            <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
             <input
               className="wb-title"
               value={title}
@@ -401,10 +402,7 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
         </div>
         <div className="wb-user">
           <AgentButton />
-          <span title={user?.email}>{user?.email}</span>
-          <button className="btn" onClick={() => void ctl.saver.flush().then(logout)}>
-            Sign out
-          </button>
+          <Account before={() => ctl.saver.flush()} />
         </div>
       </header>
       <Toolbar host={host} />

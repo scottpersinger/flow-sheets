@@ -38,6 +38,15 @@ export interface TextStyle {
   lineHeight?: number;
   /** Space between paragraphs in points. Defaults to 0.3 × the font size. */
   paraSpacing?: number;
+  /** Draw the letters as an outline in this CSS color, with no fill. */
+  outline?: string;
+  /** Show the text in capitals. */
+  caps?: boolean;
+  /** Extra space between letters in points. */
+  spacing?: number;
+  /** The bullet character (default "•") and its CSS color (default: the theme accent). */
+  bulletChar?: string;
+  bulletColor?: string;
 }
 
 /** A styled span inside a paragraph: a hyperlink, or a few words in another weight or color. */
@@ -72,6 +81,8 @@ interface ElementBase {
   y: number;
   w: number;
   h: number;
+  /** Rotation about the center of the box, in degrees clockwise. */
+  rot?: number;
 }
 
 export interface TextElement extends ElementBase {
@@ -88,6 +99,17 @@ export interface ImageElement extends ElementBase {
   src: string;
   /** How the image fills the box. Defaults to contain. */
   fit?: 'contain' | 'cover';
+  /**
+   * The part of the picture to show, as the fraction cut from each side (negative values add a margin). A
+   * cropped picture is stretched to its box.
+   */
+  crop?: { l: number; t: number; r: number; b: number };
+  /** A CSS clip-path basic shape (ellipse(), circle(), inset() or polygon() in percentages) the picture is cut to. */
+  clip?: string;
+  /** 0 (invisible) to 1 (opaque, the default). */
+  opacity?: number;
+  /** Redraw the picture in two colors: its darkest tones in the first (#rrggbb), its lightest in the second. */
+  duotone?: [string, string];
 }
 
 export interface ShapeElement extends ElementBase {
@@ -100,8 +122,16 @@ export interface ShapeElement extends ElementBase {
   /** Lines: arrowheads at the end (the right, or the bottom of a vertical line), the start, or both. */
   arrow?: 'start' | 'end' | 'both';
   flip?: boolean;
-  /** Fill color (any CSS color, including rgba() for translucency); defaults to the theme accent. "none" for no fill. */
+  /**
+   * Fill color (any CSS color, including rgba() for translucency); defaults to the theme accent. "none" for no fill.
+   * Rectangles, rounded rectangles and ellipses also take a CSS linear-gradient() or radial-gradient().
+   */
   fill?: string;
+  /**
+   * A freeform outline drawn instead of the shape: SVG path data in a 100×100 box that is stretched to the
+   * element's size.
+   */
+  path?: string;
   stroke?: string;
   strokeWidth?: number;
   /** Arc shapes: start and end angle in degrees, clockwise from 3 o'clock. Default 270 and 0 (the top-right quarter). */
@@ -159,7 +189,7 @@ export interface Slide {
   id: string;
   /** Layout the slide was built from, for the UI's "layout" picker. */
   layout?: LayoutId;
-  /** Background color; defaults to the theme background. */
+  /** Background color (or a CSS gradient); defaults to the theme background. */
   bg?: string;
   /** Speaker notes. */
   notes?: string;
@@ -482,6 +512,18 @@ const MAX_RUNS = 200;
 const COORD = 20_000;
 
 const isColor = (v: unknown) => typeof v === 'string' && v.length <= 64;
+/** A color or a CSS gradient of colors. */
+const isPaint = (v: unknown) => isColor(v) || (typeof v === 'string' && v.length <= 400 && GRADIENT_RE.test(v));
+const GRADIENT_RE = /^(linear|radial)-gradient\([-#(),.%\w\s]*\)$/;
+const CLIP_RE = /^(ellipse|circle|inset|polygon)\([-,.%\w\s]*\)$/;
+const PATH_RE = /^[-MLHVCSQTAZmlhvcsqtaz\d\s,.e]*$/;
+const MAX_PATH = 20_000;
+
+/** The first plain color of a fill: the fill itself, or the first color stop of a gradient. */
+export function fillColor(fill: string | undefined): string | undefined {
+  if (!fill || !GRADIENT_RE.test(fill)) return fill;
+  return /#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/i.exec(fill)?.[0];
+}
 const num = (v: unknown, lo: number, hi: number) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 
 export function validateElement(e: unknown, where: string): string | null {
@@ -490,6 +532,7 @@ export function validateElement(e: unknown, where: string): string | null {
   if (typeof el.id !== 'string' || !el.id) return `${where}: element without id`;
   for (const k of ['x', 'y', 'w', 'h'] as const) if (!num(el[k], -COORD, COORD)) return `${where}: element ${el.id} has an invalid ${k}`;
   if (el.w < 0 || el.h < 0) return `${where}: element ${el.id} has a negative size`;
+  if (el.rot !== undefined && !num(el.rot, -360, 360)) return `${where}: element ${el.id} has an invalid rotation`;
   switch (el.type) {
     case 'text': {
       if (el.role !== undefined && !['title', 'subtitle', 'body', 'caption'].includes(el.role)) return `${where}: invalid text role`;
@@ -523,6 +566,10 @@ export function validateElement(e: unknown, where: string): string | null {
         if (s.font !== undefined && (typeof s.font !== 'string' || s.font.length > 64)) return `${where}: invalid font`;
         if (s.lineHeight !== undefined && !num(s.lineHeight, 0.5, 4)) return `${where}: invalid line height`;
         if (s.paraSpacing !== undefined && !num(s.paraSpacing, 0, 200)) return `${where}: invalid paragraph spacing`;
+        if (s.outline !== undefined && !isColor(s.outline)) return `${where}: invalid outline color`;
+        if (s.spacing !== undefined && !num(s.spacing, -20, 100)) return `${where}: invalid letter spacing`;
+        if (s.bulletChar !== undefined && (typeof s.bulletChar !== 'string' || s.bulletChar.length > 4)) return `${where}: invalid bullet character`;
+        if (s.bulletColor !== undefined && !isColor(s.bulletColor)) return `${where}: invalid bullet color`;
       }
       return null;
     }
@@ -530,6 +577,13 @@ export function validateElement(e: unknown, where: string): string | null {
       const problem = checkCellImage(el.src);
       if (problem) return `${where}: ${problem}`;
       if (el.fit !== undefined && el.fit !== 'contain' && el.fit !== 'cover') return `${where}: invalid fit`;
+      if (el.crop !== undefined) {
+        const c = el.crop;
+        if (!c || !(['l', 't', 'r', 'b'] as const).every((k) => num(c[k], -10, 0.99)) || c.l + c.r >= 1 || c.t + c.b >= 1) return `${where}: invalid crop`;
+      }
+      if (el.clip !== undefined && (typeof el.clip !== 'string' || el.clip.length > MAX_PATH || !CLIP_RE.test(el.clip))) return `${where}: invalid clip`;
+      if (el.opacity !== undefined && !num(el.opacity, 0, 1)) return `${where}: invalid opacity`;
+      if (el.duotone !== undefined && !(Array.isArray(el.duotone) && el.duotone.length === 2 && el.duotone.every((c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c)))) return `${where}: invalid duotone`;
       return null;
     }
     case 'line': {
@@ -548,7 +602,8 @@ export function validateElement(e: unknown, where: string): string | null {
     }
     case 'shape': {
       if (!SHAPE_KINDS.includes(el.shape)) return `${where}: invalid shape`;
-      if (el.fill !== undefined && !isColor(el.fill)) return `${where}: invalid fill`;
+      if (el.fill !== undefined && !isPaint(el.fill)) return `${where}: invalid fill`;
+      if (el.path !== undefined && (typeof el.path !== 'string' || el.path.length > MAX_PATH || !PATH_RE.test(el.path))) return `${where}: invalid path`;
       if (el.stroke !== undefined && !isColor(el.stroke)) return `${where}: invalid stroke`;
       if (el.strokeWidth !== undefined && !num(el.strokeWidth, 0, 100)) return `${where}: invalid stroke width`;
       if (el.startAngle !== undefined && !num(el.startAngle, -360, 720)) return `${where}: invalid start angle`;
@@ -581,7 +636,7 @@ export function validateDeck(d: unknown): string | null {
     if (typeof s.id !== 'string' || !s.id || ids.has(s.id)) return `${where}: invalid or duplicate slide id`;
     ids.add(s.id);
     if (s.layout !== undefined && !LAYOUT_IDS.includes(s.layout)) return `${where}: unknown layout`;
-    if (s.bg !== undefined && !isColor(s.bg)) return `${where}: invalid background`;
+    if (s.bg !== undefined && !isPaint(s.bg)) return `${where}: invalid background`;
     if (s.notes !== undefined && (typeof s.notes !== 'string' || s.notes.length > MAX_TEXT)) return `${where}: invalid notes`;
     if (!Array.isArray(s.elements) || s.elements.length > MAX_ELEMENTS) return `${where}: invalid elements`;
     const eids = new Set<string>();

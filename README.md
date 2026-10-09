@@ -18,6 +18,47 @@ npm run build && npm start   # production: serves dist/client and the API on :30
 
 Requires Node 22.18+. The server runs TypeScript directly through Node's built-in type stripping and uses the built-in `node:sqlite`.
 
+## Desktop app
+
+The same app runs on your machine with a folder as its library, in Electron (`desktop/`):
+
+```
+npm run desktop                 # build the client, then open the current directory
+npm run desktop -- ~/Documents  # or a folder you name
+npm link                        # once, to get the `freeflow` command:
+cd ~/Documents && freeflow      # open the directory you are in (after `npm run build`)
+```
+
+The folder's files are the file list and its directories are the library's folders (see Folders below; hidden entries and `node_modules` are skipped). A file's name in the list is its file name without the extension. **File → Open Folder…** switches to another folder. There is no account and nothing to sign in to.
+
+- Markdown (`.md`) and CSV (`.csv`) files open in their editors and are saved back as the plain text they are.
+- New spreadsheets, presentations and documents are saved in the folder as `.ffsheet`, `.ffslides` and `.ffdoc` files (the app's JSON formats). A CSV file that is converted to a spreadsheet becomes a `.ffsheet` file.
+- PDFs and images open in a preview, and videos (`.mp4`, `.m4v`, `.mov`, `.webm`, `.ogv`) in a player. Excel, PowerPoint and Word files are listed and are not edited in place: **Open as spreadsheet** (or presentation, document) saves an editable copy next to the original.
+- Renaming a file in the app renames it on disk, and **Move to…** moves it into another directory. Deleting moves the file out of the folder into the app's data directory (`trash/`), not the system trash.
+- A file changed by another program while it is open in the app is not overwritten: the save is refused.
+
+The app's own data for a folder (the assistant's chat, settings, pasted images, branch snapshots, deleted files) is kept under Electron's user data directory (`~/Library/Application Support/FreeFlow Docs/folders/` on macOS), not in the folder. Images pasted into a file are therefore not part of the file. The assistant uses `ANTHROPIC_API_KEY` from the environment or the project's `.env`, or an OpenAI key from Settings. On macOS the `freeflow` command starts the app through LaunchServices, so the app itself (listed as Electron until it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a folder it may not read shows a message saying so. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows.
+
+### Packaging
+
+`npm run desktop:win` builds the Windows app with electron-builder into `release/`: an installer (`FreeFlow Docs Setup <version>.exe`) and a zip of the same files, both for x64. It can be run on macOS; without Wine the `.exe` keeps Electron's icon and is not code-signed, so Windows shows its "unknown publisher" warning on first run. `npm run desktop:pack` builds the unpacked app for the machine it runs on, to try the packaged layout.
+
+The packaged app holds the server's TypeScript as plain files (`asar` is off), which Electron's Node runs as it does in development. Started from its icon it reopens the folder it showed last, or asks for one the first time; a folder can also be given on its command line. It reads no `.env`: the assistant needs `ANTHROPIC_API_KEY` in the environment or an OpenAI key in Settings.
+
+## Videos
+
+A video file (`.mp4`, `.m4v`, `.mov`, `.webm`, `.ogv`) opens in a page with the browser's player. On the web, import one from the home page (the Import tile or a drop, 100 MB maximum); it is stored as the file it is, like a PDF. The server answers Range requests for stored files, so the player can seek without downloading the whole file. Whether a file plays depends on its codec: H.264 and VP8/VP9 play everywhere, while HEVC (the default of recent iPhones) does not play in every browser.
+
+## Folders
+
+The file list shows one folder at a time. **New folder** creates one inside the folder being shown, clicking a folder opens it, and the breadcrumbs over the list lead back up; the folder is part of the address (`/?folder=Reports/2026`). New and imported files go into the folder being shown, **Move to…** in a file's menu moves it, and a folder can be deleted once it is empty. Typing anywhere on the page filters the folder being shown; **Find files**, under the filtered list, looks for the same text in the names of files and folders in every folder (`GET /api/library/search?q=`) and shows where each match is. In the desktop app that walks the mounted folder level by level for up to a minute, and says so when a very large tree could not be covered; with a home directory mounted, its `Library` is left out. The search is part of the address too (`&q=plan`, and `&find=1` for Find files), and an open file's logo and breadcrumb links lead back to the list as it was, so the same results are there after looking at a file. Folders cannot be renamed or moved yet, and the assistant lists and creates files without regard to folders (what it creates lands at the top).
+
+The switch over the files shows them as a list or as thumbnails (remembered per browser). A thumbnail is the image itself, a frame of a video, the first page of a PDF (drawn by pdf.js, loaded only then), or a small rendering of how a document, spreadsheet or presentation starts (`shared/preview.ts`, `GET /api/library/preview/:id`); each is fetched when its card scrolls into view. Excel, PowerPoint and Word files show an icon.
+
+Clicking a file opens it in place, inside its folder: the page header shows the folders down to the file as breadcrumbs, each a link back to the file list there. The **Open ↗** button on a row opens the file in a new browser tab instead; in the desktop app that is a new tab of the window (macOS) or a new window.
+
+On the server a folder is a row (`folders` table, `server/folders.ts`) and each file records the path of its folder; in the desktop app folders are the directories of the mounted folder. `GET /api/library?folder=` returns a folder's folders, documents and stored files.
+
 ## Self-improvement
 
 When the assistant can't do something, it offers to add the capability to the app. If the user agrees, it calls `request_app_change` with a spec, the user confirms in the panel, and after the reply ends the server starts a detached worker (`server/agent/worker.ts`) that runs Claude Code in the repository through the Claude Agent SDK. Claude Code reads `CLAUDE.md` (which explains how to add an assistant tool), makes the change, and runs typecheck and tests; the worker verifies both again. When the change is live the browser reloads and sends the assistant a message with the summary, and it finishes the original request with its new tool.

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "freeflow": "desktop/cli.js"
+  },
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --watch --watch-path=server --watch-path=shared server/index.ts",
@@ -16,7 +19,11 @@
     "plugin:build": "vite build --config plugin/vite.config.ts",
     "plugin:watch": "vite build --config plugin/vite.config.ts --watch",
     "plugin:harness": "vite --config plugin/vite.config.ts",
-    "r2": "node server/scripts/r2.ts"
+    "r2": "node server/scripts/r2.ts",
+    "desktop": "vite build && node desktop/cli.js",
+    "desktop:start": "node desktop/cli.js",
+    "desktop:win": "vite build && electron-builder --win --x64",
+    "desktop:pack": "vite build && electron-builder --dir"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.288",
@@ -34,6 +41,7 @@
     "github-markdown-css": "^5.9.0",
     "jszip": "^3.10.2",
     "openai": "^7.30.0",
+    "pdfjs-dist": "^6.4.299",
     "pptxgenjs": "^4.0.1",
     "prosemirror-commands": "^1.7.2",
     "prosemirror-dropcursor": "^1.8.4",
@@ -62,6 +70,8 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
     "railway": "^3.12.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
@@ -77,5 +87,57 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "main": "desktop/main.js",
+  "description": "FreeFlow Docs: spreadsheets, documents and presentations",
+  "author": "FreeFlow",
+  "build": {
+    "appId": "im.freeflow.docs",
+    "productName": "FreeFlow Docs",
+    "directories": {
+      "output": "release"
+    },
+    "asar": false,
+    "files": [
+      "package.json",
+      "desktop/**",
+      "server/**",
+      "shared/**",
+      "client/src/**",
+      "plugin/server/**",
+      "dist/client/**",
+      "!**/*.test.ts",
+      "!**/*.test.tsx",
+      "!server/fixtures/**",
+      "!server/scripts/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk*/**",
+      "!node_modules/pdfjs-dist/**",
+      "!node_modules/@napi-rs/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dir",
+      "identity": null
+    }
   }
 }

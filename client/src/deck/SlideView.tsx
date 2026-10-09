@@ -7,6 +7,8 @@ import {
   SLIDE_H,
   SLIDE_W,
   THEMES,
+  fillColor,
+  type ImageElement,
   type LineElement,
   type Paragraph,
   type ShapeElement,
@@ -18,6 +20,7 @@ import {
   type ThemeId,
 } from '../../../shared/deck.ts';
 import { createPortal } from 'react-dom';
+import { fontFamilies } from './fonts.ts';
 import { dashArray, DEFAULT_LINE_WIDTH, lineGeometry as routeGeometry } from '../../../shared/lines.ts';
 import { arcPath, isDrawn, polygonPoints, SHAPES } from '../../../shared/shapes.ts';
 
@@ -59,7 +62,7 @@ export function textStyleOf(el: TextElement, theme: Theme): CSSProperties {
   const themeFont = heading ? theme.headingFont : theme.bodyFont;
   return {
     fontSize: size,
-    fontFamily: s.font ? `"${s.font.replace(/"/g, '')}", ${themeFont}` : themeFont,
+    fontFamily: s.font ? `${fontFamilies(s.font)}, ${themeFont}` : themeFont,
     lineHeight: s.lineHeight ?? 1.25,
     ['--sl-para' as string]: `${s.paraSpacing ?? size * 0.3}px`,
     fontWeight: s.bold ?? role === 'title' ? 700 : 400,
@@ -68,6 +71,11 @@ export function textStyleOf(el: TextElement, theme: Theme): CSSProperties {
     // Links follow a color the box sets; otherwise they take the theme accent (styles.css, .sl-link).
     ...(s.color ? { ['--sl-link' as string]: s.color } : {}),
     textAlign: s.align ?? 'left',
+    ...(s.outline ? { color: 'transparent', WebkitTextStroke: `${Math.max(0.75, size / 60)}px ${s.outline}` } : {}),
+    ...(s.caps ? { textTransform: 'uppercase' as const } : {}),
+    ...(s.spacing ? { letterSpacing: s.spacing } : {}),
+    ...(s.bulletChar ? { ['--sl-bullet' as string]: JSON.stringify(s.bulletChar) } : {}),
+    ...(s.bulletColor ? { ['--sl-bullet-color' as string]: s.bulletColor } : {}),
     justifyContent: s.valign === 'middle' ? 'center' : s.valign === 'bottom' ? 'flex-end' : 'flex-start',
   };
 }
@@ -75,6 +83,7 @@ export function textStyleOf(el: TextElement, theme: Theme): CSSProperties {
 function boxStyle(el: SlideElement, preview?: BoxPreview): CSSProperties {
   const b = { x: el.x, y: el.y, w: el.w, h: el.h, ...preview };
   const style: CSSProperties = { left: b.x, top: b.y, width: b.w, height: b.h };
+  if (el.rot) style.transform = `rotate(${el.rot}deg)`;
   // A straight line's thickness comes from its stroke; the vertical/horizontal style overrides the zero dimension.
   if (el.type === 'shape' && el.shape === 'line' && !isDiagonal(el)) {
     const sw = el.strokeWidth ?? 3;
@@ -87,6 +96,32 @@ function boxStyle(el: SlideElement, preview?: BoxPreview): CSSProperties {
     }
   }
   return style;
+}
+
+/** How the picture sits in its box: fitted whole, covering it, or (cropped) its visible part stretched over it. */
+function imageStyle(el: ImageElement): CSSProperties {
+  const c = el.crop;
+  if (!c) return { objectFit: el.fit ?? 'contain' };
+  const w = 1 - c.l - c.r;
+  const h = 1 - c.t - c.b;
+  return { position: 'absolute', objectFit: 'fill', width: `${100 / w}%`, height: `${100 / h}%`, left: `${(-c.l / w) * 100}%`, top: `${(-c.t / h) * 100}%` };
+}
+
+/** An SVG filter that maps a picture's brightness onto the line from one color to another. */
+function DuotoneFilter({ id, tones }: { id: string; tones: [string, string] }) {
+  const ch = (i: number) => tones.map((c) => (parseInt(c.slice(1 + i * 2, 3 + i * 2), 16) / 255).toFixed(3)).join(' ');
+  return (
+    <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true">
+      <filter id={id} colorInterpolationFilters="sRGB">
+        <feColorMatrix type="saturate" values="0" />
+        <feComponentTransfer>
+          <feFuncR type="table" tableValues={ch(0)} />
+          <feFuncG type="table" tableValues={ch(1)} />
+          <feFuncB type="table" tableValues={ch(2)} />
+        </feComponentTransfer>
+      </filter>
+    </svg>
+  );
 }
 
 /** A line that runs corner to corner of its box rather than along one edge. */
@@ -106,13 +141,13 @@ function shapeStyle(el: ShapeElement, theme: Theme): CSSProperties {
   if (el.shape === 'line') return isDrawnLine(el) ? {} : { background: el.stroke ?? el.fill ?? theme.accent };
   const text: CSSProperties = {
     color: el.textColor ?? (el.fill === 'none' ? theme.text : '#fff'),
-    fontFamily: el.textFont ? `"${el.textFont.replace(/"/g, '')}", ${theme.bodyFont}` : theme.bodyFont,
+    fontFamily: el.textFont ? `${fontFamilies(el.textFont)}, ${theme.bodyFont}` : theme.bodyFont,
     fontSize: el.textSize ?? 18,
     ...(el.textBold ? { fontWeight: 700 } : {}),
     ...(el.textItalic ? { fontStyle: 'italic' } : {}),
   };
   // Polygon and path shapes are drawn by an SVG inside the box (see ShapeDrawing); the box itself stays transparent.
-  if (isDrawn(el.shape)) return text;
+  if (isDrawn(el.shape) || el.path) return text;
   return {
     background: fill,
     borderRadius: el.shape === 'ellipse' ? '50%' : el.shape === 'rounded' ? 16 : 0,
@@ -214,9 +249,17 @@ function ShapeDrawing({ el, theme, box }: { el: ShapeElement; theme: Theme; box:
     );
   }
   const def = SHAPES[el.shape];
-  const fill = el.fill === 'none' ? 'none' : (el.fill ?? theme.accent);
+  const fill = el.fill === 'none' ? 'none' : (fillColor(el.fill) ?? theme.accent);
   const sw = el.strokeWidth ?? (el.stroke ? 2 : 0);
   const stroke = sw ? (el.stroke ?? fill) : 'none';
+  if (el.path) {
+    // A freeform is given in a 100×100 box; the stroke keeps its width however the box is stretched.
+    return (
+      <svg className="sl-shape-svg" viewBox="0 0 100 100" preserveAspectRatio="none" width={w} height={h} aria-hidden="true">
+        <path d={el.path} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+    );
+  }
   return (
     <svg className="sl-shape-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">
       {def.path ? (
@@ -238,7 +281,7 @@ function paragraphStyle(p: Paragraph): CSSProperties {
     s.color = p.color;
     (s as Record<string, string>)['--sl-link'] = p.color;
   }
-  if (p.font) s.fontFamily = `"${p.font.replace(/"/g, '')}", inherit`;
+  if (p.font) s.fontFamily = `${fontFamilies(p.font)}, inherit`;
   return s;
 }
 
@@ -600,8 +643,9 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
           }
           if (el.type === 'image') {
             return (
-              <div key={el.id} {...common} className="sl-el sl-image" style={box}>
-                <img src={el.src} alt="" draggable={false} style={{ objectFit: el.fit ?? 'contain' }} />
+              <div key={el.id} {...common} className="sl-el sl-image" style={{ ...box, ...(el.clip ? { clipPath: el.clip } : {}), ...(el.crop ? { overflow: 'hidden' } : {}), ...(el.opacity !== undefined ? { opacity: el.opacity } : {}) }}>
+                {el.duotone && <DuotoneFilter id={`sl-duo-${el.id}`} tones={el.duotone} />}
+                <img src={el.src} alt="" draggable={false} style={{ ...imageStyle(el), ...(el.duotone ? { filter: `url(#sl-duo-${el.id})` } : {}) }} />
               </div>
             );
           }

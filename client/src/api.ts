@@ -3,6 +3,7 @@ import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/co
 import type { Deck } from '../../shared/deck.ts';
 import type { Doc } from '../../shared/doc.ts';
 import type { MarkdownDoc } from '../../shared/markdown.ts';
+import type { FilePreview } from '../../shared/preview.ts';
 import { CELL_IMAGE_TOO_LARGE, type DeletedFile, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 
 export interface User {
@@ -65,25 +66,45 @@ async function uploadImage(file: Blob): Promise<string> {
 }
 
 /** Store a file (generated PDF, upload) on the server. */
-async function uploadFile(name: string, file: Blob): Promise<StoredFile> {
-  const res = await fetch('/api/files', {
+async function uploadFile(name: string, file: Blob, folder?: string): Promise<StoredFile> {
+  const res = await fetch(`/api/files${folder ? `?folder=${encodeURIComponent(folder)}` : ''}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(name) },
     body: file,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `File upload failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, res.status === 413 ? 'This file is too large to upload.' : ((data as { error?: string }).error ?? `File upload failed (${res.status})`));
   return (data as { file: StoredFile }).file;
 }
 
+/** A folder of the library (shared/folders.ts): its name and its path from the top. */
+export interface FolderInfo {
+  name: string;
+  path: string;
+}
+
+/** `&folder=...` (or `?folder=...`) for an upload that goes into a folder; nothing at the top. */
+const inFolder = (folder: string | undefined, first = false) => (folder ? `${first ? '?' : '&'}folder=${encodeURIComponent(folder)}` : '');
+
 export const api = {
+  /** What is in a folder ('' is the top): its folders, documents of every kind and stored files. */
+  library: (folder = '') => request<{ folder: string; folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[] }>('GET', `/api/library${inFolder(folder, true)}`),
+  /** A small picture of a document, for the thumbnail view. */
+  preview: (id: string) => request<{ preview: FilePreview }>('GET', `/api/library/preview/${encodeURIComponent(id)}`),
+  /** Folders, documents and stored files whose name contains the text, in every folder. */
+  searchLibrary: (q: string) => request<{ folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[]; truncated: boolean }>('GET', `/api/library/search?q=${encodeURIComponent(q)}`),
+  createFolder: (parent: string, name: string) => request<{ folder: FolderInfo }>('POST', '/api/folders', { name, folder: parent || undefined }),
+  /** Delete an empty folder. */
+  deleteFolder: (path: string) => request<{ ok: true }>('DELETE', `/api/folders${inFolder(path, true)}`),
+  /** Move a document (any kind) or a stored file ('file') into a folder. */
+  moveToFolder: (kind: SheetMeta['kind'] | 'file', id: string, folder: string) => request<{ ok: true }>('POST', '/api/library/move', { kind, id, folder }),
   uploadImage,
   uploadFile,
   listFiles: () => request<{ files: StoredFile[] }>('GET', '/api/files'),
   getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
-  me: () => request<{ user: User | null; googleLogin: boolean }>('GET', '/api/auth/me'),
+  me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string } }>('GET', '/api/auth/me'),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
   register: (email: string, password: string) => request<{ pending: true; email: string }>('POST', '/api/auth/register', { email, password }),
   verifyEmail: (token: string) => request<{ user: User }>('POST', '/api/auth/verify', { token }),
@@ -94,17 +115,17 @@ export const api = {
   resetPassword: (token: string, password: string) => request<{ user: User }>('POST', '/api/auth/reset', { token, password }),
 
   listSheets: () => request<{ sheets: SheetMeta[] }>('GET', '/api/sheets'),
-  createSheet: (title: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title }),
+  createSheet: (title: string, folder?: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, folder: folder || undefined }),
   /** Create a CSV file from the text of an uploaded .csv file; it opens in the spreadsheet editor. */
-  importCsv: (title: string, csv: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, csv }),
+  importCsv: (title: string, csv: string, folder?: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, csv, folder: folder || undefined }),
   /** Turn a CSV file into a native spreadsheet. */
   convertSheet: (id: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/convert`, {}),
   getSheet: (id: string) => request<{ sheet: SheetMeta; workbook: Workbook }>('GET', `/api/sheets/${encodeURIComponent(id)}`),
   saveSheet: (id: string, workbook: Workbook, keepalive = false) =>
     request<{ sheet: SheetMeta }>('PUT', `/api/sheets/${encodeURIComponent(id)}`, { workbook }, keepalive ? { keepalive: true } : undefined),
   /** Import an Excel file (.xlsx or .xls) as a new spreadsheet. */
-  importXlsx: (file: File, title: string) =>
-    uploadExcel<{ sheet: SheetMeta; warnings: string[] }>(`/api/sheets/import?title=${encodeURIComponent(title)}`, file),
+  importXlsx: (file: File, title: string, folder?: string) =>
+    uploadExcel<{ sheet: SheetMeta; warnings: string[] }>(`/api/sheets/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
   /** Convert an Excel file (.xlsx or .xls) to workbook tabs without creating a spreadsheet. */
   convertXlsx: (file: File) => uploadExcel<{ workbook: Workbook; warnings: string[] }>('/api/import/xlsx', file),
   branchSheet: (id: string, title?: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/branch`, { title }),
@@ -114,27 +135,27 @@ export const api = {
   deleteSheet: (id: string) => request<{ ok: true }>('DELETE', `/api/sheets/${encodeURIComponent(id)}`),
 
   listDecks: () => request<{ decks: SheetMeta[] }>('GET', '/api/decks'),
-  createDeck: (title: string, deck?: Deck) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck }),
+  createDeck: (title: string, deck?: Deck, folder?: string) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck, folder: folder || undefined }),
   getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck }>('GET', `/api/decks/${encodeURIComponent(id)}`),
   /** rev is the updatedAt the editor loaded; the server refuses (409) when the presentation changed since. */
   saveDeck: (id: string, deck: Deck, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/decks/${encodeURIComponent(id)}`, { deck, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import a PowerPoint file (.pptx) as a new presentation. */
-  importPptx: (file: File, title: string) => uploadExcel<{ deck: SheetMeta; warnings: string[] }>(`/api/decks/import?title=${encodeURIComponent(title)}`, file),
+  importPptx: (file: File, title: string, folder?: string) => uploadExcel<{ deck: SheetMeta; warnings: string[] }>(`/api/decks/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
   /** Convert a PowerPoint file (.pptx) to slides without creating a presentation. */
   convertPptx: (file: File) => uploadExcel<{ deck: Deck; warnings: string[] }>('/api/import/pptx', file),
   renameDeck: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/decks/${encodeURIComponent(id)}`, { title }),
   deleteDeck: (id: string) => request<{ ok: true }>('DELETE', `/api/decks/${encodeURIComponent(id)}`),
 
   listDocs: () => request<{ docs: SheetMeta[] }>('GET', '/api/docs'),
-  createDoc: (title: string, doc?: Doc) => request<{ doc: SheetMeta }>('POST', '/api/docs', { title, doc }),
+  createDoc: (title: string, doc?: Doc, folder?: string) => request<{ doc: SheetMeta }>('POST', '/api/docs', { title, doc, folder: folder || undefined }),
   getDoc: (id: string) => request<{ meta: SheetMeta; doc: Doc }>('GET', `/api/docs/${encodeURIComponent(id)}`),
   /** rev is the updatedAt the editor loaded; the server refuses (409) when the document changed since. */
   saveDoc: (id: string, doc: Doc, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/docs/${encodeURIComponent(id)}`, { doc, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import a Word file (.docx) as a new document. */
-  importPdf: (file: File) => uploadExcel<{ file: StoredFile }>(`/api/import/pdf?filename=${encodeURIComponent(file.name)}`, file),
-  importDocx:(file: File, title: string) => uploadExcel<{ doc: SheetMeta; warnings: string[] }>(`/api/docs/import?title=${encodeURIComponent(title)}`, file),
+  importPdf: (file: File, folder?: string) => uploadExcel<{ file: StoredFile }>(`/api/import/pdf?filename=${encodeURIComponent(file.name)}${inFolder(folder)}`, file),
+  importDocx: (file: File, title: string, folder?: string) => uploadExcel<{ doc: SheetMeta; warnings: string[] }>(`/api/docs/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
   /** Convert a Word file (.docx) to document blocks without creating a document. */
   convertDocx: (file: File) => uploadExcel<{ doc: Doc; warnings: string[] }>('/api/import/docx', file),
   renameDoc: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/docs/${encodeURIComponent(id)}`, { title }),
@@ -142,7 +163,7 @@ export const api = {
 
   listMarkdown: () => request<{ docs: SheetMeta[] }>('GET', '/api/markdown'),
   /** Create a Markdown document, empty or from the text of an uploaded .md file. */
-  createMarkdown: (title: string, text = '') => request<{ doc: SheetMeta }>('POST', '/api/markdown', { title, text }),
+  createMarkdown: (title: string, text = '', folder?: string) => request<{ doc: SheetMeta }>('POST', '/api/markdown', { title, text, folder: folder || undefined }),
   getMarkdown: (id: string) => request<{ meta: SheetMeta; doc: MarkdownDoc }>('GET', `/api/markdown/${encodeURIComponent(id)}`),
   /** `rev` is the revision loaded; the server answers 409 when the document was saved elsewhere since. */
   saveMarkdown: (id: string, doc: MarkdownDoc, rev?: string, keepalive = false) =>

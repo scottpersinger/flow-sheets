@@ -759,3 +759,31 @@ describe('branches', () => {
     db.close();
   });
 });
+
+describe('video files', () => {
+  it('are stored by their extension and served in the parts a player asks for', async () => {
+    const { cookie } = await signUp(app, box, 'video@x.com');
+    const bytes = Buffer.from('0123456789abcdefghij');
+    const up = await app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'video/quicktime', 'x-filename': 'clip.mov' }, payload: bytes });
+    expect(up.statusCode).toBe(200);
+    const file = (up.json() as { file: { url: string; type: string } }).file;
+    expect(file.type).toBe('video/quicktime');
+
+    const whole = await app.inject({ method: 'GET', url: file.url, headers: { cookie } });
+    expect(whole.statusCode).toBe(200);
+    // Served as MP4 so browsers play it, and seekable.
+    expect(whole.headers['content-type']).toBe('video/mp4');
+    expect(whole.headers['accept-ranges']).toBe('bytes');
+    expect(whole.headers['content-length']).toBe('20');
+
+    const part = await app.inject({ method: 'GET', url: file.url, headers: { cookie, range: 'bytes=5-9' } });
+    expect(part.statusCode).toBe(206);
+    expect(part.headers['content-range']).toBe('bytes 5-9/20');
+    expect(part.body).toBe('56789');
+    const tail = await app.inject({ method: 'GET', url: file.url, headers: { cookie, range: 'bytes=-4' } });
+    expect([tail.headers['content-range'], tail.body]).toEqual(['bytes 16-19/20', 'ghij']);
+    const rest = await app.inject({ method: 'GET', url: file.url, headers: { cookie, range: 'bytes=15-' } });
+    expect([rest.headers['content-range'], rest.body]).toEqual(['bytes 15-19/20', 'fghij']);
+    expect((await app.inject({ method: 'GET', url: file.url, headers: { cookie, range: 'bytes=50-' } })).statusCode).toBe(416);
+  });
+});

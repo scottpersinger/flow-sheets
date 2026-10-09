@@ -2,7 +2,7 @@
 // exactly PowerPoint's 16:9 layout (10 × 5.625 inches), so positions map 1:1. Runs in the browser (File →
 // Download as PowerPoint) and in Node (tests); the caller loads images, since that differs between the two.
 import type PptxGenJS from 'pptxgenjs';
-import { ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideElement, type TextElement, type TextRun } from './deck.ts';
+import { fillColor, ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideElement, type TextElement, type TextRun } from './deck.ts';
 
 /** PowerPoint's arrowhead types for ours (its "arrow" is the open one, "stealth" the barbed filled one). */
 const PPTX_ARROW: Record<Exclude<ArrowStyle, 'none'>, 'arrow' | 'diamond' | 'oval' | 'stealth' | 'triangle'> = { arrow: 'stealth', open: 'arrow', triangle: 'triangle', circle: 'oval', diamond: 'diamond' };
@@ -86,7 +86,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
 
   for (const slide of deck.slides) {
     const s = pres.addSlide();
-    const bg = hexColor(slide.bg) ?? hexColor(theme.bg);
+    const bg = hexColor(fillColor(slide.bg)) ?? hexColor(theme.bg);
     if (bg) s.background = { color: bg };
     for (const el of slide.elements) await addElement(s, el);
     if (slide.notes) s.addNotes(slide.notes);
@@ -95,7 +95,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
   return { pres, warnings };
 
   async function addElement(s: PptxGenJS.Slide, el: SlideElement): Promise<void> {
-    const box = { x: inch(el.x), y: inch(el.y), w: inch(el.w), h: inch(el.h) };
+    const box = { x: inch(el.x), y: inch(el.y), w: inch(el.w), h: inch(el.h), ...(el.rot ? { rotate: ((el.rot % 360) + 360) % 360 } : {}) };
     if (el.type === 'text') {
       const runs: PptxGenJS.TextProps[] = el.paragraphs.flatMap((p) => {
         const para: PptxGenJS.TextPropsOptions = {
@@ -121,7 +121,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
           },
         }));
       });
-      s.addText(runs.length ? runs : [{ text: '' }], textOptions(el, theme));
+      s.addText(runs.length ? runs : [{ text: '' }], { ...textOptions(el, theme), ...(el.rot ? { rotate: box.rotate } : {}) });
       return;
     }
     if (el.type === 'image') {
@@ -177,7 +177,9 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
       });
       return;
     }
-    const fill: PptxGenJS.ShapeFillProps = el.fill === 'none' ? { type: 'none' } : { color: hexColor(el.fill) ?? accent, transparency: transparencyOf(el.fill) };
+    // A gradient is written as its first color; a freeform as the rectangle around it.
+    const flat = fillColor(el.fill);
+    const fill: PptxGenJS.ShapeFillProps = el.fill === 'none' ? { type: 'none' } : { color: hexColor(flat) ?? accent, transparency: transparencyOf(flat) };
     const sw = el.strokeWidth ?? (strokeColor ? 2 : 0);
     const line: PptxGenJS.ShapeLineProps = strokeColor && sw ? { color: strokeColor, width: pt(sw), transparency: transparencyOf(el.stroke) } : { type: 'none' };
     const shapeType = (pres.ShapeType as unknown as Record<string, PptxGenJS.SHAPE_NAME>)[SHAPES[el.shape].pptx] ?? pres.ShapeType.rect;

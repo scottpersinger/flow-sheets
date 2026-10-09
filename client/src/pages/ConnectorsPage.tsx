@@ -5,13 +5,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import type { ConnectionInfo, ConnectorInfo } from '../../../shared/connectors.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
-import { useAuth } from '../auth.tsx';
+import { Account } from '../components/Account.tsx';
 import { ConfirmModal, Modal } from '../components/Modal.tsx';
 
 const STATUS: Record<ConnectionInfo['status'], string> = { connected: 'Connected', error: 'Error', needs_reauth: 'Needs reconnecting' };
 
 export function ConnectorsPage() {
-  const { user, logout } = useAuth();
   const [params, setParams] = useSearchParams();
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [connections, setConnections] = useState<ConnectionInfo[] | null>(null);
@@ -65,10 +64,7 @@ export function ConnectorsPage() {
         </div>
         <div className="home-user">
           <AgentButton />
-          <span>{user?.email}</span>
-          <button className="btn" onClick={() => void logout()}>
-            Sign out
-          </button>
+          <Account />
         </div>
       </header>
 

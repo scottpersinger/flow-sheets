@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { JOB_ACTIVE_STATUSES, type AgentJob } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api, ApiError } from '../api.ts';
-import { useAuth } from '../auth.tsx';
+import { Account } from '../components/Account.tsx';
 import { ConfirmModal } from '../components/Modal.tsx';
 
 const STATUS: Record<AgentJob['status'], string> = {
@@ -21,7 +21,6 @@ const STATUS: Record<AgentJob['status'], string> = {
 };
 
 export function ChangesPage() {
-  const { user, logout } = useAuth();
   const [jobs, setJobs] = useState<AgentJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -69,10 +68,7 @@ export function ChangesPage() {
         </div>
         <div className="home-user">
           <AgentButton />
-          <span>{user?.email}</span>
-          <button className="btn" onClick={() => void logout()}>
-            Sign out
-          </button>
+          <Account />
         </div>
       </header>
 

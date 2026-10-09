@@ -371,10 +371,11 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
         {selected.map((el) => {
           if (el.type === 'line') return null;
           const b = boxOf(el);
-          return <div key={el.id} className="sl-outline" style={{ left: b.x, top: b.y, width: b.w, height: b.h, borderWidth: 1.5 / scale }} />;
+          return <div key={el.id} className="sl-outline" style={{ left: b.x, top: b.y, width: b.w, height: b.h, borderWidth: 1.5 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} />;
         })}
         {single &&
           single.type !== 'line' &&
+          !single.rot && // a rotated box moves but has no resize handles
           (single.type === 'shape' && single.shape === 'line' && !(single.w > 0 && single.h > 0) ? ((single.h > single.w ? ['n', 's'] : ['e', 'w']) as Handle[]) : HANDLES).map((h) => {
             const b = boxOf(single);
             const p = handlePos(h, b);

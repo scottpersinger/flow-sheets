@@ -5,10 +5,9 @@ import { Link } from 'react-router-dom';
 import { OPENAI_MODELS, type AssistantSettings, type OpenAIModelId } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
-import { useAuth } from '../auth.tsx';
+import { Account } from '../components/Account.tsx';
 
 export function SettingsPage() {
-  const { user, logout } = useAuth();
   const [saved, setSaved] = useState<AssistantSettings | null>(null);
   const [provider, setProvider] = useState<AssistantSettings['provider']>('default');
   const [model, setModel] = useState<OpenAIModelId>(OPENAI_MODELS[0].id);
@@ -58,10 +57,7 @@ export function SettingsPage() {
         </div>
         <div className="home-user">
           <AgentButton />
-          <span>{user?.email}</span>
-          <button className="btn" onClick={() => void logout()}>
-            Sign out
-          </button>
+          <Account />
         </div>
       </header>
 

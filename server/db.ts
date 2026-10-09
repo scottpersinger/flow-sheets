@@ -161,6 +161,18 @@ function migrate(db: DB): void {
   if (!cols.has('kind')) db.exec("ALTER TABLE sheets ADD COLUMN kind TEXT NOT NULL DEFAULT 'sheet'");
   // A spreadsheet stored as CSV text has format 'csv' (shared/csv.ts); null is the native format of the kind.
   if (!cols.has('format')) db.exec('ALTER TABLE sheets ADD COLUMN format TEXT');
+  // Folders (shared/folders.ts): each file is in one, named by its path; '' is the top of the library.
+  if (!cols.has('folder')) db.exec("ALTER TABLE sheets ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
+  const fileCols = new Set((db.prepare('PRAGMA table_info(stored_files)').all() as { name: string }[]).map((c) => c.name));
+  if (!fileCols.has('folder')) db.exec("ALTER TABLE stored_files ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS folders (
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (owner_id, path)
+    );
+  `);
 
   // Google sign-in: the Google account id linked to the user. Accounts created by Google sign-in have an empty
   // password_hash (no password can match it) until the user sets one through "Forgot your password?".

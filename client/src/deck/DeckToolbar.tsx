@@ -7,7 +7,10 @@ import { MOD } from '../commands.ts';
 import { ColorPicker } from '../components/ColorPicker.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import type { DeckController } from './controller.ts';
+import { GOOGLE_FONTS } from './fonts.ts';
 import { ShapeIcon } from './ShapeIcon.tsx';
+
+const FONTS = [...GOOGLE_FONTS].sort();
 
 export const LAYOUT_NAMES: Record<LayoutId, string> = {
   title: 'Title slide',
@@ -198,6 +201,23 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage }: { ctl: DeckContro
       <Btn title={`Italic (${MOD}I)`} active={italic} disabled={!text} onClick={() => ctl.styleSelected({ italic: italic ? undefined : true })}>
         <i>I</i>
       </Btn>
+      <select
+        className="tb-select"
+        title="Font"
+        aria-label="Font"
+        disabled={!text}
+        value={text?.style?.font ?? ''}
+        onMouseDown={(e) => e.stopPropagation()}
+        onChange={(e) => ctl.styleSelected({ font: e.target.value || undefined })}
+      >
+        <option value="">Theme font</option>
+        {text?.style?.font && !FONTS.includes(text.style.font) && <option value={text.style.font}>{text.style.font}</option>}
+        {FONTS.map((f) => (
+          <option key={f} value={f}>
+            {f}
+          </option>
+        ))}
+      </select>
       <select
         className="tb-select"
         title="Font size"

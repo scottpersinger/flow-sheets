@@ -2,8 +2,8 @@
 // per-row menu, plus the create, rename and delete prompts and the import progress. It is the home page
 // of the app (client/src/pages/HomePage.tsx) and the library inside ChatGPT (plugin/web/Library.tsx);
 // each passes its own data source, actions and header controls, so both look and behave the same.
-import { useEffect, useState, type ReactNode } from 'react';
-import type { SheetMeta } from '../../../shared/types.ts';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { videoTypeOf, type SheetMeta } from '../../../shared/types.ts';
 import { DeckIcon, DocIcon, Logo, MarkdownIcon } from './Logo.tsx';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
 
@@ -16,6 +16,8 @@ export interface LibraryItem {
   /** A spreadsheet stored as a CSV file. */
   format?: SheetMeta['format'];
   title: string;
+  /** The folder the file is in; absent at the top. */
+  folder?: string;
   updatedAt: string;
   createdAt: string;
   branch?: SheetMeta['branch'];
@@ -46,6 +48,16 @@ export interface SortOrder {
 }
 const DEFAULT_SORT: SortOrder = { key: 'updatedAt', dir: 'desc' };
 const SORT_STORAGE_KEY = 'ui.fileSort';
+const VIEW_STORAGE_KEY = 'ui.fileView';
+type View = 'list' | 'grid';
+
+function loadView(): View {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === 'grid' ? 'grid' : 'list';
+  } catch {
+    return 'list';
+  }
+}
 
 function loadSort(): SortOrder {
   try {
@@ -86,6 +98,7 @@ export function compareItems(a: LibraryItem, b: LibraryItem, sort: SortOrder): n
 export function fileIcon(type: string): string {
   if (type === 'application/pdf') return 'PDF';
   if (type.startsWith('image/')) return 'IMG';
+  if (type.startsWith('video/')) return 'VID';
   return 'FILE';
 }
 
@@ -94,7 +107,7 @@ export function kindIcon(item: Pick<LibraryItem, 'kind' | 'title'>, size = 18): 
   if (item.kind === 'deck') return <DeckIcon size={size} />;
   if (item.kind === 'doc') return <DocIcon size={size} />;
   if (item.kind === 'markdown') return <MarkdownIcon size={size} />;
-  if (item.kind === 'file') return <span className="file-chip-icon">{fileIcon(item.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : '')}</span>;
+  if (item.kind === 'file') return <span className="file-chip-icon">{fileIcon(item.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : /\.(png|jpe?g|gif|webp)$/i.test(item.title) ? 'image/' : (videoTypeOf(item.title) ?? ''))}</span>;
   return <Logo size={size} />;
 }
 
@@ -110,6 +123,30 @@ export interface FileLibraryProps {
   brand: ReactNode;
   /** Controls at the right of the header (menus, buttons). */
   headerActions?: ReactNode;
+  /** The name of the top of the library, in the heading over the files table. Defaults to "Your files". */
+  listTitle?: ReactNode;
+  /**
+   * Folders. With `folder` set (even to '', the top) the heading becomes breadcrumbs, the folders inside
+   * the current one are listed above its files, and "New folder" is offered.
+   */
+  folder?: { name: string; path: string }[];
+  folders?: { name: string; path: string }[];
+  onOpenFolder?(path: string): void;
+  onCreateFolder?(name: string): Promise<void>;
+  onDeleteFolder?(path: string): Promise<void>;
+  /**
+   * Look for the search text in every folder, not just the one being shown. Adds a "Find files" button
+   * under the filtered list; its results replace the list until the search text changes.
+   */
+  onFind?(text: string): Promise<{ folders: { name: string; path: string }[]; items: LibraryItem[]; truncated: boolean }>;
+  /**
+   * The search, when the page keeps it (in its address, so it survives opening a file and coming back):
+   * the text in the search box and whether "Find files" is on for it. Without it the library keeps its own.
+   */
+  search?: { text: string; find: boolean };
+  onSearchChange?(text: string, find: boolean): void;
+  /** The picture of a file for the thumbnail view. Adds the list/thumbnails switch over the files. */
+  thumbnail?(item: LibraryItem): ReactNode;
   /** The rows, or null while loading. */
   items: LibraryItem[] | null;
   error?: string | null;
@@ -123,7 +160,10 @@ export interface FileLibraryProps {
   /** Name of the file being imported, shown as progress; null when idle. */
   importing: string | null;
   onImport(file: File): void;
+  /** Open the file in place: the page stays inside the folder, with breadcrumbs back to it. */
   onOpen(item: LibraryItem): void;
+  /** Open the file in a new tab (a new window tab in the desktop app). Adds an "Open" button to each row. */
+  onOpenInNewTab?(item: LibraryItem): void;
   /** Wraps a row's title so the page can make it a real link (middle-click, right-click). Defaults to a span. */
   titleLink?(item: LibraryItem, children: ReactNode): ReactNode;
   /** Whether a row can be renamed; stored files cannot. */
@@ -153,18 +193,66 @@ function pickFile(accept: string): Promise<File | null> {
 export function FileLibrary(props: FileLibraryProps) {
   const { items, error, importing, onOpen } = props;
   const createKinds = props.createKinds ?? ALL_KINDS;
-  const [filter, setFilter] = useState('');
+  // The box shows what was typed right away; a page that keeps the search hears of each change, and its
+  // own changes (another address: Back, a folder opened) replace the text. What the page says back about a
+  // change made here is not news, and must not undo the typing that followed it.
+  const [filter, setOwnFilter] = useState(props.search?.text ?? '');
+  const sent = useRef<string[]>([]);
+  const setFilter = (text: string) => {
+    setOwnFilter(text);
+    if (!props.search) return;
+    sent.current.push(text);
+    props.onSearchChange?.(text, false);
+  };
+  const kept = props.search?.text;
+  useEffect(() => {
+    if (kept === undefined) return;
+    const i = sent.current.indexOf(kept);
+    if (i >= 0) sent.current.splice(0, i + 1);
+    else {
+      sent.current = [];
+      setOwnFilter(kept);
+    }
+  }, [kept]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [creating, setCreating] = useState<Exclude<LibraryKind, 'file'> | null>(null);
   const [renaming, setRenaming] = useState<LibraryItem | null>(null);
   const [deleting, setDeleting] = useState<LibraryItem | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [deletingFolder, setDeletingFolder] = useState<{ name: string; path: string } | null>(null);
+  // The result of "Find files" for one search text, or that it is running.
+  const [found, setFound] = useState<{ text: string; folders: { name: string; path: string }[]; items: LibraryItem[]; truncated: boolean } | { text: string; searching: true } | null>(null);
+  const [findError, setFindError] = useState<string | null>(null);
+  // The list changed (a rename, a move, another folder): what was found may no longer be true.
+  useEffect(() => setFound(null), [items]);
+  // A search the page kept as "Find files" runs again when the page comes back to it, and after the list changes.
+  const wantFind = !!props.search?.find;
+  useEffect(() => {
+    if (wantFind && items !== null && q && !(found && found.text === q)) void find();
+  });
   const [dragOver, setDragOver] = useState(false);
   const [sort, setSortState] = useState<SortOrder>(loadSort);
+  const [viewChoice, setViewChoice] = useState<View>(loadView);
+  const view: View = props.thumbnail ? viewChoice : 'list';
+  const setView = (v: View) => {
+    setViewChoice(v);
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, v);
+    } catch {
+      // Not remembered, that's all.
+    }
+  };
   const setSort = (key: SortKey) => {
     // A new column sorts the natural way (names A–Z, dates newest first); the same column again flips it.
     const next: SortOrder = sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'title' || key === 'kind' ? 'asc' : 'desc' };
     setSortState(next);
     saveSort(next);
+  };
+
+  const setSortTo = (value: string) => {
+    const [key, dir] = value.split(':') as [SortKey, 'asc' | 'desc'];
+    setSortState({ key, dir });
+    saveSort({ key, dir });
   };
 
   useEffect(() => {
@@ -174,11 +262,45 @@ export function FileLibrary(props: FileLibraryProps) {
     return () => window.removeEventListener('click', close);
   }, [menuFor]);
 
+  // Typing anywhere on the page filters the list: the first key moves to the search box, which takes it
+  // and the ones after. Not while a field or a dialog has the keyboard.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (document.querySelector('.modal-backdrop')) return;
+      // A key that types a character; a space is left to the button or link that has the focus.
+      if (e.key.length !== 1 || e.key === ' ') return;
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const q = filter.trim().toLowerCase();
+  const results = found && found.text === q && !('searching' in found) && (!props.search || props.search.find) ? found : null;
+  const finding = (!!found && found.text === q && 'searching' in found) || (!!props.search?.find && !!q && !results);
+  const find = async () => {
+    if (!props.onFind || !q) return;
+    setFound({ text: q, searching: true });
+    setFindError(null);
+    try {
+      const r = await props.onFind(q);
+      setFound((cur) => (cur && cur.text === q ? { text: q, ...r } : cur));
+    } catch (e) {
+      setFound((cur) => (cur && cur.text === q ? null : cur));
+      setFindError(e instanceof Error ? e.message : String(e));
+      props.onSearchChange?.(filter, false);
+    }
+  };
+  const top = props.listTitle ?? 'Your files';
   // Show each branch right under its original (recursively), siblings in the chosen order; searching
   // flattens the list.
   const visible: { s: LibraryItem; depth: number }[] = [];
-  if (items) {
+  if (results) for (const s of [...results.items].sort((a, b) => compareItems(a, b, sort))) visible.push({ s, depth: 0 });
+  else if (items) {
     const sorted = [...items].sort((a, b) => compareItems(a, b, sort));
     if (q) for (const s of sorted) s.title.toLowerCase().includes(q) && visible.push({ s, depth: 0 });
     else {
@@ -195,6 +317,76 @@ export function FileLibrary(props: FileLibraryProps) {
       for (const s of sorted) if (!(s.branch && ids.has(s.branch.parentId))) add(s, 0);
     }
   }
+
+  // Folders come first, by name whatever the files are sorted by.
+  const folders = (results ? results.folders : (props.folders ?? []).filter((f) => !q || f.name.toLowerCase().includes(q))).sort((a, b) => collator.compare(a.name, b.name));
+  /** Where a search result is, shown after its name. */
+  const whereTag = (folder: string) => <span className="found-in">in {folder || top}</span>;
+  const trail = props.folder;
+  const openFolder = (path: string) => {
+    // A page that keeps the search drops it by going to the folder's own address.
+    if (!props.search) setFilter('');
+    props.onOpenFolder?.(path);
+  };
+
+  // The buttons and menu of a folder and of a file, the same in the list and on a thumbnail card.
+  const folderActions = (f: { name: string; path: string }) => (
+    <>
+      <button
+        className="icon-btn"
+        aria-label={`Actions for ${f.name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setMenuFor(menuFor === `folder:${f.path}` ? null : `folder:${f.path}`);
+        }}
+      >
+        ⋮
+      </button>
+      {menuFor === `folder:${f.path}` && (
+        <div className="dropdown">
+          <button onClick={() => openFolder(f.path)}>Open</button>
+          {props.onDeleteFolder && (
+            <button className="danger" onClick={() => (setMenuFor(null), setDeletingFolder(f))}>
+              Delete
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+  const itemActions = (s: LibraryItem) => (
+    <>
+      {props.onOpenInNewTab && (
+        <button className="btn open-tab-btn" title="Open in a new tab" aria-label={`Open ${s.title} in a new tab`} onClick={() => props.onOpenInNewTab!(s)}>
+          Open <span aria-hidden="true">↗</span>
+        </button>
+      )}
+      <button
+        className="icon-btn"
+        aria-label={`Actions for ${s.title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setMenuFor(menuFor === s.id ? null : s.id);
+        }}
+      >
+        ⋮
+      </button>
+      {menuFor === s.id && (
+        <div className="dropdown">
+          <button onClick={() => onOpen(s)}>Open</button>
+          {(props.rowActions?.(s, () => setMenuFor(null)) ?? []).map((a) => (
+            <button key={a.label} className={a.danger ? 'danger' : undefined} onClick={() => (setMenuFor(null), void a.onClick())}>
+              {a.label}
+            </button>
+          ))}
+          {canRename(s) && <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>}
+          <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
+            Delete
+          </button>
+        </div>
+      )}
+    </>
+  );
 
   const titleLink = props.titleLink ?? ((_item: LibraryItem, children: ReactNode) => <span className="sheet-title">{children}</span>);
   const canRename = props.canRename ?? ((item: LibraryItem) => item.kind !== 'file');
@@ -219,7 +411,19 @@ export function FileLibrary(props: FileLibraryProps) {
     >
       <header className="home-header">
         <div className="home-brand">{props.brand}</div>
-        <input className="home-search" placeholder="Search spreadsheets, presentations and documents" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <input
+          ref={searchRef}
+          className="home-search"
+          placeholder="Search spreadsheets, presentations and documents"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            // Escape clears the filter and gives the keyboard back to the page.
+            if (e.key !== 'Escape') return;
+            setFilter('');
+            e.currentTarget.blur();
+          }}
+        />
         <div className="home-user">{props.headerActions}</div>
       </header>
 
@@ -257,12 +461,105 @@ export function FileLibrary(props: FileLibraryProps) {
       </section>
 
       <section className="home-inner">
-        <h2>Your files</h2>
+        <div className="list-heading">
+          {results ? (
+            <h2>
+              Found “{filter.trim()}” in all folders
+              <button className="crumb found-back" onClick={() => (props.search ? props.onSearchChange?.(filter, false) : setFound(null))}>
+                Back to {trail?.length ? trail[trail.length - 1].name : top}
+              </button>
+            </h2>
+          ) : trail ? (
+            <h2 className="breadcrumbs" aria-label="Folder">
+              {[{ name: '', path: '' }, ...trail].map((f, i, all) => (
+                <span key={f.path}>
+                  {i > 0 && <span className="crumb-sep">/</span>}
+                  {i === all.length - 1 ? (
+                    <span aria-current="page">{i === 0 ? (props.listTitle ?? 'Your files') : f.name}</span>
+                  ) : (
+                    <button className="crumb" onClick={() => openFolder(f.path)}>
+                      {i === 0 ? (props.listTitle ?? 'Your files') : f.name}
+                    </button>
+                  )}
+                </span>
+              ))}
+            </h2>
+          ) : (
+            <h2>{props.listTitle ?? 'Your files'}</h2>
+          )}
+          <div className="list-tools">
+            {props.thumbnail && (
+              <div className="view-toggle" role="group" aria-label="View">
+                <button className={view === 'list' ? 'active' : undefined} aria-pressed={view === 'list'} title="List" onClick={() => setView('list')}>
+                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M2 3.5h12M2 8h12M2 12.5h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                </button>
+                <button className={view === 'grid' ? 'active' : undefined} aria-pressed={view === 'grid'} title="Thumbnails" onClick={() => setView('grid')}>
+                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
+            {view === 'grid' && (
+              <select className="grid-sort" aria-label="Sort by" value={`${sort.key}:${sort.dir}`} onChange={(e) => setSortTo(e.target.value)}>
+                <option value="title:asc">Name</option>
+                <option value="updatedAt:desc">Last modified</option>
+                <option value="createdAt:desc">Created</option>
+                <option value="kind:asc">Type</option>
+                {!['title:asc', 'updatedAt:desc', 'createdAt:desc', 'kind:asc'].includes(`${sort.key}:${sort.dir}`) && <option value={`${sort.key}:${sort.dir}`}>Custom</option>}
+              </select>
+            )}
+            {props.onCreateFolder && !results && (
+              <button className="btn" onClick={() => setCreatingFolder(true)}>
+                New folder
+              </button>
+            )}
+          </div>
+        </div>
         {error && <div className="form-error">{error}</div>}
         {items === null ? (
           <div className="muted">Loading…</div>
-        ) : visible.length === 0 ? (
-          <div className="empty-state">{items.length ? 'Nothing matches your search.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
+        ) : visible.length === 0 && folders.length === 0 && error ? null : visible.length === 0 && folders.length === 0 ? (
+          <div className="empty-state">{results ? 'Nothing found in any folder.' : q ? (props.onFind ? 'Nothing here matches your search.' : 'Nothing matches your search.') : trail?.length ? 'This folder is empty.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
+        ) : view === 'grid' ? (
+          <div className="file-grid">
+            {folders.map((f) => (
+              <div key={`folder:${f.path}`} className="file-card" onClick={() => openFolder(f.path)}>
+                <div className="file-thumb folder">
+                  <FolderIcon size={64} />
+                </div>
+                <div className="file-card-foot">
+                  <div className="file-card-name" title={f.name}>
+                    {f.name}
+                  </div>
+                  <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                    {folderActions(f)}
+                  </div>
+                </div>
+                <div className="file-card-meta">Folder{results && <> · {whereTag(f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '')}</>}</div>
+              </div>
+            ))}
+            {visible.map(({ s }) => (
+              <div key={s.id} className="file-card" onClick={() => onOpen(s)}>
+                {props.thumbnail!(s)}
+                <div className="file-card-foot">
+                  <div className="file-card-name" title={s.title}>
+                    {titleLink(s, <>{kindIcon(s, 16)} {s.title}</>)}
+                  </div>
+                  <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                    {itemActions(s)}
+                  </div>
+                </div>
+                <div className="file-card-meta">
+                  {formatWhen(s.updatedAt)}
+                  {results && <> · {whereTag(s.folder ?? '')}</>}
+                  {s.branch && <> · branch</>}
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <table className="sheet-list">
             <thead>
@@ -288,6 +585,22 @@ export function FileLibrary(props: FileLibraryProps) {
               </tr>
             </thead>
             <tbody>
+              {folders.map((f) => (
+                <tr key={`folder:${f.path}`} onClick={() => openFolder(f.path)}>
+                  <td>
+                    <span className="sheet-title">
+                      <FolderIcon /> {f.name}
+                      {results && whereTag(f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '')}
+                    </span>
+                  </td>
+                  <td className="col-type">Folder</td>
+                  <td />
+                  <td />
+                  <td className="row-actions" onClick={(e) => e.stopPropagation()}>
+                    {folderActions(f)}
+                  </td>
+                </tr>
+              ))}
               {visible.map(({ s, depth }) => (
                 <tr key={s.id} onClick={() => onOpen(s)}>
                   <td>
@@ -297,6 +610,7 @@ export function FileLibrary(props: FileLibraryProps) {
                         <span style={{ width: depth * 22 }} className="tree-indent" />
                         {depth > 0 ? <span className="tree-elbow">└</span> : null}
                         {kindIcon(s)} {s.title}
+                        {results && whereTag(s.folder ?? '')}
                         {s.branch && <span className={`branch-tag${s.branch.detached ? ' detached' : ''}`}>{s.branch.detached ? `branch of deleted “${s.branch.parentTitle}”` : depth ? 'branch' : `branch of ${s.branch.parentTitle}`}</span>}
                       </>,
                     )}
@@ -305,36 +619,23 @@ export function FileLibrary(props: FileLibraryProps) {
                   <td>{formatWhen(s.updatedAt)}</td>
                   <td>{formatWhen(s.createdAt)}</td>
                   <td className="row-actions" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      className="icon-btn"
-                      aria-label={`Actions for ${s.title}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMenuFor(menuFor === s.id ? null : s.id);
-                      }}
-                    >
-                      ⋮
-                    </button>
-                    {menuFor === s.id && (
-                      <div className="dropdown">
-                        <button onClick={() => onOpen(s)}>Open</button>
-                        {(props.rowActions?.(s, () => setMenuFor(null)) ?? []).map((a) => (
-                          <button key={a.label} className={a.danger ? 'danger' : undefined} onClick={() => (setMenuFor(null), void a.onClick())}>
-                            {a.label}
-                          </button>
-                        ))}
-                        {canRename(s) && <button onClick={() => (setMenuFor(null), setRenaming(s))}>Rename</button>}
-                        <button className="danger" onClick={() => (setMenuFor(null), setDeleting(s))}>
-                          Delete
-                        </button>
-                      </div>
-                    )}
+                    {itemActions(s)}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+        {items !== null && q && props.onFind && !results && (
+          <div className="find-files">
+            <button className="btn" disabled={finding} onClick={() => (props.search ? props.onSearchChange?.(filter, true) : void find())}>
+              {finding ? 'Searching…' : 'Find files'}
+            </button>
+            <span className="muted">{finding ? `Looking for “${filter.trim()}” in all folders` : `Look for “${filter.trim()}” in all folders`}</span>
+          </div>
+        )}
+        {results?.truncated && <div className="find-files muted">There is more to search than could be covered. These are the first matches; a longer search text narrows it down.</div>}
+        {findError && <div className="form-error">{findError}</div>}
       </section>
 
       {importing && (
@@ -376,7 +677,28 @@ export function FileLibrary(props: FileLibraryProps) {
           onClose={() => setDeleting(null)}
         />
       )}
+      {creatingFolder && props.onCreateFolder && (
+        <PromptModal title="New folder" label="Name" initial="Untitled folder" confirmText="Create" onConfirm={(name) => props.onCreateFolder!(name)} onClose={() => setCreatingFolder(false)} />
+      )}
+      {deletingFolder && props.onDeleteFolder && (
+        <ConfirmModal
+          title="Delete folder?"
+          message={<>“{deletingFolder.name}” will be deleted. Only an empty folder can be deleted.</>}
+          confirmText="Delete"
+          danger
+          onConfirm={() => props.onDeleteFolder!(deletingFolder.path)}
+          onClose={() => setDeletingFolder(null)}
+        />
+      )}
       {props.children}
     </div>
+  );
+}
+
+export function FolderIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg className="folder-icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.4a1.5 1.5 0 0 1 1.1.5l1.2 1.3h8.3A1.5 1.5 0 0 1 21 8.3v9.2a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="currentColor" />
+    </svg>
   );
 }

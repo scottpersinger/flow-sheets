@@ -2,7 +2,7 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentEvent, AgentTurnRequest, AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
@@ -12,7 +12,7 @@ import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, PREVIEW_FILE_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { checkOpenAIKey, openaiErrorMessage } from './agent/openai.ts';
@@ -27,6 +27,10 @@ import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
 import { openDb } from './db.ts';
 import { EXPORT_FORMATS, ExportError, exportAll, exportFile, imageSource, loadFile, type ExportFormat } from './export.ts';
 import { ImageStore } from './images.ts';
+import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
+import { cleanFolderName, cleanFolderPath, folderName, joinFolder } from '../shared/folders.ts';
+import { FolderStore, type Folders } from './folders.ts';
+import { LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore } from './localStore.ts';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mountPlugin } from '../plugin/server/mount.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
@@ -35,6 +39,8 @@ import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 
 const SESSION_COOKIE = 'sid';
+/** Carries the desktop app's per-launch token (see AppOptions.local). */
+export const LOCAL_COOKIE = 'local';
 // Ties a Google sign-in callback to the browser that started it (login CSRF).
 const GOOGLE_STATE_COOKIE = 'gstate';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -46,6 +52,8 @@ const MAX_STORED_FILE_BYTES = 50 * 1024 * 1024;
 declare module 'fastify' {
   interface FastifyRequest {
     user: User | null;
+    /** The folder a request names (its "folder" query or body field), checked to exist; '' is the top. */
+    folder: string;
   }
   interface FastifyInstance {
     connectors: ConnectorService;
@@ -85,6 +93,12 @@ export interface AppOptions {
    * environment (R2_BUCKET and friends); null leaves backups off. Tests pass a MemoryObjectStore.
    */
   blob?: ObjectStore | null;
+  /**
+   * The desktop app (desktop/): the library is the files of this folder (server/localStore.ts) and there
+   * are no accounts, every request is the one local user. With a token, only requests carrying it in the
+   * "local" cookie are that user, which keeps other programs and web pages on this machine out.
+   */
+  local?: { dir: string; token?: string };
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -121,7 +135,8 @@ export async function buildApp(opts: AppOptions) {
     mailRequests.set(key, [...recent, now]);
     return false;
   };
-  const sheets = new SheetStore(db, path.join(opts.dataDir, 'sheets'));
+  const folder = opts.local ? new LocalFolder(opts.local.dir, path.join(opts.dataDir, 'trash')) : null;
+  const sheets = folder ? new LocalSheetStore(db, folder, opts.dataDir) : new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
   /**
    * A save may name the revision (updatedAt) the editor loaded. When it does and the file has been saved
@@ -135,11 +150,12 @@ export async function buildApp(opts: AppOptions) {
   };
   const images = new ImageStore(db, path.join(opts.dataDir, 'images'));
   await images.init();
-  const storedFiles = new FileStore(db, path.join(opts.dataDir, 'files'));
+  const storedFiles = folder ? new LocalFileStore(db, folder) : new FileStore(db, path.join(opts.dataDir, 'files'));
   await storedFiles.init();
+  const folders: Folders = folder ? new LocalFolders(folder) : new FolderStore(db);
   // Every save and upload also goes to the object store, and a daily pass snapshots the database and
   // re-uploads anything missing (backup.ts). Restore with `npm run r2 restore <dir>`.
-  const blob = opts.blob === undefined ? (() => { const cfg = r2FromEnv(); return cfg ? new S3ObjectStore(cfg) : null; })() : opts.blob;
+  const blob = opts.local ? null : opts.blob === undefined ? (() => { const cfg = r2FromEnv(); return cfg ? new S3ObjectStore(cfg) : null; })() : opts.blob;
   const backup = blob ? new Backup(blob, { dataDir: opts.dataDir, db, log: { info: (m) => app.log.info(m), error: (m) => app.log.error(m) } }) : null;
   if (backup) {
     sheets.backup = backup;
@@ -169,10 +185,12 @@ export async function buildApp(opts: AppOptions) {
   // Raw cell image uploads. Images are stored as files and cells only reference them, so workbook saves
   // (JSON, under the default body limit) stay small however large the images are.
   app.addContentTypeParser('application/pdf', { parseAs: 'buffer', bodyLimit: MAX_STORED_FILE_BYTES }, (_req, body, done) => done(null, body));
+  app.addContentTypeParser([...new Set(Object.values(VIDEO_TYPES))], { parseAs: 'buffer', bodyLimit: MAX_VIDEO_BYTES }, (_req, body, done) => done(null, body));
   app.addContentTypeParser(CELL_IMAGE_TYPES, { parseAs: 'buffer', bodyLimit: MAX_CELL_IMAGE_BYTES }, (_req, body, done) => done(null, body));
 
   app.decorate('connectors', connectors);
   app.decorateRequest('user', null);
+  app.decorateRequest('folder', '');
 
   // Requests to a retired host name go to the current one (same path and query).
   const appUrl = (opts.appUrl ?? process.env.APP_URL)?.replace(/\/$/, '');
@@ -185,8 +203,12 @@ export async function buildApp(opts: AppOptions) {
     });
   }
 
+  // The desktop app has one user, who owns the mounted folder's files and is never asked to sign in.
+  const localUser: User | null = opts.local ? { id: 'local', email: 'local' } : null;
+  if (localUser) db.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES (?, ?, '', ?)").run(localUser.id, localUser.email, new Date().toISOString());
   app.addHook('onRequest', async (req) => {
-    req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
+    if (localUser) req.user = !opts.local!.token || req.cookies[LOCAL_COOKIE] === opts.local!.token ? localUser : null;
+    else req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
   });
   app.addHook('onClose', async () => {
     if (backup) {
@@ -216,6 +238,13 @@ export async function buildApp(opts: AppOptions) {
 
   const requireUser = async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.user) return reply.code(401).send({ error: 'Not signed in' });
+    // New files go into the folder the request names; uploads name it in the query, the rest in the body.
+    const body = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? (req.body as { folder?: unknown }) : {};
+    const named = (req.query as { folder?: unknown } | undefined)?.folder ?? body.folder;
+    if (named === undefined) return;
+    const path = cleanFolderPath(named);
+    if (path === null || !folders.exists(req.user.id, path)) return reply.code(404).send({ error: 'Folder not found' });
+    req.folder = path;
   };
 
   // --- Auth ----------------------------------------------------------------
@@ -337,7 +366,7 @@ export async function buildApp(opts: AppOptions) {
     return { ok: true };
   });
 
-  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !!google }));
+  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !!google, ...(folder && req.user ? { local: { dir: folder.root } } : {}) }));
 
   // Google sign-in: send the browser to Google; it comes back to the callback, which signs the user in.
   app.get('/api/auth/google/start', async (req, reply) => {
@@ -399,13 +428,13 @@ export async function buildApp(opts: AppOptions) {
         if (typeof body.csv !== 'string') return reply.code(400).send({ error: 'CSV must be a string' });
         if (body.csv.length > MAX_CSV_CHARS) return reply.code(400).send({ error: 'This file is too large to import (10 MB maximum).' });
         try {
-          return { sheet: await sheets.createCsv(req.user!.id, cleanTitle(body.title) ?? 'Imported CSV', body.csv) };
+          return { sheet: await sheets.createCsv(req.user!.id, cleanTitle(body.title) ?? 'Imported CSV', body.csv, req.folder) };
         } catch (e) {
           if (e instanceof CsvError) return reply.code(400).send({ error: e.message });
           throw e;
         }
       }
-      return { sheet: await sheets.create(req.user!.id, cleanTitle(body.title) ?? 'Untitled spreadsheet') };
+      return { sheet: await sheets.create(req.user!.id, cleanTitle(body.title) ?? 'Untitled spreadsheet', undefined, req.folder) };
     });
 
     /** Parse an uploaded .xlsx body; sends a 400 and returns null on failure. */
@@ -437,7 +466,7 @@ export async function buildApp(opts: AppOptions) {
       const result = await convertUpload(req, reply);
       if (!result) return reply;
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported spreadsheet';
-      const sheet = await sheets.create(req.user!.id, title, result.workbook);
+      const sheet = await sheets.create(req.user!.id, title, result.workbook, req.folder);
       return { sheet, warnings: result.warnings };
     });
 
@@ -450,9 +479,15 @@ export async function buildApp(opts: AppOptions) {
 
     r.get('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const res = await sheets.load(req.user!.id, id);
-      if (!res) return reply.code(404).send({ error: 'Sheet not found' });
-      return { sheet: res.meta, workbook: res.workbook };
+      try {
+        const res = await sheets.load(req.user!.id, id);
+        if (!res) return reply.code(404).send({ error: 'Sheet not found' });
+        return { sheet: res.meta, workbook: res.workbook };
+      } catch (e) {
+        // A CSV file from a mounted folder that cannot be opened (too large, for one).
+        if (e instanceof CsvError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
     });
 
     // Branch: a copy that stays connected to its original for comparison.
@@ -519,7 +554,7 @@ export async function buildApp(opts: AppOptions) {
       const doc = body.doc === undefined ? newDoc() : body.doc;
       const problem = validateDoc(doc);
       if (problem) return reply.code(400).send({ error: problem });
-      return { doc: await sheets.createDoc(req.user!.id, title, doc as Doc) };
+      return { doc: await sheets.createDoc(req.user!.id, title, doc as Doc, req.folder) };
     });
 
     r.get('/api/docs/:id', async (req, reply) => {
@@ -578,7 +613,7 @@ export async function buildApp(opts: AppOptions) {
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported document';
       const result = await convertDocx(req, reply);
       if (!result) return reply;
-      const doc = await sheets.createDoc(req.user!.id, title, result.doc);
+      const doc = await sheets.createDoc(req.user!.id, title, result.doc, req.folder);
       return { doc, warnings: result.warnings };
     });
 
@@ -587,7 +622,7 @@ export async function buildApp(opts: AppOptions) {
       if (!Buffer.isBuffer(req.body) || !isPdf(req.body)) return reply.code(400).send({ error: 'This file is not a valid PDF.' });
       const raw = String((req.query as { filename?: unknown }).filename ?? '');
       const name = raw.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'document.pdf';
-      return { file: await storedFiles.create(req.user!.id, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', req.body) };
+      return { file: await storedFiles.create(req.user!.id, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', req.body, req.folder) };
     });
 
     r.post('/api/import/docx', async (req, reply) => {
@@ -610,7 +645,7 @@ export async function buildApp(opts: AppOptions) {
       const text = body.text === undefined ? '' : body.text;
       if (typeof text !== 'string') return reply.code(400).send({ error: 'Text must be a string' });
       if (text.length > MAX_MARKDOWN_CHARS) return reply.code(400).send({ error: 'This file is too large to import (5 MB maximum).' });
-      return { doc: await sheets.createMarkdown(req.user!.id, title, newMarkdownDoc(text)) };
+      return { doc: await sheets.createMarkdown(req.user!.id, title, newMarkdownDoc(text), req.folder) };
     });
 
     r.get('/api/markdown/:id', async (req, reply) => {
@@ -661,7 +696,7 @@ export async function buildApp(opts: AppOptions) {
       const deck = body.deck === undefined ? newDeck() : body.deck;
       const problem = validateDeck(deck);
       if (problem) return reply.code(400).send({ error: problem });
-      return { deck: await sheets.createDeck(req.user!.id, title, deck as Deck) };
+      return { deck: await sheets.createDeck(req.user!.id, title, deck as Deck, req.folder) };
     });
 
     r.get('/api/decks/:id', async (req, reply) => {
@@ -720,7 +755,7 @@ export async function buildApp(opts: AppOptions) {
       const result = await convertPptx(req, reply);
       if (!result) return reply;
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported presentation';
-      const deck = await sheets.createDeck(req.user!.id, title, result.deck);
+      const deck = await sheets.createDeck(req.user!.id, title, result.deck, req.folder);
       return { deck, warnings: result.warnings };
     });
 
@@ -791,7 +826,8 @@ export async function buildApp(opts: AppOptions) {
         // Malformed name: fall back to the default below.
       }
       name = name.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'file';
-      return { file: await storedFiles.create(req.user!.id, name, type, body) };
+      // A video is stored under the type of its extension, whatever the browser called it.
+      return { file: await storedFiles.create(req.user!.id, name, videoTypeOf(name) ?? type, body, req.folder) };
     });
 
     r.get('/api/files', async (req) => ({ files: storedFiles.list(req.user!.id) }));
@@ -806,13 +842,28 @@ export async function buildApp(opts: AppOptions) {
       return f ? { file: f.meta } : reply.code(404).send({ error: 'File not found' });
     });
 
-    // Inline: only PDFs and images are served with their own type; anything else is a plain download.
+    // Inline: only PDFs, images and videos are served with their own type; anything else is a plain download.
+    // A Range request gets just that part of the file, which is what lets a video player seek.
     r.get('/api/files/:id', async (req, reply) => {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
       if (!PREVIEW_FILE_TYPES.includes(f.meta.type)) return attachment(reply, f.meta.filename, 'application/octet-stream').send(createReadStream(f.file));
-      reply.header('Content-Type', f.meta.type).header('Content-Disposition', 'inline').header('Cache-Control', 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff');
-      return reply.send(createReadStream(f.file));
+      // A stored file never changes; one in a mounted folder can.
+      // Browsers that play QuickTime files (H.264) only do so when they are served as MP4.
+      const type = f.meta.type === 'video/quicktime' ? 'video/mp4' : f.meta.type;
+      reply.header('Content-Type', type).header('Content-Disposition', 'inline').header('Cache-Control', opts.local ? 'no-cache' : 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff').header('Accept-Ranges', 'bytes');
+      const size = statSync(f.file).size;
+      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
+      if (!range || (!range[1] && !range[2])) return reply.header('Content-Length', size).send(createReadStream(f.file));
+      // "a-b", "a-" (to the end) or "-n" (the last n bytes).
+      const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      if (start > end || start >= size) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
+      return reply
+        .code(206)
+        .header('Content-Range', `bytes ${start}-${end}/${size}`)
+        .header('Content-Length', end - start + 1)
+        .send(createReadStream(f.file, { start, end }));
     });
 
     r.get('/api/files/:id/download', async (req, reply) => {
@@ -824,6 +875,78 @@ export async function buildApp(opts: AppOptions) {
     r.delete('/api/files/:id', async (req, reply) => {
       const f = storedFile(req);
       if (!f || !(await storedFiles.delete(req.user!.id, f.meta.id))) return reply.code(404).send({ error: 'File not found' });
+      return { ok: true };
+    });
+
+    // --- The library, one folder at a time (shared/folders.ts) ------------------------------------
+    // What is in a folder: its folders, then documents of every kind and stored files.
+    r.get('/api/library', async (req, reply) => {
+      const id = req.user!.id;
+      const problem = folders.problem?.(id, req.folder);
+      if (problem) return reply.code(403).send({ error: problem });
+      return {
+        folder: req.folder,
+        folders: folders.children(id, req.folder).map((path) => ({ name: folderName(path), path })),
+        docs: sheets.listIn(id, req.folder),
+        files: storedFiles.listIn(id, req.folder),
+      };
+    });
+
+    // A small picture of a document for the thumbnail view (shared/preview.ts).
+    r.get('/api/library/preview/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      let loaded;
+      try {
+        loaded = /^[0-9a-f-]{36}$/.test(id) ? await loadFile(sheets, req.user!.id, id) : null;
+      } catch {
+        // A file that cannot be read (a CSV too large to open, say) has no picture.
+        return { preview: { kind: 'empty' } satisfies FilePreview };
+      }
+      if (!loaded) return reply.code(404).send({ error: 'File not found' });
+      const d = loaded.data;
+      const preview: FilePreview = d.kind === 'doc' ? docPreview(d.doc) : d.kind === 'markdown' ? markdownPreview(d.markdown) : d.kind === 'deck' ? deckPreview(d.deck) : sheetPreview(d.workbook);
+      return { preview };
+    });
+
+    // Find by name through the whole library, every folder (the desktop app: the whole mounted folder).
+    r.get('/api/library/search', async (req, reply) => {
+      const q = String((req.query as { q?: unknown }).q ?? '').trim().slice(0, 200);
+      if (!q) return reply.code(400).send({ error: 'Say what to look for.' });
+      const id = req.user!.id;
+      const [paths, docs, files] = [await folders.search(id, q), await sheets.search(id, q), await storedFiles.search(id, q)];
+      return {
+        folders: paths.map((path) => ({ name: folderName(path), path })),
+        docs,
+        files,
+        // Set when a very large folder could not be searched to the end.
+        truncated: folder ? (await folder.find(q)).truncated : false,
+      };
+    });
+
+    // Create a folder called `name` inside the request's folder.
+    r.post('/api/folders', async (req, reply) => {
+      const name = cleanFolderName((req.body as { name?: unknown } | undefined)?.name);
+      if (!name) return reply.code(400).send({ error: 'A folder name cannot be empty, start with a dot, or contain \\ / : * ? " < > |.' });
+      const path = cleanFolderPath(joinFolder(req.folder, name));
+      if (path === null) return reply.code(400).send({ error: 'Folders cannot be nested this deep.' });
+      if (!folders.create(req.user!.id, path)) return reply.code(409).send({ error: `There is already a folder called “${name}” here.` });
+      return { folder: { name, path } };
+    });
+
+    // Delete the request's folder, which must be empty.
+    r.delete('/api/folders', async (req, reply) => {
+      const res = folders.remove(req.user!.id, req.folder);
+      if (res === 'missing') return reply.code(404).send({ error: 'Folder not found' });
+      if (res === 'not-empty') return reply.code(409).send({ error: 'This folder is not empty. Move or delete what is in it first.' });
+      return { ok: true };
+    });
+
+    // Move a document (any kind) or a stored file into the request's folder.
+    r.post('/api/library/move', async (req, reply) => {
+      const { id, kind } = (req.body ?? {}) as { id?: unknown; kind?: unknown };
+      if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) return reply.code(404).send({ error: 'File not found' });
+      const moved = kind === 'file' ? storedFiles.move(req.user!.id, id, req.folder) : sheets.move(req.user!.id, id, req.folder);
+      if (!moved) return reply.code(404).send({ error: 'File not found' });
       return { ok: true };
     });
 
@@ -1024,6 +1147,8 @@ export async function buildApp(opts: AppOptions) {
       const title = typeof body.title === 'string' ? body.title.trim() : '';
       const spec = typeof body.spec === 'string' ? body.spec.trim() : '';
       if (!title || !spec) return reply.code(400).send({ error: 'A title and a spec are required.' });
+      // Jobs run a worker against the hosted app's checkout, which the desktop app does not have.
+      if (opts.local) return reply.code(400).send({ error: 'Background jobs are not available in the desktop app.' });
       const kind = body.kind === 'research' ? 'research' : 'change';
       let sheetId: string | undefined;
       if (kind === 'research' && typeof body.sheetId === 'string' && body.sheetId) {
@@ -1044,6 +1169,7 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const target = jobs.get(id);
       if (!target) return reply.code(404).send({ error: 'Change not found' });
+      if (opts.local) return reply.code(400).send({ error: 'Changes to the app are not available in the desktop app.' });
       if (target.kind !== 'change') return reply.code(400).send({ error: 'Only changes can be reverted, not reverts.' });
       if (target.status !== 'done') return reply.code(400).send({ error: 'Only a finished change can be reverted.' });
       if (target.revertedByJobId) return reply.code(400).send({ error: 'That change has already been reverted.' });

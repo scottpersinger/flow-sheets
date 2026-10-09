@@ -131,6 +131,8 @@ export interface SheetMeta {
   /** Set on a spreadsheet stored as a CSV file (shared/csv.ts): it holds one tab of plain values. */
   format?: 'csv';
   title: string;
+  /** The folder the file is in (shared/folders.ts); absent at the top of the library. */
+  folder?: string;
   createdAt: string;
   updatedAt: string;
   /** Set when this sheet is a branch of another sheet. */
@@ -175,6 +177,8 @@ export function newWorkbook(firstTabId: string): Workbook {
 export interface StoredFile {
   id: string;
   filename: string;
+  /** The folder the file is in; absent at the top of the library. */
+  folder?: string;
   /** MIME type. */
   type: string;
   size: number;
@@ -186,4 +190,14 @@ export interface StoredFile {
 }
 
 /** Types the app can preview in a tab; everything else gets an info page with a Download button. */
-export const PREVIEW_FILE_TYPES = ['application/pdf', ...['image/png', 'image/jpeg', 'image/gif', 'image/webp']];
+export const PREVIEW_FILE_TYPES = ['application/pdf', ...['image/png', 'image/jpeg', 'image/gif', 'image/webp'], ...['video/mp4', 'video/webm', 'video/quicktime', 'video/ogg']];
+
+/** Video files the app plays, by extension, with the type each is stored as. */
+export const VIDEO_TYPES: Record<string, string> = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', ogv: 'video/ogg' };
+/** The type of a video file by its name, or null if the name is not a video's. */
+export function videoTypeOf(filename: string): string | null {
+  const ext = /\.([a-z0-9]+)$/i.exec(filename)?.[1].toLowerCase();
+  return (ext && VIDEO_TYPES[ext]) || null;
+}
+/** Largest video that can be uploaded. */
+export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;

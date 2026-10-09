@@ -1,12 +1,13 @@
 import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject, type SyntheticEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
 import { markdownTitle } from '../../../shared/markdown.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterMarkdown } from '../agent/AgentProvider.tsx';
 import type { TextEdit } from '../../../shared/agent/markdownBlocks.ts';
 import { api, ApiError } from '../api.ts';
-import { useAuth } from '../auth.tsx';
+import { Account } from '../components/Account.tsx';
 import { MOD } from '../commands.ts';
 import { MarkdownIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -217,7 +218,6 @@ function MarkdownWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: 
   useMarkdownController(ctl);
   useFavicon('markdown');
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
   const { open: agentOpen } = useAgent();
   const [meta, setMeta] = useState(initialMeta);
   useRegisterMarkdown(ctl, meta);
@@ -374,11 +374,12 @@ function MarkdownWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: 
   return (
     <div className="workbench md-page">
       <header className="wb-header">
-        <Link to="/" className="wb-logo" title="Back to home" onClick={() => void ctl.saver.flush()}>
+        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
           <MarkdownIcon size={32} />
         </Link>
         <div className="wb-titles">
           <div className="wb-title-row">
+            <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
             <input
               className="wb-title"
               value={title}
@@ -423,10 +424,7 @@ function MarkdownWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: 
             Preview
           </button>
           <AgentButton />
-          <span title={user?.email}>{user?.email}</span>
-          <button className="btn" onClick={() => void ctl.saver.flush().then(logout)}>
-            Sign out
-          </button>
+          <Account before={() => ctl.saver.flush()} />
         </div>
       </header>
       <div className="md-body-row" ref={rowRef}>

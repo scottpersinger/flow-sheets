@@ -1,0 +1,41 @@
+// The desktop app's server: the same app as the hosted one, serving the built client, with a folder on
+// this machine as its library (AppOptions.local). Started by desktop/main.js as a child process, which
+// tells it the folder (LOCAL_DIR), where to keep its own data (DATA_DIR) and the token its window sends
+// (LOCAL_TOKEN), and is told the port once the server is listening.
+import '../server/env.ts';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { buildApp } from '../server/app.ts';
+
+const root = path.resolve(import.meta.dirname, '..');
+const dir = process.env.LOCAL_DIR;
+const dataDir = process.env.DATA_DIR;
+if (!dir || !dataDir) throw new Error('LOCAL_DIR and DATA_DIR are required');
+// Settings of a hosted deployment that may be in a developer's .env and make no sense here.
+delete process.env.APP_URL;
+delete process.env.LEGACY_HOSTS;
+
+mkdirSync(dataDir, { recursive: true });
+const app = await buildApp({
+  dataDir,
+  staticDir: path.join(root, 'dist', 'client'),
+  local: { dir, token: process.env.LOCAL_TOKEN || undefined },
+  blob: null,
+});
+// Loopback only, on a port the system picks unless one is given.
+await app.listen({ port: Number(process.env.PORT ?? 0), host: '127.0.0.1' });
+const address = app.server.address();
+const port = typeof address === 'object' && address ? address.port : 0;
+if (process.send) process.send({ port });
+else console.log(`Serving ${dir} at http://127.0.0.1:${port}`);
+
+const close = () => {
+  app.close().then(
+    () => process.exit(0),
+    () => process.exit(1),
+  );
+};
+process.once('SIGTERM', close);
+process.once('SIGINT', close);
+// The window is gone: finish in-flight saves and stop.
+process.once('disconnect', close);

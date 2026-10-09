@@ -1,6 +1,7 @@
 import { DOMSerializer } from 'prosemirror-model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
 import { docNode, docSchema, docStyleCss, docStyleOf, PAGE_SIZES, type BlockType } from '../../../shared/doc.ts';
 import { docToMarkdown } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
@@ -8,7 +9,7 @@ import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterDoc } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
-import { useAuth } from '../auth.tsx';
+import { Account } from '../components/Account.tsx';
 import { pickImageFile, uploadImageFile } from '../cellImage.ts';
 import { MOD } from '../commands.ts';
 import { DocIcon } from '../components/Logo.tsx';
@@ -123,7 +124,6 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   useFavicon('doc');
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout } = useAuth();
   // Notes from a Word import: arrive via navigation state (home-page import) or from File → Import.
   const [importWarnings, setImportWarnings] = useState<string[]>(() => (location.state as { importWarnings?: string[] } | null)?.importWarnings ?? []);
   const dismissImportWarnings = () => {
@@ -394,11 +394,12 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   return (
     <div className={`workbench doc-page${printing && ctl.pageSetup().mode === 'pages' ? ' doc-printing-pages' : ''}`}>
       <header className="wb-header">
-        <Link to="/" className="wb-logo" title="Back to home" onClick={() => void ctl.saver.flush()}>
+        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
           <DocIcon size={32} />
         </Link>
         <div className="wb-titles">
           <div className="wb-title-row">
+            <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
             <input
               className="wb-title"
               value={title}
@@ -440,10 +441,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
         </div>
         <div className="wb-user">
           <AgentButton />
-          <span title={user?.email}>{user?.email}</span>
-          <button className="btn" onClick={() => void ctl.saver.flush().then(logout)}>
-            Sign out
-          </button>
+          <Account before={() => ctl.saver.flush()} />
         </div>
       </header>
       <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} />

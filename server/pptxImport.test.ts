@@ -79,7 +79,93 @@ async function googleStylePptx(): Promise<Buffer> {
   return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
 }
 
+/**
+ * A designed template the way PowerPoint saves one: the look lives in the layout (a dark background, a freeform,
+ * a turned title placeholder with outlined capitals, a round picture placeholder) and the slide only fills it in.
+ */
+async function templatePptx(): Promise<Buffer> {
+  const rels = (items: [string, string, string][]) =>
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.map(([id, type, target]) => `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`).join('')}</Relationships>`;
+  const xfrm = (x: number, y: number, cx: number, cy: number, extra = '') => `<a:xfrm${extra}><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;
+  const nv = (id: number, ph = '') => `<p:nvSpPr><p:cNvPr id="${id}" name="s${id}"/><p:cNvSpPr/><p:nvPr>${ph}</p:nvPr></p:nvSpPr>`;
+  const theme = `<a:theme ${NS} name="T"><a:themeElements><a:clrScheme name="c"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:accent1><a:srgbClr val="00FF00"/></a:accent1><a:accent2><a:srgbClr val="8040C0"/></a:accent2></a:clrScheme><a:fontScheme name="f"><a:majorFont><a:latin typeface="Arial"/></a:majorFont><a:minorFont><a:latin typeface="Arial"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>`;
+  const master =
+    `<p:sldMaster ${NS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></p:bgPr></p:bg><p:spTree>` +
+    `<p:sp>${nv(2, '<p:ph type="title"/>')}<p:spPr>${xfrm(0, 0, 9144000, 914400)}</p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p/></p:txBody></p:sp>` +
+    // The master's slide number has idx 4: a slide's "idx 4" body placeholder must not take its look.
+    `<p:sp>${nv(3, '<p:ph type="sldNum" idx="4"/>')}<p:spPr>${xfrm(8229600, 0, 914400, 457200)}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr algn="ctr"><a:defRPr sz="900" cap="all"/></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>` +
+    `</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt1" tx2="dk1"/>` +
+    `<p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="4000" cap="all"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:defRPr></a:lvl1pPr></p:titleStyle>` +
+    `<p:bodyStyle><a:lvl1pPr><a:buChar char="+"/><a:buClr><a:schemeClr val="accent1"/></a:buClr><a:defRPr sz="1800"><a:solidFill><a:schemeClr val="bg1"/></a:solidFill></a:defRPr></a:lvl1pPr></p:bodyStyle></p:txStyles></p:sldMaster>`;
+  const layout =
+    `<p:sldLayout ${NS}><p:cSld><p:spTree>` +
+    `<p:sp>${nv(5)}<p:spPr>${xfrm(0, 0, 4572000, 2286000)}<a:custGeom><a:pathLst><a:path w="200" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="200" y="0"/></a:lnTo><a:cubicBezTo><a:pt x="200" y="50"/><a:pt x="100" y="100"/><a:pt x="0" y="100"/></a:cubicBezTo><a:close/></a:path></a:pathLst></a:custGeom><a:noFill/><a:ln w="19050"><a:solidFill><a:schemeClr val="accent1"><a:alpha val="50000"/></a:schemeClr></a:solidFill></a:ln></p:spPr></p:sp>` +
+    `<p:sp>${nv(6, '<p:ph type="title"/>')}<p:spPr>${xfrm(-914400, 1828800, 4572000, 914400, ' rot="16200000"')}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr algn="ctr"><a:defRPr><a:ln w="12700"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:ln><a:noFill/></a:defRPr></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>` +
+    `<p:sp>${nv(7, '<p:ph type="pic" idx="13"/>')}<p:spPr>${xfrm(4572000, 914400, 1828800, 1828800)}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></p:spPr></p:sp>` +
+    `<p:sp>${nv(8, '<p:ph idx="4"/>')}<p:spPr>${xfrm(4572000, 3200400, 3657600, 914400)}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:lnSpc><a:spcPts val="2800"/></a:lnSpc><a:defRPr sz="1400"/></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>` +
+    `</p:spTree></p:cSld></p:sldLayout>`;
+  const cell = (text: string, borders = '') => `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="en" sz="1400"/><a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr anchor="ctr">${borders}</a:tcPr></a:tc>`;
+  const blue = (side: string) => `<a:${side} w="38100"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:${side}>`;
+  const slide =
+    `<p:sld ${NS}><p:cSld><p:spTree>` +
+    `<p:sp>${nv(2, '<p:ph type="title"/>')}<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en"/><a:t>artist</a:t></a:r></a:p></p:txBody></p:sp>` +
+    `<p:pic><p:nvPicPr><p:cNvPr id="3" name="p"/><p:cNvPicPr/><p:nvPr><p:ph type="pic" idx="13"/></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"><a:duotone><a:prstClr val="black"/><a:schemeClr val="accent2"/></a:duotone></a:blip><a:srcRect l="10000" r="20000"/><a:stretch/></p:blipFill><p:spPr/></p:pic>` +
+    `<p:sp>${nv(4, '<p:ph idx="4"/>')}<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en"/><a:t>One</a:t></a:r></a:p></p:txBody></p:sp>` +
+    `<p:sp>${nv(5)}<p:spPr>${xfrm(6858000, 0, 2286000, 5143500, ' flipH="1"')}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="tx1"><a:alpha val="0"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="tx1"/></a:gs></a:gsLst><a:lin ang="10800000"/></a:gradFill></p:spPr></p:sp>` +
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="6" name="t"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="914400" y="3657600"/><a:ext cx="1828800" cy="914400"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="914400"/><a:gridCol w="914400"/></a:tblGrid>` +
+    `<a:tr h="457200">${cell('A', blue('lnB'))}${cell('B', blue('lnB'))}</a:tr><a:tr h="457200">${cell('1', blue('lnT'))}${cell('2', blue('lnT'))}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` +
+    `</p:spTree></p:cSld></p:sld>`;
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  zip.file('ppt/presentation.xml', `<p:presentation ${NS}><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>`);
+  zip.file('ppt/_rels/presentation.xml.rels', rels([['rId2', 'slide', 'slides/slide1.xml']]));
+  zip.file('ppt/slideMasters/slideMaster1.xml', master);
+  zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', rels([['rId2', 'theme', '../theme/theme1.xml']]));
+  zip.file('ppt/slideLayouts/slideLayout1.xml', layout);
+  zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels', rels([['rId1', 'slideMaster', '../slideMasters/slideMaster1.xml']]));
+  zip.file('ppt/theme/theme1.xml', theme);
+  zip.file('ppt/slides/slide1.xml', slide);
+  zip.file('ppt/slides/_rels/slide1.xml.rels', rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml'], ['rId2', 'image', '../media/image1.png']]));
+  zip.file('ppt/media/image1.png', Buffer.from(PNG.split(',')[1], 'base64'));
+  return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+}
+
 describe('pptx export and import', () => {
+  it('draws a designed template: layout artwork, inherited placement, outlined text, cropped pictures, gradients and tables', async () => {
+    const { deck, warnings } = await importPptx(await templatePptx(), async () => '/api/images/00000000-0000-0000-0000-000000000000');
+    expect(warnings).toEqual([]);
+    const slide = deck.slides[0];
+    // The master's background, since neither the slide nor the layout sets one.
+    expect(slide.bg).toBe('#000000');
+    const els = slide.elements;
+    // The layout's freeform comes first (under the slide's own shapes), as a path in a 100×100 box.
+    const freeform = els[0] as ShapeElement;
+    expect(freeform).toMatchObject({ type: 'shape', x: 0, y: 0, w: 480, h: 240, fill: 'none', stroke: 'rgba(0, 255, 0, 0.5)', strokeWidth: 2 });
+    expect(freeform.path).toBe('M0,0 L100,0 C100,50 50,100 0,100 Z');
+    // The title takes its box and quarter turn from the layout, its outline from the layout's list style, and
+    // its capitals, size and vertical centering from the master.
+    const title = els.find((e): e is TextElement => e.type === 'text' && e.role === 'title')!;
+    expect(title).toMatchObject({ rot: -90, style: { size: 53, outline: '#00ff00', caps: true, align: 'center', valign: 'middle' } });
+    expect(Math.abs(title.x + title.w / 2 - 144)).toBeLessThanOrEqual(1);
+    // The picture fills its placeholder: cropped, cut to the placeholder's ellipse, in the duotone's two colors.
+    const pic = els.find((e): e is ImageElement => e.type === 'image')!;
+    expect(pic).toMatchObject({ x: 480, y: 96, w: 192, h: 192, crop: { l: 0.1, t: 0, r: 0.2, b: 0 }, clip: 'ellipse(50% 50% at 50% 50%)', duotone: ['#000000', '#8040c0'] });
+    // A body placeholder with idx 4 follows the layout's idx 4 (and the master's body style), not the master's slide number.
+    const body = els.find((e): e is TextElement => e.type === 'text' && e.paragraphs[0].text === 'One')!;
+    expect(body.style).toEqual({ size: 19, color: '#ffffff', lineHeight: 2, bulletChar: '+', bulletColor: '#00ff00' });
+    expect(body.paragraphs[0].bullet).toBe(true);
+    // A mirrored gradient runs the other way.
+    const fade = els.find((e): e is ShapeElement => e.type === 'shape' && !!e.fill?.startsWith('linear-gradient'))!;
+    expect(fade.fill).toBe('linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, #000000 100%)');
+    // The table: a text box per cell and the one border the two rows share, drawn once across both columns.
+    const cells = els.filter((e): e is TextElement => e.type === 'text' && ['A', 'B', '1', '2'].includes(e.paragraphs[0].text));
+    expect(cells.map((c) => [c.paragraphs[0].text, c.style?.align, c.style?.valign])).toEqual([['A', 'center', 'middle'], ['B', 'center', 'middle'], ['1', 'center', 'middle'], ['2', 'center', 'middle']]);
+    const rules = els.filter((e): e is LineElement => e.type === 'line');
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ x: 96, y: 432, w: 192, h: 0, strokeColor: '#0000ff', strokeWidth: 4 });
+  });
+
+
   it('round-trips arcs with their angles and no warning', async () => {
     const s = buildSlide('blank', {}, newId);
     s.elements.push({ id: newId(), type: 'shape', shape: 'arc', x: 180, y: 187, w: 223, h: 223, fill: 'none', stroke: '#ff0000', strokeWidth: 3, startAngle: 90, endAngle: 200 });
@@ -101,7 +187,7 @@ describe('pptx export and import', () => {
     // The body: 18pt in the theme's dark gray from the master placeholder, 115% line spacing, the body font;
     // the widest gap between paragraphs stands for the box.
     const body = texts.find((t) => t.paragraphs[0].text === 'Deployed on Fly.io:')!;
-    expect(body.style).toEqual({ size: 24, font: 'Verdana', color: '#595959', lineHeight: 1.38, paraSpacing: 16 });
+    expect(body.style).toEqual({ size: 24, font: 'Verdana', color: '#595959', lineHeight: 1.38, paraSpacing: 16, bulletChar: '-' });
     expect(body.paragraphs.map((p) => !!p.bullet)).toEqual([false, true, true]);
     // Text in a plain shape: 14pt italic (the master's "other" style) in the theme text color, not white, and
     // a hyperlink inside it does not recolor the whole box.

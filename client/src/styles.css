@@ -2364,12 +2364,13 @@ button.agent-tool-label:hover {
   text-decoration: underline;
 }
 .sl-p.bullet::before {
-  content: '•';
+  content: var(--sl-bullet, '•');
   position: absolute;
   left: 0;
   width: 28px;
   text-align: center;
-  color: var(--sl-accent);
+  color: var(--sl-bullet-color, var(--sl-accent));
+  -webkit-text-stroke: 0;
 }
 .sl-p.bullet[data-level='1']::before {
   left: 28px;
@@ -3420,4 +3421,331 @@ button.agent-tool-label:hover {
     border: 0;
     overflow: visible;
   }
+}
+
+/* Folders in the file library: breadcrumbs over the list, and the folder rows. */
+.list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+.breadcrumbs .crumb {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  font: inherit;
+  color: #1a73e8;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.breadcrumbs .crumb:hover {
+  background: #e8f0fe;
+}
+.breadcrumbs .crumb-sep {
+  margin: 0 8px;
+  color: #9aa0a6;
+  font-weight: 400;
+}
+.folder-icon {
+  color: #8a9099;
+  vertical-align: -4px;
+  margin-right: 2px;
+}
+.folder-picker {
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  max-height: 240px;
+  overflow: auto;
+  margin: 10px 0;
+}
+.folder-picker button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 8px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.folder-picker button:hover {
+  background: #f1f3f4;
+}
+.folder-picker .muted {
+  padding: 8px 12px;
+}
+
+/* An open file's place in the library, before its name in the page header. */
+.folder-crumbs {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 400;
+}
+.folder-crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.folder-crumbs a:hover {
+  color: #1a73e8;
+  background: #e8f0fe;
+}
+.folder-crumbs .crumb-sep {
+  margin: 0 4px;
+  color: #9aa0a6;
+}
+.wb-title-row .folder-crumbs {
+  margin-right: -8px;
+}
+.file-page-title .folder-crumbs {
+  margin-right: 4px;
+}
+/* The per-row button that opens a file in a new tab. */
+.sheet-list .row-actions {
+  white-space: nowrap;
+}
+.open-tab-btn {
+  padding: 3px 10px;
+  font-size: 13px;
+  margin-right: 6px;
+}
+
+.file-preview-video {
+  max-width: 100%;
+  max-height: 100%;
+  align-self: center;
+  background: #000;
+  outline: none;
+}
+
+/* A long name without spaces wraps inside its cell instead of pushing the list wider than the page. */
+.sheet-list td:first-child {
+  overflow-wrap: anywhere;
+}
+.sheet-title > svg,
+.sheet-title > .file-chip-icon,
+.sheet-title > .tree-indent,
+.sheet-title > .tree-elbow {
+  flex-shrink: 0;
+}
+
+/* "Find files": searching every folder from the home page. */
+.find-files {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -32px 0 48px;
+  font-size: 13px;
+}
+.empty-state + .find-files {
+  margin-top: 16px;
+}
+.found-in {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.found-back {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  color: #1a73e8;
+  cursor: pointer;
+  margin-left: 14px;
+}
+
+/* The file list as thumbnails. */
+.list-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.view-toggle button {
+  display: flex;
+  align-items: center;
+  border: 0;
+  background: #fff;
+  padding: 6px 9px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.view-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+.view-toggle button.active {
+  background: #e8f0fe;
+  color: #1a73e8;
+}
+.grid-sort {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+.file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
+  margin-bottom: 48px;
+}
+.file-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  min-width: 0;
+}
+.file-card:hover {
+  border-color: #a8c7fa;
+  box-shadow: 0 1px 4px rgba(60, 64, 67, 0.15);
+}
+.file-thumb {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 7px 7px 0 0;
+  border-bottom: 1px solid #f1f3f4;
+  background: #f8f9fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.file-thumb.folder {
+  color: #8a9099;
+}
+.file-thumb .folder-icon {
+  margin: 0;
+}
+.thumb-icon {
+  display: flex;
+  transform: scale(1.4);
+  opacity: 0.85;
+}
+.thumb-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  background: #000;
+}
+img.thumb-image {
+  background: none;
+}
+.thumb-page {
+  width: 100%;
+  align-self: flex-start;
+  background: #fff;
+}
+.thumb-text {
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: #fff;
+  font-size: 8px;
+  line-height: 1.45;
+  color: #3c4043;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+.thumb-text.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 7.5px;
+}
+.thumb-grid {
+  align-self: flex-start;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 7.5px;
+  color: #3c4043;
+}
+.thumb-grid td {
+  border: 1px solid #e3e5e8;
+  padding: 1px 3px;
+  height: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.thumb-slide {
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px #e3e5e8;
+}
+.file-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 0 10px;
+}
+.file-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-card-name .sheet-title {
+  display: inline;
+  font-size: 13px;
+}
+.file-card-name svg,
+.file-card-name .file-chip-icon {
+  vertical-align: -3px;
+  margin-right: 3px;
+}
+.file-card .row-actions {
+  width: auto;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.file-card .open-tab-btn {
+  font-size: 0;
+  padding: 3px 7px;
+  margin-right: 0;
+  border-color: transparent;
+  background: none;
+}
+.file-card .open-tab-btn span {
+  font-size: 13px;
+}
+.file-card-meta {
+  padding: 0 10px 9px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
