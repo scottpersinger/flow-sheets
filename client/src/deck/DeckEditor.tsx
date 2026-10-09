@@ -2,6 +2,8 @@
 // are moved and resized with the mouse (one undo step per drag), text is edited inline on double-click, and
 // image files dropped on the slide become image elements.
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useHasAgent } from '../agent/AgentProvider.tsx';
+import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { fitZoomActions, useWheelZoom, ZoomControls } from '../components/ZoomControls.tsx';
 import { SLIDE_H, SLIDE_W, THEMES, type LineElement, type SlideElement } from '../../../shared/deck.ts';
 import { boxFromEnds, compactLine, DEFAULT_LINE_WIDTH, lineEnds, lineGeometry, nearSites, SITES, sitePoint, snapAngle, type SiteHit } from '../../../shared/lines.ts';
@@ -314,6 +316,29 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       }
     : null;
 
+  // The prompt to the assistant sits under the selected elements, or at the top of the slide when nothing is selected.
+  const [, setTick] = useState(0);
+  const assisting = useHasAgent() && !!ctl.assistant;
+  useEffect(() => {
+    if (!assisting) return;
+    const bump = () => setTick((t) => t + 1);
+    window.addEventListener('scroll', bump, true);
+    window.addEventListener('resize', bump);
+    return () => {
+      window.removeEventListener('scroll', bump, true);
+      window.removeEventListener('resize', bump);
+    };
+  }, [assisting]);
+  const assistAnchor = () => {
+    const r = wrapRef.current?.querySelector('.slide')?.getBoundingClientRect();
+    if (!r) return null;
+    if (!selected.length) return { left: r.left + 48, top: r.top + 24, bottom: r.top + 24 };
+    const left = Math.min(...selected.map((el) => el.x));
+    const top = Math.min(...selected.map((el) => el.y));
+    const bottom = Math.max(...selected.map((el) => el.y + el.h));
+    return { left: r.left + left * scale + 24, top: r.top + top * scale, bottom: r.top + bottom * scale };
+  };
+
   const single = selected.length === 1 && !ctl.editing ? selected[0] : null;
   const boxOf = (el: SlideElement): Box => ({ x: el.x, y: el.y, w: el.w, h: el.h, ...drag?.preview[el.id] });
   const preview: Record<string, BoxPreview> | undefined = lineDrag && lineDrag.mode !== 'draw' ? { ...drag?.preview, [lineDrag.line.id]: linePreview(lineDrag.line) } : drag?.preview;
@@ -406,6 +431,16 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
       </SlideView>
     </div>
       <ZoomControls percent={scale * 100} {...fitZoomActions(zoom, setZoom)} />
+      {assisting && ctl.assistant && (
+        <InlinePrompt
+          anchor={assistAnchor()}
+          placeholder={ctl.assistant.text ? 'Ask the assistant about the selected text…' : selected.length ? `Ask the assistant about the selected element${selected.length === 1 ? '' : 's'}…` : 'Ask the assistant about this slide…'}
+          onClose={() => {
+            ctl.setAssistant(null);
+            wrapRef.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 }

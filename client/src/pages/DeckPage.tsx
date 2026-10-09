@@ -281,10 +281,22 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
         void addImageFiles(files);
       } else ctl.paste();
     };
+    // Mod-J opens the prompt to the assistant on the slide. Caught on the way down, because a text box being
+    // edited keeps its keys to itself; the text selected in it goes along, since opening the prompt ends the edit.
+    const onAssist = (e: KeyboardEvent) => {
+      if (!(isMac ? e.metaKey : e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'j' || ctl.presenting) return;
+      const inText = e.target instanceof HTMLElement && !!e.target.closest('.sl-editing');
+      if (isTyping(e.target) && !inText) return;
+      e.preventDefault();
+      const text = inText ? (window.getSelection()?.toString() ?? '') : '';
+      ctl.setAssistant(text.trim() ? { text } : {});
+    };
     window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onAssist, true);
     window.addEventListener('paste', onPaste);
     return () => {
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onAssist, true);
       window.removeEventListener('paste', onPaste);
     };
   }, [ctl, addImageFiles]);
@@ -362,6 +374,8 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
         { label: 'Duplicate', shortcut: `${MOD}D`, action: () => (ctl.selection.length ? ctl.duplicateSelected() : ctl.duplicateSlide()) },
         { label: 'Delete', shortcut: 'Delete', disabled: !ctl.selection.length, action: () => ctl.deleteSelected() },
         { label: 'Select all', shortcut: `${MOD}A`, action: () => ctl.select(ctl.slide.elements.map((e) => e.id)) },
+        'sep',
+        { label: 'Ask the assistant here…', shortcut: `${MOD}J`, action: () => ctl.setAssistant({}) },
       ],
     },
     {

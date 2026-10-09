@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, ApiError } from '../api.ts';
@@ -13,6 +13,7 @@ import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { DocController } from '../doc/controller.ts';
 import type { MarkdownController } from '../markdown/controller.ts';
+import { deckInlineContext, docInlineContext } from '../../../shared/agent/docRead.ts';
 import { blockAt, markdownBlocks } from '../../../shared/agent/markdownBlocks.ts';
 import { deckToPdf } from '../deck/pdf.ts';
 import { renderSlideImage } from '../deck/renderSlide.ts';
@@ -49,8 +50,11 @@ interface AgentState {
   error: string | null;
   /** A destructive action waiting for the user's answer. */
   confirm: { question: string; answer(ok: boolean): void } | null;
-  /** Send a message, optionally with images (pasted screenshots). */
-  send(text: string, images?: AgentImage[]): void;
+  /**
+   * Send a message, optionally with images (pasted screenshots). `inline` marks one typed in the prompt at the
+   * cursor of the open document or on a slide: the document or presentation and the user's place in it go along.
+   */
+  send(text: string, images?: AgentImage[], opts?: { inline?: boolean }): void;
   stop(): void;
   reset(): Promise<void>;
   /** The spreadsheet page reports the open spreadsheet (null when it closes). */
@@ -292,7 +296,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const context = (): AgentContext => {
+  const context = (inline = false): AgentContext => {
     const m = markdownRef.current;
     if (m) {
       const blocks = markdownBlocks(m.ctl.text);
@@ -301,13 +305,15 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     const t = docRef.current;
     if (t) {
       const selected = t.ctl.selectedText();
+      const max = inline ? MAX_INLINE_SELECTED_TEXT : 200;
       return {
         page: 'doc',
         docId: t.meta.id,
         title: t.meta.title,
         blockCount: t.ctl.doc.childCount,
         cursorBlock: t.ctl.cursorBlock(),
-        ...(selected ? { selectedText: selected.length > 200 ? `${selected.slice(0, 200)}…` : selected } : {}),
+        ...(selected ? { selectedText: selected.length > max ? `${selected.slice(0, max)}…` : selected } : {}),
+        ...(inline ? { inline: docInlineContext(t.ctl.doc, t.ctl.state.selection) } : {}),
       };
     }
     const d = deckRef.current;
@@ -319,6 +325,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         slideCount: d.ctl.deck.slides.length,
         currentSlide: d.ctl.current + 1,
         selectedElements: d.ctl.selection,
+        ...(inline ? { inline: deckInlineContext(d.ctl.deck, d.ctl.current, d.ctl.assistant?.text) } : {}),
       };
     }
     const s = sheetRef.current;
@@ -550,7 +557,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return results;
   };
 
-  const send = (text: string, images: AgentImage[] = []) => {
+  const send = (text: string, images: AgentImage[] = [], opts: { inline?: boolean } = {}) => {
     const message = text.trim();
     if ((!message && !images.length) || running) return;
     const abort = new AbortController();
@@ -572,7 +579,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           }
         }),
       );
-      let req: AgentTurnRequest = { message, context: context(), ...(stored.length ? { images: stored } : {}) };
+      let req: AgentTurnRequest = { message, context: context(opts.inline), ...(stored.length ? { images: stored } : {}) };
       try {
         for (;;) {
           let calls: ClientToolCall[] | null = null;
@@ -663,6 +670,11 @@ export function useAgent(): AgentState {
   const ctx = useContext(AgentCtx);
   if (!ctx) throw new Error('useAgent must be used inside AgentProvider');
   return ctx;
+}
+
+/** Whether the assistant is there at all: the editors are also used where it is not (the ChatGPT plugin's widget). */
+export function useHasAgent(): boolean {
+  return useContext(AgentCtx) !== null;
 }
 
 /** Report the open spreadsheet to the agent while a spreadsheet page is mounted. */

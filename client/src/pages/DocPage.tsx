@@ -300,6 +300,8 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
         { label: 'Redo', shortcut: `${MOD}Y`, disabled: !ctl.store.canRedo(), action: () => ctl.redo() },
         'sep',
         { label: 'Clear formatting', action: () => ctl.clearFormatting() },
+        'sep',
+        { label: 'Ask the assistant here…', shortcut: `${MOD}J`, action: () => ctl.setAssistantOpen(true) },
       ],
     },
     {

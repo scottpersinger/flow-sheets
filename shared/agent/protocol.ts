@@ -23,6 +23,8 @@ export type AgentContext =
       currentSlide: number;
       /** Ids of the selected elements on that slide. */
       selectedElements: string[];
+      /** Set when the message was typed in the prompt opened on the slide, rather than in the chat panel. */
+      inline?: DeckInlineContext;
     }
   | {
       page: 'doc';
@@ -33,6 +35,8 @@ export type AgentContext =
       cursorBlock: number;
       /** The selected text, if any (shortened). */
       selectedText?: string;
+      /** Set when the message was typed in the prompt opened at the cursor, rather than in the chat panel. */
+      inline?: DocInlineContext;
     }
   | {
       page: 'markdown';
@@ -58,6 +62,34 @@ export type AgentContext =
       /** The box the user dragged on a picture. */
       selectedRegion?: ImageRegion;
     };
+
+/** Most text of the open file sent with a message typed in the prompt at the cursor; a longer file is cut to the part around the cursor. */
+export const MAX_INLINE_CONTEXT_CHARS = 60_000;
+/** Selected text sent in full with such a message, up to this length. */
+export const MAX_INLINE_SELECTED_TEXT = 4000;
+
+/** What a message typed in the prompt on a slide carries: the presentation itself and the text selected in a text box. */
+export interface DeckInlineContext {
+  /** The theme, then the slides as read_deck lists them, one line of JSON each. */
+  deck: string;
+  /** The 1-based slides in `deck`, when the presentation was too long to send whole. */
+  showing?: [number, number];
+  /** The text that was selected in the text box being edited when the prompt was opened. */
+  selectedText?: string;
+}
+
+/** What a message typed in the prompt at the cursor carries: the document itself and where the user is in it. */
+export interface DocInlineContext {
+  /** The document's blocks as numbered Markdown ("[3] text"), as read_doc numbers them. */
+  document: string;
+  /** The 1-based blocks in `document`, when the document was too long to send whole. */
+  showing?: [number, number];
+  /** The 1-based first and last block the selection touches, when text is selected. */
+  selectionBlocks?: [number, number];
+  /** The text of the cursor's block just before and after the cursor, when nothing is selected. */
+  before?: string;
+  after?: string;
+}
 
 /** A rectangle of a picture, in the picture's own pixels from its top left corner. */
 export interface ImageRegion {

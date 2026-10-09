@@ -6,8 +6,10 @@ import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
 import type { Node as PMNode } from 'prosemirror-model';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
-import { EditorView, type NodeView } from 'prosemirror-view';
+import { Decoration, DecorationSet, EditorView, type NodeView } from 'prosemirror-view';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useHasAgent } from '../agent/AgentProvider.tsx';
+import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { ICONS } from './DocToolbar.tsx';
 import { docStyleCss, docStyleOf, PAGE_GAP, pageMetrics, pageText, type PageSetup } from '../../../shared/doc.ts';
 import { CELL_IMAGE_TYPES } from '../../../shared/types.ts';
@@ -173,12 +175,48 @@ function LinkBubble({ ctl }: { ctl: DocController }) {
   );
 }
 
+function heldCaret(): HTMLElement {
+  const el = document.createElement('span');
+  el.className = 'doc-held-caret';
+  return el;
+}
+
+/** The prompt to the assistant, under the cursor or the end of the selection (Mod-J). */
+function DocInlinePrompt({ ctl }: { ctl: DocController }) {
+  const [, setTick] = useState(0);
+  // Follow the cursor when the page scrolls or the window resizes.
+  useEffect(() => {
+    const bump = () => setTick((t) => t + 1);
+    window.addEventListener('scroll', bump, true);
+    window.addEventListener('resize', bump);
+    return () => {
+      window.removeEventListener('scroll', bump, true);
+      window.removeEventListener('resize', bump);
+    };
+  }, []);
+  const { to, empty } = ctl.state.selection;
+  return (
+    <InlinePrompt
+      anchor={ctl.coordsAt(to)}
+      placeholder={empty ? 'Ask the assistant to write or change something here…' : 'Ask the assistant about the selected text…'}
+      onClose={() => {
+        ctl.setAssistantOpen(false);
+        ctl.focus();
+      }}
+    />
+  );
+}
+
 export function DocEditor({ ctl, onImageFiles, onScale }: { ctl: DocController; onImageFiles(files: File[]): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const filesRef = useRef(onImageFiles);
   filesRef.current = onImageFiles;
   const [available, setAvailable] = useState(0);
+  const hasAgent = useHasAgent();
+  useEffect(() => {
+    ctl.assistantEnabled = hasAgent;
+  }, [ctl, hasAgent]);
 
   useEffect(() => {
     const view = new EditorView(ref.current!, {
@@ -186,6 +224,12 @@ export function DocEditor({ ctl, onImageFiles, onScale }: { ctl: DocController; 
       dispatchTransaction: (tr) => ctl.dispatch(tr),
       plugins: [dropCursor({ color: '#1a73e8', width: 2 }), gapCursor()],
       nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos) },
+      // While the prompt to the assistant has the focus the browser draws no cursor or selection here, so draw them.
+      decorations: (state) => {
+        const sel = state.selection;
+        if (!ctl.assistantOpen || !(sel instanceof TextSelection)) return null;
+        return DecorationSet.create(state.doc, [sel.empty ? Decoration.widget(sel.from, heldCaret, { key: 'held-caret' }) : Decoration.inline(sel.from, sel.to, { class: 'doc-held-selection' })]);
+      },
       attributes: (state) => ({ class: 'doc-content', spellcheck: 'true', 'aria-label': 'Document text', style: docStyleCss(docStyleOf(state.doc)) }),
       handlePaste: (_v, event) => {
         const files = imageFiles(event.clipboardData);
@@ -279,7 +323,7 @@ export function DocEditor({ ctl, onImageFiles, onScale }: { ctl: DocController; 
           onMouseDown={onMarginClick}
         />
       </div>
-      <LinkBubble ctl={ctl} />
+      {ctl.assistantOpen ? <DocInlinePrompt ctl={ctl} /> : <LinkBubble ctl={ctl} />}
     </div>
   );
 }

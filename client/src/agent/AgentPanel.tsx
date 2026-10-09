@@ -244,7 +244,7 @@ export function AgentPanel() {
   );
 }
 
-function ToolRow({ item }: { item: ToolItem }) {
+export function ToolRow({ item }: { item: ToolItem }) {
   const agent = useAgent();
   const sheet = agent.sheet;
   const deck = agent.deck;
@@ -364,7 +364,7 @@ function PaperclipIcon() {
   );
 }
 
-function SparkIcon() {
+export function SparkIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M8 1.5l1.6 4.2 4.4 1.6-4.4 1.6L8 13.1 6.4 8.9 2 7.3l4.4-1.6z" fill="currentColor" />

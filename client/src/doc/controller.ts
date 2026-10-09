@@ -26,6 +26,10 @@ export class DocController {
   onLinkPrompt: (() => void) | null = null;
   /** Zoom of the page view: a percentage, or fit the page to the window width. */
   zoom: number | 'fit' = 'fit';
+  /** Set by the editor where the app's assistant exists; without it Mod-J does nothing. */
+  assistantEnabled = false;
+  /** Whether the prompt to the assistant is open at the cursor (Mod-J). */
+  assistantOpen = false;
   /** How many times replaceWith brought in a version saved elsewhere (the page can tell the user). */
   externalChanges = 0;
   version = 0;
@@ -86,6 +90,16 @@ export class DocController {
     } catch {
       return null;
     }
+  }
+
+  setAssistantOpen(open: boolean): boolean {
+    if (open && !this.assistantEnabled) return false;
+    if (this.assistantOpen === open) return true;
+    this.assistantOpen = open;
+    // Redraws the editor's decorations: they show the selection while the prompt has the focus.
+    this.view?.updateState(this.state);
+    this.emit();
+    return true;
   }
 
   setZoom(zoom: number | 'fit'): void {
@@ -187,6 +201,7 @@ export class DocController {
         'Shift-Mod-x': toggleMark(s.marks.strike),
         'Mod-e': toggleMark(s.marks.code),
         'Mod-k': () => (this.onLinkPrompt?.(), true),
+        'Mod-j': () => this.setAssistantOpen(true),
         'Shift-Mod-7': () => this.setBlockType('ordered_list'),
         'Shift-Mod-8': () => this.setBlockType('bullet_list'),
         'Mod-Alt-0': () => this.setBlockType('paragraph'),

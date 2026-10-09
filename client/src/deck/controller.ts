@@ -48,6 +48,8 @@ export class DeckController {
   tool: { kind: LineKind; arrow: boolean } | null = null;
   /** Presenting (full-screen) mode. */
   presenting = false;
+  /** The prompt to the assistant, while it is open on the slide (Mod-J), with the text that was selected in the text box being edited. */
+  assistant: { text?: string } | null = null;
   /** How many times replaceWith brought in a version saved elsewhere (the page can tell the user). */
   externalChanges = 0;
   version = 0;
@@ -199,8 +201,15 @@ export class DeckController {
     this.emit();
   }
 
+  setAssistant(assistant: DeckController['assistant']): void {
+    if (!assistant && !this.assistant) return;
+    this.assistant = assistant;
+    this.emit();
+  }
+
   setPresenting(on: boolean): void {
     this.presenting = on;
+    this.assistant = null;
     this.editing = null;
     this.emit();
   }

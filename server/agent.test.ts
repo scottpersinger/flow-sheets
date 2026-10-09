@@ -401,6 +401,29 @@ describe('web and image search tools', () => {
 });
 
 describe('app context', () => {
+
+  it('gives a message typed at the cursor the document and the cursor\'s place in it', async () => {
+    const { renderContext, stripContext } = await import('./agent/prompt.ts');
+    const base = { page: 'doc' as const, docId: 'd1', title: 'Plan', blockCount: 2, cursorBlock: 2 };
+    expect(renderContext(base)).not.toContain('<document>');
+    const text = renderContext({ ...base, inline: { document: '[1] # Plan\n\n[2] Ship it.', before: 'Ship ', after: 'it.' } });
+    expect(text).toContain('<document>\n[1] # Plan\n\n[2] Ship it.\n</document>');
+    expect(text).toContain('Text just before the cursor in its block: "Ship "');
+    expect(text).toContain('The whole document is below');
+    expect(stripContext(text)).toBeNull();
+    const part = renderContext({ ...base, selectedText: 'Ship', inline: { document: '[2] Ship it.', showing: [2, 2], selectionBlocks: [2, 2] } });
+    expect(part).toContain('The selection is in block 2.');
+    expect(part).toContain('only blocks 2 to 2');
+    const deck = { page: 'deck' as const, deckId: 'k1', title: 'Pitch', slideCount: 1, currentSlide: 1, selectedElements: ['e1'] };
+    expect(renderContext(deck)).not.toContain('<deck>');
+    const slide = renderContext({ ...deck, inline: { deck: 'Theme: dark\n{"slide":1}', selectedText: 'Agenda' } });
+    expect(slide).toContain('<deck>\nTheme: dark\n{"slide":1}\n</deck>');
+    expect(slide).toContain('Text selected inside that element when the user opened the prompt: "Agenda"');
+    expect(renderContext({ ...deck, inline: { deck: '' } })).toContain('mean the selected element.');
+    expect(renderContext({ ...deck, selectedElements: [], inline: { deck: '', showing: [3, 5] } })).toMatch(/mean the current slide\..*only slides 3 to 5/s);
+    // The browser sends this, so a malformed one must not break the turn.
+    expect(renderContext({ ...base, inline: { document: 5, showing: ['x'] } as never })).toContain('<document>\n\n</document>');
+  });
   it('tells the assistant which stored file is open, and whether it can be read and edited', async () => {
     const { renderContext } = await import('./agent/prompt.ts');
     const page = renderContext({ page: 'file', fileId: 'f1', filename: 'index.html', type: 'text/html', size: 250_000 });
