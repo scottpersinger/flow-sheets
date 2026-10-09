@@ -648,6 +648,17 @@ describe('stored files', () => {
     res = await app.inject({ method: 'GET', url: second.url, headers: { cookie } });
     expect(res.headers['content-disposition']).toContain('attachment');
 
+    // A web page is stored as one by its name, but never served as a page: the viewer shows its text in a sandboxed frame.
+    res = await app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'application/octet-stream', 'x-filename': 'chart.html' }, payload: Buffer.from('<script>alert(1)</script>') });
+    const page = res.json().file;
+    expect(page).toMatchObject({ filename: 'chart.html', type: 'text/html' });
+    res = await app.inject({ method: 'GET', url: page.url, headers: { cookie } });
+    expect(res.headers['content-type']).toBe('application/octet-stream');
+    expect(res.headers['content-disposition']).toContain('attachment');
+    expect(res.payload).toBe('<script>alert(1)</script>');
+    expect((await app.inject({ method: 'GET', url: page.downloadUrl, headers: { cookie } })).headers['content-disposition']).toContain('attachment');
+    await app.inject({ method: 'DELETE', url: page.url, headers: { cookie } });
+
     res = await app.inject({ method: 'GET', url: '/api/files', headers: { cookie } });
     expect(res.json().files.map((f: { id: string }) => f.id)).toEqual([second.id, file.id]);
     expect(res.json().files).toHaveLength(2);

@@ -199,5 +199,9 @@ export function videoTypeOf(filename: string): string | null {
   const ext = /\.([a-z0-9]+)$/i.exec(filename)?.[1].toLowerCase();
   return (ext && VIDEO_TYPES[ext]) || null;
 }
+/** The type a web page (.html, .htm) is stored as. It is only ever shown inside a sandboxed frame, never served as a page. */
+export const HTML_TYPE = 'text/html';
+export const isHtmlName = (filename: string): boolean => /\.html?$/i.test(filename);
+
 /** Largest video that can be uploaded. */
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;

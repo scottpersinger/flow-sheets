@@ -86,6 +86,17 @@ describe('import from the app', () => {
     expect((await fetch(`${base}${other}`)).headers.get('content-type')).toBe('application/pdf');
     expect((await fetch(`${base}${other.replace(report.id, file.id)}`)).status).toBe(404);
 
+    // A web page is never served as a page: the viewer reads its text and shows it in a sandboxed frame.
+    const page = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&name=chart.html`, { method: 'POST', headers: { 'content-type': 'text/html' }, body: '<script>alert(1)</script>' });
+    const chart = ((await page.json()) as { file: { id: string; type: string } }).file;
+    expect(chart.type).toBe('text/html');
+    const served = await fetch(`${base}${svc.fileLink(chart.id).url}`);
+    expect(served.headers.get('content-type')).toBe('application/octet-stream');
+    expect(served.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await served.text()).toBe('<script>alert(1)</script>');
+    await svc.delete('file', chart.id);
+    svc.setOpen({ kind: 'file', id: report.id });
+
     // Stored files are deleted like anything else, and keep the name they came with.
     expect(() => svc.rename('file', file.id, 'x')).toThrow(/keeps the name/);
     await svc.delete('file', file.id);

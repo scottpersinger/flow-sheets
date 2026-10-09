@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
+import { HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
+import { HtmlPreview } from '../components/HtmlPreview.tsx';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { fileIcon, formatFileSize } from '../components/FileChip.tsx';
@@ -17,7 +18,7 @@ function editableKind(filename: string): string | null {
   return null;
 }
 
-/** A stored file in its own tab: an in-app preview for PDFs and images, a player for videos, or just its details, with a Download button. */
+/** A stored file in its own tab: an in-app preview for PDFs, images and web pages, a player for videos, or just its details, with a Download button. */
 export function FilePage() {
   const { id = '' } = useParams();
   useFavicon('home');
@@ -90,6 +91,8 @@ export function FilePage() {
           <div className="muted">Loading…</div>
         ) : file.type === 'application/pdf' ? (
           <iframe className="file-preview" src={file.url} title={file.filename} />
+        ) : file.type === HTML_TYPE ? (
+          <HtmlPreview url={file.url} title={file.filename} />
         ) : file.type.startsWith('video/') ? (
           // The browser's own player; it asks the server for the parts of the file it needs.
           <video className="file-preview-video" src={file.url} controls autoPlay playsInline />

@@ -21,7 +21,7 @@ import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideCo
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
 import { CsvError, MAX_CSV_CHARS } from '../../shared/csv.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, videoTypeOf, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, videoTypeOf, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import { FileStore } from '../../server/files.ts';
 import { isPdf } from '../../server/pdfImport.ts';
 
@@ -352,7 +352,7 @@ export class FileService {
   async importFile(bytes: Buffer, name: string | undefined, title: string | undefined): Promise<{ file: FileSummary; warnings: string[] }> {
     const baseTitle = (title?.trim() || name?.replace(/\.[^.]+$/, '').trim() || '').slice(0, 200);
     const storeImage = (type: string, data: Buffer) => this.images.create(this.userId, type, data);
-    // A PDF, a video or an image is kept as it is and shown in the app's viewer.
+    // A PDF, a video, an image or a web page is kept as it is and shown in the app's viewer.
     const fileName = (name ?? '').replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200);
     const videoType = videoTypeOf(fileName);
     if (videoType) {
@@ -365,6 +365,12 @@ export class FileService {
       return { file: fileSummary(await this.hub.files.create(this.userId, pdfName, 'application/pdf', bytes)), warnings: [] };
     }
     if (bytes.length > MAX_IMPORT_BYTES) throw new ToolError(`This file is too large to import (${MAX_IMPORT_BYTES / 1024 / 1024} MB maximum).`);
+    // A web page (by its name, or by how it starts) is kept as it is too, and shown in a sandboxed frame.
+    if (isHtmlName(fileName) || /^\s*(<!doctype html|<html[\s>])/i.test(bytes.subarray(0, 1024).toString('utf8').replace(/^\uFEFF/, ''))) {
+      textOf(bytes);
+      const htmlName = isHtmlName(fileName) ? fileName : `${fileName || baseTitle || 'page'}.html`;
+      return { file: fileSummary(await this.hub.files.create(this.userId, htmlName, HTML_TYPE, bytes)), warnings: [] };
+    }
     const imageType = sniffImageType(bytes);
     if (imageType) {
       const imageName = /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? fileName : `${fileName || baseTitle || 'image'}.${IMAGE_EXT[imageType]}`;
@@ -406,7 +412,7 @@ export class FileService {
       throw e;
     }
     throw new ToolError(
-      `This type of file${name ? ` (${fileName})` : ''} cannot be imported. Only Word documents (.docx), PowerPoint presentations (.pptx), Excel workbooks (.xlsx), CSV files (.csv), Markdown files (.md), PDFs (.pdf), videos (.mp4, .mov, .webm) and images (PNG, JPEG, GIF, WebP) can be imported.`,
+      `This type of file${name ? ` (${fileName})` : ''} cannot be imported. Only Word documents (.docx), PowerPoint presentations (.pptx), Excel workbooks (.xlsx), CSV files (.csv), Markdown files (.md), PDFs (.pdf), web pages (.html), videos (.mp4, .mov, .webm) and images (PNG, JPEG, GIF, WebP) can be imported.`,
     );
   }
 

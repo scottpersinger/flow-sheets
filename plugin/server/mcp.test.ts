@@ -184,6 +184,12 @@ describe('MCP server', () => {
     const img = await call('import_file', { file: { download_url: 'https://files.example/photo', file_name: 'photo' } });
     expect(img.data?.file).toMatchObject({ kind: 'file', title: 'photo.png', type: 'image/png' });
     expect(((await call('list_files', { kind: 'doc' })).data?.files as unknown[]).length).toBe(2);
+    // A web page is stored as it is, by its name or by how it starts.
+    attachments.set('https://files.example/chart.html', Buffer.from('<h1>Chart</h1><script>document.title = 1</script>'));
+    const html = await call('import_file', { file: { download_url: 'https://files.example/chart.html', file_name: 'chart.html' } });
+    expect(html.data?.file).toMatchObject({ kind: 'file', title: 'chart.html', type: 'text/html' });
+    attachments.set('https://files.example/page', Buffer.from('\n<!DOCTYPE html><html><body>Hi</body></html>'));
+    expect((await call('import_file', { file: { download_url: 'https://files.example/page' }, title: 'Report' })).data?.file).toMatchObject({ kind: 'file', title: 'Report.html', type: 'text/html' });
     attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
     const txt = await call('import_file', { file: { download_url: 'https://files.example/notes.txt' } });
     expect(txt.isError).toBe(true);

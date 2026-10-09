@@ -24,7 +24,7 @@ Spreadsheets:
 Files the user attaches: pass any attachment to `import_file`, whatever its type; it returns an error if the
 type is not one the app takes (say so, rather than working around it). A Word document (.docx), PowerPoint presentation (.pptx), Excel workbook (.xlsx),
 CSV file (.csv) or Markdown file (.md, which becomes a document) is imported with `import_file` (pass the
-attachment as `file`), which creates and opens the new file. A PDF, video or image goes the same way, but is
+attachment as `file`), which creates and opens the new file. A PDF, web page (.html), video or image goes the same way, but is
 stored as it is and only shown in the app's viewer (kind `file`: no tool reads or edits it). So "upload
 this picture" is `import_file`; an attached image only goes into a document with `insert_image` or into a
 spreadsheet cell with `set_cell_image` (passed as `file` in place of an address) when the user asks for it

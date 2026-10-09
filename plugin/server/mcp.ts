@@ -66,7 +66,7 @@ const DOC_ICON = {
 
 const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document), deck (slide presentation) or sheet (spreadsheet).');
 /** For the tools that work on anything in the library, stored files included. */
-const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or file (a PDF, video or image, which is shown but not edited).');
+const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or file (a PDF, web page, video or image, which is shown but not edited).');
 const fileId = z.string().describe('The file id (from list_files or the app).');
 const optionalDocId = z.string().optional().describe('The document to act on. Defaults to the document open in the app.');
 const optionalDeckId = z.string().optional().describe('The presentation to act on. Defaults to the presentation open in the app.');
@@ -209,7 +209,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const appTools = level === 'app' || level === 'full';
   const entrypoint = level === 'full';
 
-  const listFiles = { title: 'List files', description: "The user's documents, presentations, spreadsheets and stored files (PDFs, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+  const listFiles = { title: 'List files', description: "The user's documents, presentations, spreadsheets and stored files (PDFs, web pages, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
   server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
   if (level === 'minimal') return server;
 
@@ -328,7 +328,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     {
       title: 'Import a file',
       description:
-        'Import any file the user attached and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) or Markdown file (.md) a new document; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer, which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
+        'Import any file the user attached and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) or Markdown file (.md) a new document; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, web page (.html, such as a page or chart you generated), video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer (a web page is rendered, with its scripts running in a sandbox), which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
       inputSchema: {
         file: attachedFile.describe('The attached file.'),
         title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),

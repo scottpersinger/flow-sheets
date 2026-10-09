@@ -12,7 +12,7 @@ import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
 import { FileStore } from './files.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
+import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
 import { checkOpenAIKey, openaiErrorMessage } from './agent/openai.ts';
@@ -826,8 +826,8 @@ export async function buildApp(opts: AppOptions) {
         // Malformed name: fall back to the default below.
       }
       name = name.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'file';
-      // A video is stored under the type of its extension, whatever the browser called it.
-      return { file: await storedFiles.create(req.user!.id, name, videoTypeOf(name) ?? type, body, req.folder) };
+      // A video or a web page is stored under the type of its extension, whatever the browser called it.
+      return { file: await storedFiles.create(req.user!.id, name, videoTypeOf(name) ?? (isHtmlName(name) ? HTML_TYPE : type), body, req.folder) };
     });
 
     r.get('/api/files', async (req) => ({ files: storedFiles.list(req.user!.id) }));

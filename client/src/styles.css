@@ -3332,6 +3332,11 @@ button.agent-tool-label:hover {
   flex: 1;
   border: 0;
 }
+/* A stored web page: always on white, whatever the app's theme, as a browser would show it. */
+.html-preview {
+  background: #fff;
+  width: 100%;
+}
 .file-preview-image {
   max-width: 100%;
   max-height: 100%;

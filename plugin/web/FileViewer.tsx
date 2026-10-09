@@ -1,8 +1,10 @@
-// A stored file open in ChatGPT: a player for a video, the pages of a PDF. The file is not edited, and the
+// A stored file open in ChatGPT: a player for a video, the pages of a PDF, a web page in a sandboxed frame. The file is not edited, and the
 // model has no tools that read it; it is here so everything in the library can be opened where it is listed.
 // The bytes come from the plugin server through a link that carries its own token (the iframe has no
 // cookies), in ranges, so a video can seek and a long PDF starts with its first pages.
 import { useEffect, useRef, useState } from 'react';
+import { HtmlPreview } from '../../client/src/components/HtmlPreview.tsx';
+import { HTML_TYPE } from '../../shared/types.ts';
 import type { Host } from './host.ts';
 
 interface StoredFileSummary {
@@ -68,6 +70,9 @@ export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBac
           <video className="file-preview-video" src={url} controls playsInline />
         ) : file.type === 'application/pdf' ? (
           <PdfPages url={url} />
+        ) : file.type === HTML_TYPE ? (
+          // The link carries its own token, so the page's text is fetched without credentials.
+          <HtmlPreview url={url} title={file.title} credentials="omit" />
         ) : file.type?.startsWith('image/') ? (
           <img className="file-preview-image" src={url} alt={file.title} />
         ) : (
