@@ -55,7 +55,7 @@ export interface McpOptions {
 }
 
 
-export const INSTRUCTIONS = `Freeflow Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
+export const INSTRUCTIONS = `Universal Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
 Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
 
 const DOC_ICON = {
@@ -225,7 +225,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     },
     'openai/ui': { preferredDisplayMode: 'inline', availableDisplayModes: ['inline', 'fullscreen'] },
     // Legacy Apps SDK aliases of the same things, which ChatGPT's web host still reads.
-    'openai/widgetDescription': 'The Freeflow Docs editor: the open document, presentation or spreadsheet, editable in place.',
+    'openai/widgetDescription': 'The Universal Docs editor: the open document, presentation or spreadsheet, editable in place.',
     'openai/widgetPrefersBorder': true,
     'openai/widgetCSP': { connect_domains: origins, resource_domains: [...origins, 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'] },
   };
@@ -238,7 +238,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const pick = opts.resourceMeta ?? 'full';
   const contentMeta = pick === 'none' ? undefined : pick === 'ui' ? { ui: uiMeta.ui } : pick === 'legacy' ? Object.fromEntries(Object.entries(uiMeta).filter(([k]) => k.startsWith('openai/widget'))) : uiMeta;
   if (ui)
-    server.registerResource('docs-app', APP_URI, { title: 'Docs', mimeType }, async () => ({
+    server.registerResource('docs-app', APP_URI, { title: 'Universal Docs', mimeType }, async () => ({
       contents: [{ uri: APP_URI, mimeType, text: opts.helloPage ? HELLO : appHtml(opts.bundle(), opts.hostedAssets ? opts.publicUrl : null, opts.publicUrl), ...(contentMeta ? { _meta: contentMeta } : {}) }],
     }));
 
@@ -247,7 +247,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     server.registerTool(
       'docs_app',
       {
-        title: 'Docs',
+        title: 'Universal Docs',
         description: 'Open the Docs app.',
         inputSchema: {},
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },

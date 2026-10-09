@@ -73,7 +73,7 @@ ChatGPT renders apps on phones and in dark mode.
 ## 9. Store metadata and policy
 
 - [ ] Privacy policy, terms of service, support contact
-- [ ] Icon assets, screenshots, a short demo; confirm the "Freeflow Docs" name
+- [ ] Icon assets, screenshots, a short demo; the name is "Universal Docs"
 - [x] Fix descriptions that still say "documents and presentations" (`list_files`, `delete_file`, `plugin.json`)
 - [ ] Golden prompts, verified against the real deployment: open a file by name, edit the selection,
       create from an attached .docx, delete with confirmation

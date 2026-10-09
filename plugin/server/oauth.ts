@@ -88,7 +88,7 @@ export class OAuthServer {
     this.profile = opts.profile;
     this.google = opts.google ?? null;
     this.fetchFn = opts.fetchFn ?? fetch;
-    this.appName = opts.appName ?? 'Freeflow Docs';
+    this.appName = opts.appName ?? 'Universal Docs';
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS oauth_clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS oauth_pending (id TEXT PRIMARY KEY, params TEXT NOT NULL, client_name TEXT NOT NULL, user_id TEXT, expires_at TEXT NOT NULL);

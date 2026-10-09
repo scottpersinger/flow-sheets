@@ -1,6 +1,6 @@
 ---
 name: docs
-description: Edit the user's Freeflow Docs documents, slide presentations and spreadsheets with the Docs plugin tools. Use when the user asks to write, rewrite, fix, format or add to a document, presentation or spreadsheet, or refers to "the doc", "this document", "the deck", "this slide", "the sheet" or "these cells" while the Docs app is open.
+description: Edit the user's Universal Docs documents, slide presentations and spreadsheets with the Docs plugin tools. Use when the user asks to write, rewrite, fix, format or add to a document, presentation or spreadsheet, or refers to "the doc", "this document", "the deck", "this slide", "the sheet" or "these cells" while the Docs app is open.
 ---
 
 Work on the file that is open in the Docs app unless the user names another one (find it with `list_files`,
