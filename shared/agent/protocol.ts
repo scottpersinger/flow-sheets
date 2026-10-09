@@ -53,6 +53,8 @@ export type AgentContext =
       /** MIME type. */
       type: string;
       size: number;
+      /** The HTML of the element the user selected in a web page they are editing (shortened). */
+      selectedElement?: string;
     };
 
 /** A tool call the browser must run (sheet tools and navigation), forwarded by the server. */

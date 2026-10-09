@@ -407,5 +407,9 @@ describe('app context', () => {
     expect(page).toContain('Open file: "index.html" (id f1), text/html, 250000 bytes');
     expect(page).toContain('read_file with this id returns its text, and edit_file changes it.');
     expect(renderContext({ page: 'file', fileId: 'f2', filename: 'clip.mp4', type: 'video/mp4', size: 10 })).toContain('read_file and edit_file cannot work on it');
+    const picked = renderContext({ page: 'file', fileId: 'f1', filename: 'index.html', type: 'text/html', size: 250, selectedElement: '<h1 class="title">Hi</h1>' });
+    expect(picked).toContain('Selected element');
+    expect(picked).toContain(JSON.stringify('<h1 class="title">Hi</h1>'));
+    expect(page).not.toContain('Selected element');
   });
 });

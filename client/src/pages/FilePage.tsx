@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
+import { HtmlEditor } from '../components/HtmlEditor.tsx';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { FILE_CHANGED_EVENT, useRegisterFile } from '../agent/AgentProvider.tsx';
@@ -56,9 +57,14 @@ export function FilePage() {
 
   // Counts the assistant's changes to this file, so the preview shows each new version.
   const [version, setVersion] = useState(0);
+  // A web page opens as a working page; Edit makes it editable in place instead (the element selected in it is
+  // told to the assistant), with its scripts and links off.
+  const [editing, setEditing] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
     setFile(null);
     setError(null);
+    setEditing(false);
     api.getFile(id).then((r) => setFile(r.file), (e: Error) => setError(e.message));
   }, [id]);
   useEffect(() => {
@@ -75,7 +81,7 @@ export function FilePage() {
     if (file) document.title = file.filename;
   }, [file]);
   // The assistant is told which file is showing.
-  useRegisterFile(file);
+  useRegisterFile(file, editing ? selected : null);
 
   const previewable = !!file && PREVIEW_FILE_TYPES.includes(file.type);
   return (
@@ -90,6 +96,11 @@ export function FilePage() {
           {file?.filename ?? ''}
         </span>
         <div className="home-user">
+          {file?.type === HTML_TYPE && (
+            <button className={`btn${editing ? ' active' : ''}`} onClick={() => setEditing(!editing)} title={editing ? 'Run the page as a browser would, with its scripts and links working' : "Select, edit, delete and recolor the page's elements"}>
+              {editing ? 'Preview' : 'Edit'}
+            </button>
+          )}
           {file && (
             <a className="btn primary" href={file.downloadUrl} download={file.filename}>
               Download
@@ -105,6 +116,8 @@ export function FilePage() {
           <div className="muted">Loading…</div>
         ) : file.type === 'application/pdf' ? (
           <iframe className="file-preview" src={file.url} title={file.filename} />
+        ) : file.type === HTML_TYPE && editing ? (
+          <HtmlEditor key={version} file={file} onSelect={setSelected} onSaved={setFile} />
         ) : file.type === HTML_TYPE ? (
           <HtmlPreview key={version} url={file.url} title={file.filename} />
         ) : file.type.startsWith('video/') ? (

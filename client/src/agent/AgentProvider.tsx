@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
 import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, type AgentContext, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
+import { shortenHtml } from '../htmlEdit.ts';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
@@ -71,7 +72,7 @@ interface AgentState {
   doc: OpenDoc | null;
   /** The Markdown page reports the open Markdown document (no tools act on it; the assistant only knows it is open). */
   setOpenMarkdown(doc: OpenMarkdown | null): void;
-  setOpenFile(file: StoredFile | null): void;
+  setOpenFile(file: StoredFile | null, selectedElement?: string | null): void;
   /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
   job: AgentJob | null;
   /** Hide a finished job's card. */
@@ -124,6 +125,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const markdownRef = useRef<OpenMarkdown | null>(null);
   /** The stored file whose preview page is showing. */
   const fileRef = useRef<StoredFile | null>(null);
+  /** The HTML of the element selected in it, when it is a web page being edited. */
+  const fileSelectionRef = useRef<string | null>(null);
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Pending open_sheet / open_deck calls, resolved with the controller once the page has loaded the document.
@@ -271,8 +274,9 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const setOpenFile = useCallback((file: StoredFile | null) => {
+  const setOpenFile = useCallback((file: StoredFile | null, selectedElement: string | null = null) => {
     fileRef.current = file;
+    fileSelectionRef.current = file ? selectedElement : null;
   }, []);
 
   const setOpenMarkdown = useCallback((doc: OpenMarkdown | null) => {
@@ -315,7 +319,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
     const s = sheetRef.current;
     const f = fileRef.current;
-    if (!s && f) return { page: 'file', fileId: f.id, filename: f.filename, type: f.type, size: f.size };
+    if (!s && f) {
+      const el = fileSelectionRef.current;
+      return { page: 'file', fileId: f.id, filename: f.filename, type: f.type, size: f.size, ...(el ? { selectedElement: shortenHtml(el) } : {}) };
+    }
     if (!s) return { page: 'home' };
     return {
       page: 'sheet',
@@ -673,13 +680,13 @@ export function useRegisterMarkdown(ctl: MarkdownController, meta: SheetMeta): v
 /** Fired on the window (detail: the file id) when the assistant changed a stored file. */
 export const FILE_CHANGED_EVENT = 'stored-file-changed';
 
-/** Report the stored file being previewed to the agent while its page is mounted. */
-export function useRegisterFile(file: StoredFile | null): void {
+/** Report the stored file being previewed, and the element selected in it, to the agent while its page is mounted. */
+export function useRegisterFile(file: StoredFile | null, selectedElement: string | null = null): void {
   const { setOpenFile } = useAgent();
   useEffect(() => {
-    setOpenFile(file);
+    setOpenFile(file, selectedElement);
     return () => setOpenFile(null);
-  }, [file, setOpenFile]);
+  }, [file, selectedElement, setOpenFile]);
 }
 
 /** Report the open presentation to the agent while a deck page is mounted. */

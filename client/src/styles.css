@@ -3337,6 +3337,47 @@ button.agent-tool-label:hover {
   background: #fff;
   width: 100%;
 }
+/* Editing a stored web page: a bar of actions for the selected element over the page. */
+.html-editor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.html-editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border);
+}
+.html-editor-bar label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.html-editor-bar input[type='color'] {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+}
+.html-editor-label {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.html-editor-space {
+  flex: 1;
+}
+.file-page .btn.active {
+  background: #eceff1;
+  border-color: #455a64;
+}
 .file-preview-image {
   max-width: 100%;
   max-height: 100%;
