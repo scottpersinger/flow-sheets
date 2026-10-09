@@ -469,6 +469,17 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           uploadFile: api.uploadFile,
           listFiles: async () => (await api.listFiles()).files,
           openFile: openFileById,
+          readFile: async (id) => {
+            let file: StoredFile;
+            try {
+              file = (await api.getFile(id)).file;
+            } catch {
+              throw new ToolError(`No file with id "${id}". Use list_files to find ids.`);
+            }
+            const res = await fetch(file.url, { credentials: 'same-origin' });
+            if (!res.ok) throw new ToolError(`Could not read ${file.filename} (${res.status}).`);
+            return { file, data: await res.arrayBuffer() };
+          },
           attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
           group,
           openSheet: openSheetById,

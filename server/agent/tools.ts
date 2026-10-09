@@ -259,6 +259,15 @@ export const schemas = {
     .object({ query: z.string().optional().describe('Only files whose name contains this text (case-insensitive).') })
     .describe("List the user's stored files (generated PDFs and uploads), most recent first (at most 50): id, filename, type, size, created_at."),
   open_file: z.object({ file_id: z.string() }).describe('Open a stored file in the app (the user navigates to a tab that previews it, with a Download button; any open spreadsheet, presentation or document closes). Find ids with list_files.'),
+  read_file: z
+    .object({
+      file_id: z.string(),
+      offset: z.number().int().min(0).optional().describe('Character to start from, for reading a long file in parts. Defaults to 0.'),
+      max_chars: z.number().int().min(1).max(60_000).optional().describe('How many characters to return. Defaults to 30000.'),
+    })
+    .describe(
+      "Read the text of a stored file: a web page (.html), or any other text file such as .txt, .json, .svg or .xml. Returns the text from offset, total_chars and whether more follows (read on with offset). It cannot read PDFs, images or videos, and it does not change the file. Find ids with list_files.",
+    ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),

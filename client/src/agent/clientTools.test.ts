@@ -262,6 +262,20 @@ describe('stored files', () => {
     expect(await call('open_file', { file_id: 'a' })).toMatchObject({ opened: true, file_id: 'a', filename: 'Report.pdf' });
     expect(opened).toEqual(['a']);
   });
+
+  it('reads a text file in parts and refuses files that are not text', async () => {
+    const { env, call } = setup();
+    const meta = (filename: string, type: string) => ({ id: 'h', filename, type, size: 10, createdAt: '2026-01-01', url: '/api/files/h', downloadUrl: '/api/files/h/download' });
+    const page = '\uFEFF<h1>Sales</h1><p>Up 12%</p>';
+    env.readFile = async () => ({ file: meta('index.html', 'text/html'), data: new TextEncoder().encode(page).buffer as ArrayBuffer });
+    expect(await call('read_file', { file_id: 'h' })).toEqual({ file_id: 'h', filename: 'index.html', type: 'text/html', total_chars: 27, offset: 0, text: '<h1>Sales</h1><p>Up 12%</p>' });
+    expect(await call('read_file', { file_id: 'h', max_chars: 14 })).toMatchObject({ text: '<h1>Sales</h1>', more: true, next_offset: 14 });
+    expect(await call('read_file', { file_id: 'h', offset: 14 })).toMatchObject({ offset: 14, text: '<p>Up 12%</p>' });
+    env.readFile = async () => ({ file: meta('Report.pdf', 'application/pdf'), data: new TextEncoder().encode('%PDF-1.7').buffer as ArrayBuffer });
+    await expect(call('read_file', { file_id: 'h' })).rejects.toThrow(/not a text file/);
+    env.readFile = async () => ({ file: meta('a.bin', 'application/octet-stream'), data: new Uint8Array([1, 0, 2]).buffer });
+    await expect(call('read_file', { file_id: 'h' })).rejects.toThrow(/not a text file/);
+  });
 });
 
 describe('ingest_connector_data', () => {

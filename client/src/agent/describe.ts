@@ -103,6 +103,8 @@ export function toolLabel(name: string, i: Input): string {
       return 'Looked through the stored files';
     case 'open_file':
       return 'Opened a file';
+    case 'read_file':
+      return i.offset ? 'Read more of a file' : 'Read a file';
     case 'render_slide':
       return `Checked how slide ${i.slide} looks`;
     case 'open_doc':

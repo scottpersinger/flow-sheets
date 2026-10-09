@@ -48,6 +48,8 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   listFiles?(): Promise<StoredFile[]>;
   /** Navigate to a stored file's preview tab; resolves with the file once it is shown. */
   openFile?(id: string): Promise<StoredFile>;
+  /** A stored file with its bytes. */
+  readFile?(id: string): Promise<{ file: StoredFile; data: ArrayBuffer }>;
   /** Queue a change to the app's own code; resolves with the job id. */
   requestAppChange(title: string, spec: string): Promise<{ id: string }>;
   /** Queue a background research task; resolves with the job id. */
@@ -194,6 +196,19 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     if (!env.openFile) throw new ToolError('Stored files are not available here.');
     const f = await env.openFile(String(i.file_id));
     return JSON.stringify({ opened: true, file_id: f.id, filename: f.filename, type: f.type, size: f.size });
+  }
+  if (call.name === 'read_file') {
+    if (!env.readFile) throw new ToolError('Stored files are not available here.');
+    const { file, data } = await env.readFile(String(i.file_id));
+    const bytes = new Uint8Array(data);
+    // Text only: a PDF, picture or video has nothing to read as characters.
+    if (/^(application\/pdf|image\/(?!svg)|video\/|audio\/)/.test(file.type) || bytes.subarray(0, 8000).includes(0)) {
+      throw new ToolError(`${file.filename} is not a text file, so it cannot be read. Only web pages and other text files can.`);
+    }
+    const text = new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
+    const offset = Math.min(typeof i.offset === 'number' ? i.offset : 0, text.length);
+    const end = Math.min(text.length, offset + (typeof i.max_chars === 'number' ? i.max_chars : 30_000));
+    return JSON.stringify({ file_id: file.id, filename: file.filename, type: file.type, total_chars: text.length, offset, text: text.slice(offset, end), ...(end < text.length ? { more: true, next_offset: end } : {}) });
   }
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
   if (call.name === 'open_doc') {

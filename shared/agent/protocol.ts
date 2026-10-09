@@ -201,9 +201,10 @@ export const CLIENT_TOOLS = new Set([
   'render_slide',
   // Rendered like render_slide, assembled into a file and downloaded by the browser.
   'export_deck',
-  // Stored files: list them, or open one in a preview tab.
+  // Stored files: list them, open one in a preview tab, or read a text file's contents.
   'list_files',
   'open_file',
+  'read_file',
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',
