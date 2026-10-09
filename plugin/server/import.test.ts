@@ -49,4 +49,49 @@ describe('import from the app', () => {
     const pre = await fetch(`${base}/plugin/import`, { method: 'OPTIONS' });
     expect(pre.status).toBe(204);
   });
+
+  it('stores a video and a PDF as they are, and serves them to the viewer by a link with a token, in ranges', async () => {
+    const bytes = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 251));
+    const up = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&name=clip.mov`, { method: 'POST', headers: { 'content-type': 'video/quicktime' }, body: new Uint8Array(bytes) });
+    expect(up.status).toBe(200);
+    const { file } = (await up.json()) as { file: { kind: string; id: string; title: string; type: string; size: number } };
+    expect(file).toMatchObject({ kind: 'file', title: 'clip.mov', type: 'video/quicktime', size: 1000 });
+    const svc = hub.forUser('u1');
+    expect(svc.open).toEqual({ kind: 'file', id: file.id });
+    expect(svc.state().open).toMatchObject({ kind: 'file', title: 'clip.mov' });
+    expect(svc.list().map((f) => [f.kind, f.title])).toEqual([['file', 'clip.mov']]);
+
+    // The link works without any other credential, for that file only; QuickTime is served as MP4 so browsers play it.
+    const { url } = svc.fileLink(file.id);
+    expect(url).toMatch(new RegExp(`^/plugin/file/${file.id}\\?t=`));
+    const whole = await fetch(`${base}${url}`);
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get('content-type')).toBe('video/mp4');
+    expect(whole.headers.get('accept-ranges')).toBe('bytes');
+    expect(whole.headers.get('access-control-allow-origin')).toBe('*');
+    expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+    const part = await fetch(`${base}${url}`, { headers: { range: 'bytes=10-19' } });
+    expect(part.status).toBe(206);
+    expect(part.headers.get('content-range')).toBe('bytes 10-19/1000');
+    expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(10, 20))).toBe(true);
+    expect((await fetch(`${base}${url}`, { headers: { range: 'bytes=5000-' } })).status).toBe(416);
+    expect((await fetch(`${base}/plugin/file/${file.id}`)).status).toBe(404);
+    expect((await fetch(`${base}/plugin/file/${file.id}?t=bogus`)).status).toBe(404);
+
+    // A PDF is told by its content, and a second file's link does not open the first.
+    const pdf = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&name=report`, { method: 'POST', headers: { 'content-type': 'application/pdf' }, body: new Uint8Array(Buffer.from('%PDF-1.7\n%%EOF')) });
+    const report = ((await pdf.json()) as { file: { kind: string; id: string; title: string; type: string } }).file;
+    expect(report).toMatchObject({ kind: 'file', title: 'report.pdf', type: 'application/pdf' });
+    const other = svc.fileLink(report.id).url;
+    expect((await fetch(`${base}${other}`)).headers.get('content-type')).toBe('application/pdf');
+    expect((await fetch(`${base}${other.replace(report.id, file.id)}`)).status).toBe(404);
+
+    // Stored files are deleted like anything else, and keep the name they came with.
+    expect(() => svc.rename('file', file.id, 'x')).toThrow(/keeps the name/);
+    await svc.delete('file', file.id);
+    expect(svc.open).toEqual({ kind: 'file', id: report.id });
+    await svc.delete('file', report.id);
+    expect(svc.open).toBeNull();
+    expect((await fetch(`${base}${url}`)).status).toBe(404);
+  });
 });

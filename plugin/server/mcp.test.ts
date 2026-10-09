@@ -138,7 +138,7 @@ describe('MCP server', () => {
     expect((files.data?.files as { title: string }[]).map((f) => f.title)).toEqual(['Budget']);
   });
 
-  it('imports Word and PowerPoint files the user attached, and refuses other things', async () => {
+  it('imports Word, PowerPoint, CSV and Markdown files the user attached, and refuses other things', async () => {
     const { tools } = await client.listTools();
     expect(tools.find((t) => t.name === 'import_file')?._meta).toMatchObject({ 'openai/fileParams': ['file'] });
     attachments.set('https://files.example/brief.docx', await buildDocx('<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>From Word</w:t></w:r></w:p><w:p><w:r><w:t>Body.</w:t></w:r></w:p>'));
@@ -152,6 +152,31 @@ describe('MCP server', () => {
     const deck = await call('import_file', { file: { download_url: 'https://files.example/deck.pptx' }, title: 'Pitch' });
     expect(deck.data?.file).toMatchObject({ kind: 'deck', title: 'Pitch' });
     expect((deck.data?.open as { kind: string }).kind).toBe('deck');
+    // A CSV file stays a CSV file (a spreadsheet), and a Markdown file becomes a document; both go by their name.
+    attachments.set('https://files.example/sales.csv', Buffer.from('\uFEFFregion,total\nEMEA,12\n"APAC, south",7\n'));
+    const csv = await call('import_file', { file: { download_url: 'https://files.example/sales.csv', file_name: 'sales.csv' } });
+    expect(csv.isError).toBe(false);
+    expect(csv.data?.file).toMatchObject({ kind: 'sheet', title: 'sales' });
+    expect((await call('read_range', { range: 'A1:B3' })).data?.values).toEqual([['region', 'total'], ['EMEA', '12'], ['APAC, south', '7']]);
+    attachments.set('https://files.example/notes.md', Buffer.from('# Notes\n\n- one\n- two\n'));
+    const md = await call('import_file', { file: { download_url: 'https://files.example/notes.md', file_name: 'notes.md' } });
+    expect(md.data?.file).toMatchObject({ kind: 'doc', title: 'notes' });
+    expect(((await call('read_doc')).data?.blocks as { markdown: string }[])[0].markdown).toMatch(/^# .*Notes/);
+    attachments.set('https://files.example/binary.csv', Buffer.from([0x50, 0x00, 0x01, 0x02]));
+    expect((await call('import_file', { file: { download_url: 'https://files.example/binary.csv', file_name: 'binary.csv' } })).text).toMatch(/not a text file/);
+    // A PDF or a video is stored as it is: listed and opened as a file, with a link for the app's viewer.
+    attachments.set('https://files.example/report.pdf', Buffer.from('%PDF-1.7\n%%EOF'));
+    const pdf = await call('import_file', { file: { download_url: 'https://files.example/report.pdf', file_name: 'report.pdf' } });
+    expect(pdf.data?.file).toMatchObject({ kind: 'file', title: 'report.pdf', type: 'application/pdf' });
+    expect((pdf.data?.open as { kind: string }).kind).toBe('file');
+    const pdfId = (pdf.data?.file as { id: string }).id;
+    expect(((await call('list_files', { kind: 'file' })).data?.files as { title: string }[]).map((f) => f.title)).toEqual(['report.pdf']);
+    expect((await call('open_file', { kind: 'file', id: pdfId })).data?.file).toMatchObject({ title: 'report.pdf' });
+    expect((await call('file_link', { id: pdfId })).data?.url).toMatch(new RegExp(`/plugin/file/${pdfId}\\?t=`));
+    expect((await call('rename_file', { title: 'New name' })).text).toMatch(/keeps the name/);
+    expect((await call('read_doc')).isError).toBe(true);
+    expect((await call('delete_file', { kind: 'file', id: pdfId })).isError).toBe(false);
+    expect((await call('list_files', { kind: 'file' })).data?.files).toEqual([]);
     attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
     const txt = await call('import_file', { file: { download_url: 'https://files.example/notes.txt' } });
     expect(txt.isError).toBe(true);

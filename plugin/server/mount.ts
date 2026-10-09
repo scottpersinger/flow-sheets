@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { AuthService } from '../../server/auth.ts';
 import type { DB } from '../../server/db.ts';
 import type { GoogleLogin } from '../../server/googleAuth.ts';
+import type { FileStore } from '../../server/files.ts';
 import type { ImageStore } from '../../server/images.ts';
 import type { SheetStore } from '../../server/sheets.ts';
 import { FileHub } from './files.ts';
@@ -18,6 +19,8 @@ export interface MountOptions {
   dataDir: string;
   sheets: SheetStore;
   images: ImageStore;
+  /** The app's stored files (PDFs, videos), which the plugin lists and shows too. */
+  files?: FileStore;
   auth: AuthService;
   google: GoogleLogin | null;
   /** Public origin of the app (the OAuth issuer and where images come from), e.g. https://docs.example.com. */
@@ -31,7 +34,7 @@ export interface MountOptions {
 
 export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Promise<void> {
   const publicUrl = opts.publicUrl.replace(/\/$/, '');
-  const hub = new FileHub({ db: opts.db, dataDir: opts.dataDir, publicUrl, sheets: opts.sheets, images: opts.images });
+  const hub = new FileHub({ db: opts.db, dataDir: opts.dataDir, publicUrl, sheets: opts.sheets, images: opts.images, files: opts.files });
   const oauth = new OAuthServer({
     db: new DatabaseSync(path.join(opts.dataDir, 'plugin.db')),
     issuer: publicUrl,

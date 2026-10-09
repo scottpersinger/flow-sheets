@@ -5,9 +5,11 @@ import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext
 import { OpenAIExtensions } from '@openai/mcp-extensions/app';
 
 export type FileKind = 'doc' | 'deck' | 'sheet';
+/** Everything the library lists: the editable kinds, and stored files (PDFs and videos) shown in the viewer. */
+export type LibraryKind = FileKind | 'file';
 
 export interface OpenFile {
-  kind: FileKind;
+  kind: LibraryKind;
   id: string;
   title: string;
   rev: string;
@@ -97,10 +99,10 @@ export class Host {
   }
 
   /** The full app's address for a file, or for its home page. */
-  appLink(file?: { kind: FileKind; id: string }): string | null {
+  appLink(file?: { kind: LibraryKind; id: string }): string | null {
     if (!this.appUrl) return null;
     if (!file) return this.appUrl;
-    const prefix = { doc: '/doc/', deck: '/d/', sheet: '/s/' }[file.kind];
+    const prefix = { doc: '/doc/', deck: '/d/', sheet: '/s/', file: '/f/' }[file.kind];
     return `${this.appUrl}${prefix}${encodeURIComponent(file.id)}`;
   }
 

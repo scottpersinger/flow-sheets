@@ -6,9 +6,10 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { PREVIEW_FILE_TYPES } from '../../shared/types.ts';
 import type { FileHub } from './files.ts';
-import { createMcpServer, INSTRUCTIONS, MAX_IMPORT_BYTES, SERVER_CAPABILITIES, SERVER_INFO, type Bundle, type McpOptions } from './mcp.ts';
-import { ToolError } from './files.ts';
+import { createMcpServer, INSTRUCTIONS, SERVER_CAPABILITIES, SERVER_INFO, type Bundle, type McpOptions } from './mcp.ts';
+import { importLimit, ToolError } from './files.ts';
 import { OAuthError, type OAuthServer } from './oauth.ts';
 import { adaptTransport, discoverResult, isDiscover, presentAsSdkVersion, readJson } from './stateless.ts';
 
@@ -214,12 +215,14 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
         }
         const userId = hub.redeemTicket(url.searchParams.get('ticket'));
         if (!userId) return json(res, 401, { error: 'The upload ticket is missing, used or expired. Try again.' });
-        if (Number(req.headers['content-length'] ?? 0) > MAX_IMPORT_BYTES) return json(res, 413, { error: `Files must be under ${MAX_IMPORT_BYTES / 1024 / 1024} MB.` });
+        // Videos and PDFs may be larger than the files that are converted.
+        const limit = importLimit(url.searchParams.get('name') ?? undefined);
+        if (Number(req.headers['content-length'] ?? 0) > limit) return json(res, 413, { error: `This file must be under ${limit / 1024 / 1024} MB.` });
         const chunks: Buffer[] = [];
         let size = 0;
         for await (const c of req) {
           size += (c as Buffer).length;
-          if (size > MAX_IMPORT_BYTES) return json(res, 413, { error: `Files must be under ${MAX_IMPORT_BYTES / 1024 / 1024} MB.` });
+          if (size > limit) return json(res, 413, { error: `This file must be under ${limit / 1024 / 1024} MB.` });
           chunks.push(c as Buffer);
         }
         try {
@@ -235,6 +238,50 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           if (e instanceof ToolError) return json(res, 400, { error: e.message });
           throw e;
         }
+      }
+
+      // --- Stored files (PDFs, videos) for the app's viewer: the token in the address is the credential ---
+      if (p.startsWith('/plugin/file/')) {
+        // The PDF viewer reads the file with fetch from an opaque origin, in ranges.
+        res.setHeader('access-control-allow-origin', '*');
+        res.setHeader('access-control-allow-headers', 'range');
+        res.setHeader('access-control-expose-headers', 'accept-ranges, content-length, content-range');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204).end();
+          return;
+        }
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          res.writeHead(405).end();
+          return;
+        }
+        const f = hub.fileForLink(url.searchParams.get('t'), p.slice('/plugin/file/'.length));
+        if (!f || !existsSync(f.file)) {
+          res.writeHead(404).end('Not found');
+          return;
+        }
+        const size = statSync(f.file).size;
+        // Browsers that play QuickTime files (H.264) only do so when they are served as MP4. Anything that is
+        // not a PDF, an image or a video is never served under its own type.
+        const type = f.meta.type === 'video/quicktime' ? 'video/mp4' : PREVIEW_FILE_TYPES.includes(f.meta.type) ? f.meta.type : 'application/octet-stream';
+        const head = { 'content-type': type, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' };
+        // A Range request gets just that part of the file, which is what lets a video player seek.
+        const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
+        if (!range || (!range[1] && !range[2])) {
+          res.writeHead(200, { ...head, 'content-length': size });
+          if (req.method === 'HEAD') res.end();
+          else createReadStream(f.file).pipe(res);
+          return;
+        }
+        const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+        const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+        if (start > end || start >= size) {
+          res.writeHead(416, { 'content-range': `bytes */${size}` }).end();
+          return;
+        }
+        res.writeHead(206, { ...head, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': end - start + 1 });
+        if (req.method === 'HEAD') res.end();
+        else createReadStream(f.file, { start, end }).pipe(res);
+        return;
       }
 
       // --- Images and the app's assets ---

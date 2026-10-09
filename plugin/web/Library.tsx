@@ -5,11 +5,12 @@ import { useEffect, useState } from 'react';
 import { FileLibrary, type LibraryItem } from '../../client/src/components/FileLibrary.tsx';
 import { HomeIcon } from '../../client/src/components/Logo.tsx';
 import { Modal } from '../../client/src/components/Modal.tsx';
-import { DOCX_ACCEPT, EXCEL_ACCEPT, PPTX_ACCEPT } from '../../client/src/importFile.ts';
-import type { FileKind, Host } from './host.ts';
+import { CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, VIDEO_ACCEPT } from '../../client/src/importFile.ts';
+import { videoTypeOf } from '../../shared/types.ts';
+import type { Host, LibraryKind } from './host.ts';
 
 interface FileSummary {
-  kind: FileKind;
+  kind: LibraryKind;
   id: string;
   title: string;
   updated_at: string;
@@ -19,9 +20,9 @@ interface FileSummary {
 const CREATE_TOOLS = { doc: 'create_doc', deck: 'create_deck', sheet: 'create_sheet' } as const;
 const titleFromFileName = (name: string) => name.replace(/\.[^.]+$/, '').trim() || 'Imported file';
 const toItem = (f: FileSummary): LibraryItem => ({ id: f.id, kind: f.kind, title: f.title, updatedAt: f.updated_at, createdAt: f.created_at });
-const asFile = (item: LibraryItem) => ({ kind: item.kind as FileKind, id: item.id });
+const asFile = (item: LibraryItem) => ({ kind: item.kind as LibraryKind, id: item.id });
 
-export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: FileKind; id: string }): void }) {
+export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: LibraryKind; id: string }): void }) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
@@ -36,7 +37,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
 
   /** Import: a one-time ticket from the server, then the bytes go straight to its import route. */
   const importFile = async (file: File) => {
-    if (!/\.(xlsx?|docx|pptx)$/i.test(file.name)) return setError('Choose an Excel workbook (.xlsx, .xls), Word document (.docx) or PowerPoint presentation (.pptx).');
+    if (!/\.(xlsx?|docx|pptx|csv|md|markdown|pdf)$/i.test(file.name) && !videoTypeOf(file.name)) return setError('Choose an Excel workbook (.xlsx, .xls), Word document (.docx), PowerPoint presentation (.pptx), CSV file (.csv), Markdown file (.md), PDF (.pdf) or video (.mp4, .mov, .webm).');
     setError(null);
     setImporting(file.name);
     try {
@@ -45,6 +46,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
       const res = await fetch(`${url}?${q}`, { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const body = (await res.json()) as { file?: FileSummary; warnings?: string[]; error?: string };
       if (!res.ok || !body.file) throw new Error(body.error ?? `Import failed (${res.status}).`);
+      void load();
       if (body.warnings?.length) setImported({ file: body.file, warnings: body.warnings });
       else onOpen({ kind: body.file.kind, id: body.file.id });
     } catch (e) {
@@ -90,9 +92,10 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Fil
           const r = await host.call<{ file: FileSummary }>(CREATE_TOOLS[kind], { title });
           onOpen({ kind, id: r.file.id });
         }}
-        importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT}`}
-        importLabel="Import Excel, PowerPoint or Word"
-        importHint="You can also attach an Excel, PowerPoint or Word file in the chat and ask ChatGPT to import it, or ask it to make something new."
+        importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${CSV_ACCEPT},${MARKDOWN_ACCEPT},${PDF_ACCEPT},${VIDEO_ACCEPT}`}
+        importLabel="Import a file"
+        importHint="Excel, PowerPoint, Word, CSV, Markdown, PDF or video. You can also attach a file in the chat and ask ChatGPT to import it, or ask it to make something new."
+        canRename={(item) => item.kind !== 'file'}
         importing={importing}
         onImport={(file) => void importFile(file)}
         onOpen={(item) => onOpen(asFile(item))}

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
-import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, SHEET_EDIT_TOOLS, ToolError, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
+import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, SHEET_EDIT_TOOLS, ToolError, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
  * The app's resource URI. Hosts capture the HTML by URI when the plugin is created or its tools refreshed, so
@@ -54,8 +54,6 @@ export interface McpOptions {
   fetchFn?: typeof fetch;
 }
 
-/** The largest file import_file will download. */
-export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 export const INSTRUCTIONS = `Freeflow Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
 Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
@@ -67,6 +65,8 @@ const DOC_ICON = {
 };
 
 const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document), deck (slide presentation) or sheet (spreadsheet).');
+/** For the tools that work on anything in the library, stored files included. */
+const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or file (a PDF or video, which is shown but not edited).');
 const fileId = z.string().describe('The file id (from list_files or the app).');
 const optionalDocId = z.string().optional().describe('The document to act on. Defaults to the document open in the app.');
 const optionalDeckId = z.string().optional().describe('The presentation to act on. Defaults to the presentation open in the app.');
@@ -149,7 +149,7 @@ function sniffImageType(bytes: Buffer): string | null {
 }
 
 /** Fetch an attached file from the host, within limits. Only https, and never an address on a private network. */
-async function download(url: string, fetchFn: typeof fetch): Promise<Buffer> {
+async function download(url: string, fetchFn: typeof fetch, limit: number): Promise<Buffer> {
   let u: URL;
   try {
     u = new URL(url);
@@ -160,9 +160,9 @@ async function download(url: string, fetchFn: typeof fetch): Promise<Buffer> {
   const res = await fetchFn(u, { redirect: 'follow', signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new ToolError(`Could not download the file (${res.status}).`);
   const declared = Number(res.headers.get('content-length') ?? 0);
-  if (declared > MAX_IMPORT_BYTES) throw new ToolError(`The file is too large to import (over ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`);
+  if (declared > limit) throw new ToolError(`The file is too large to import (over ${limit / 1024 / 1024} MB).`);
   const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > MAX_IMPORT_BYTES) throw new ToolError(`The file is too large to import (over ${MAX_IMPORT_BYTES / 1024 / 1024} MB).`);
+  if (bytes.length > limit) throw new ToolError(`The file is too large to import (over ${limit / 1024 / 1024} MB).`);
   if (!bytes.length) throw new ToolError('The file is empty.');
   return bytes;
 }
@@ -218,7 +218,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const appTools = level === 'app' || level === 'full';
   const entrypoint = level === 'full';
 
-  const listFiles = { title: 'List files', description: "The user's documents, presentations and spreadsheets, most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: kind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+  const listFiles = { title: 'List files', description: "The user's documents, presentations, spreadsheets and stored files (PDFs and videos), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
   server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
   if (level === 'minimal') return server;
 
@@ -335,9 +335,9 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   server.registerTool(
     'import_file',
     {
-      title: 'Import a Word, PowerPoint or Excel file',
+      title: 'Import a file',
       description:
-        'Import a Word document (.docx) as a new document, a PowerPoint presentation (.pptx) as a new presentation, or an Excel workbook (.xlsx) as a new spreadsheet, from a file the user attached, and open it in the app.',
+        'Import a file the user attached and open it in the app: a Word document (.docx) or Markdown file (.md) as a new document, a PowerPoint presentation (.pptx) as a new presentation, an Excel workbook (.xlsx) or CSV file (.csv) as a new spreadsheet. A PDF (.pdf) or video (.mp4, .mov, .webm) is stored as it is and shown in the app\'s viewer; it cannot be read or edited with the other tools. A CSV, Markdown or video file is recognised by its file name.',
       inputSchema: {
         file: attachedFile.describe('The attached file.'),
         title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
@@ -347,7 +347,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     },
     async ({ file, title }) =>
       guard(async () => {
-        const bytes = await download(file.download_url, opts.fetchFn ?? fetch);
+        const bytes = await download(file.download_url, opts.fetchFn ?? fetch, importLimit(file.file_name));
         const r = await service.importFile(bytes, file.file_name, title);
         service.setOpen({ kind: r.file.kind, id: r.file.id });
         return ok({ ...r, ...service.state() });
@@ -359,14 +359,15 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'open_file',
     {
       title: 'Open file',
-      description: `Open a document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default.`,
-      inputSchema: { kind, id: fileId },
+      description: `Open a document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default. A stored file (a PDF or video) is shown in the app's viewer; only its name, type and size come back.`,
+      inputSchema: { kind: anyKind, id: fileId },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       ...(ui ? { _meta: rendersApp() } : {}),
     },
     async ({ kind: k, id }) =>
       guard(async () => {
         service.setOpen({ kind: k, id });
+        if (k === 'file') return ok({ file: service.storedFile(id), ...service.state() });
         const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : k === 'deck' ? await service.editDeck(id, 'read_deck', {}) : await service.editSheet(id, 'get_sheet_overview', {});
         return ok({ ...outline, ...service.state() });
       }),
@@ -376,8 +377,8 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'rename_file',
     {
       title: 'Rename file',
-      description: 'Change the title of a file. Defaults to the open file.',
-      inputSchema: { kind: kind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
+      description: 'Change the title of a document, presentation or spreadsheet. Defaults to the open file. A stored PDF or video keeps its name.',
+      inputSchema: { kind: anyKind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ kind: k, id, title }) =>
@@ -392,8 +393,8 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'delete_file',
     {
       title: 'Delete file',
-      description: 'Delete a document, presentation or spreadsheet permanently. Only when the user clearly asks for it.',
-      inputSchema: { kind, id: fileId },
+      description: 'Delete a document, presentation, spreadsheet or stored file permanently. Only when the user clearly asks for it.',
+      inputSchema: { kind: anyKind, id: fileId },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ kind: k, id }) =>
@@ -424,13 +425,13 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     const { file, ...rest } = input as Record<string, unknown> & { file?: z.infer<typeof attachedFile> };
     const url = typeof rest[field] === 'string' ? rest[field].trim() : '';
     if (file?.download_url) {
-      const bytes = await download(file.download_url, opts.fetchFn ?? fetch);
+      const bytes = await download(file.download_url, opts.fetchFn ?? fetch, MAX_IMPORT_BYTES);
       const type = sniffImageType(bytes) ?? file.mime_type ?? '';
       rest[field] = await service.storeImage(type, bytes);
     } else if (/^https?:/i.test(url) && !service.isOwnImage(url)) {
       // A web image is fetched and stored too: the app runs under a CSP that only allows our own origin,
       // and the model should hear now if the address is not an image.
-      const bytes = await download(url, opts.fetchFn ?? fetch);
+      const bytes = await download(url, opts.fetchFn ?? fetch, MAX_IMPORT_BYTES);
       const type = sniffImageType(bytes);
       if (!type) throw new ToolError(`${url} is not a PNG, JPEG, GIF or WebP image. Give the address of the image file itself, not of a page that shows it.`);
       rest[field] = await service.storeImage(type, bytes);
@@ -492,7 +493,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     {
       description: 'The app reports which file it shows (none when omitted) and where the user is in it.',
       inputSchema: {
-        kind: kind.optional(),
+        kind: anyKind.optional(),
         id: z.string().optional(),
         cursor_block: z.number().int().min(1).optional(),
         selected_text: z.string().max(500).optional(),
@@ -531,8 +532,14 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
 
   server.registerTool(
     'upload_ticket',
-    { description: 'A one-time ticket and URL for the app to upload a Word, PowerPoint or Excel file to import.', inputSchema: {}, ...appOnly(false) },
+    { description: 'A one-time ticket and URL for the app to upload a file to import.', inputSchema: {}, ...appOnly(false) },
     async () => guard(() => ok({ ticket: service.hub.issueTicket(service.userId), url: `${opts.publicUrl ?? ''}/plugin/import` })),
+  );
+
+  server.registerTool(
+    'file_link',
+    { description: 'A stored file (a PDF or video) and an address the app can load it from for the next few hours.', inputSchema: { id: fileId }, ...appOnly(true) },
+    async ({ id }) => guard(() => ok({ ...service.fileLink(id) })),
   );
 
   server.registerTool(

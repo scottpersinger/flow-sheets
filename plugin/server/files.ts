@@ -20,13 +20,35 @@ import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type Workbook } from '../../shared/types.ts';
+import { CsvError, MAX_CSV_CHARS } from '../../shared/csv.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, videoTypeOf, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import { FileStore } from '../../server/files.ts';
+import { isPdf } from '../../server/pdfImport.ts';
 
 export { ToolError };
 
 export type FileKind = 'doc' | 'deck' | 'sheet';
 export const FILE_KINDS: readonly FileKind[] = ['doc', 'deck', 'sheet'];
 export type FileData = Doc | Deck | Workbook;
+/** Everything the library lists: the three editable kinds, and stored files (PDFs and videos) that are only shown. */
+export type LibraryKind = FileKind | 'file';
+export const LIBRARY_KINDS: readonly LibraryKind[] = [...FILE_KINDS, 'file'];
+
+/** The largest file that can be imported: videos and PDFs are stored as they are, so they may be bigger. */
+export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
+export const MAX_PDF_BYTES = 50 * 1024 * 1024;
+export function importLimit(name: string | undefined): number {
+  if (name && videoTypeOf(name)) return MAX_VIDEO_BYTES;
+  return /\.pdf$/i.test(name ?? '') ? MAX_PDF_BYTES : MAX_IMPORT_BYTES;
+}
+/** How long a link to a stored file's bytes works (the player asks for the file in pieces as it plays). */
+const FILE_LINK_MS = 6 * 60 * 60 * 1000;
+
+/** The text of an uploaded text file (UTF-8, without a byte order mark); refuses bytes that are not text. */
+function textOf(bytes: Buffer): string {
+  if (bytes.includes(0)) throw new ToolError('This file is not a text file.');
+  return bytes.toString('utf8').replace(/^\uFEFF/, '');
+}
 
 /** A save with a stale revision: someone else (the app, the model) changed the file first. */
 export class ConflictError extends Error {
@@ -38,11 +60,14 @@ export class ConflictError extends Error {
 }
 
 export interface FileSummary {
-  kind: FileKind;
+  kind: LibraryKind;
   id: string;
   title: string;
   updated_at: string;
   created_at: string;
+  /** Stored files: the MIME type and the size in bytes. */
+  type?: string;
+  size?: number;
 }
 
 /** Where the user is in the open file, as reported by the app's editor. */
@@ -58,7 +83,7 @@ export interface Cursor {
 }
 
 export interface OpenFile {
-  kind: FileKind;
+  kind: LibraryKind;
   id: string;
   title: string;
   rev: string;
@@ -76,6 +101,7 @@ export interface FileHubOptions {
   /** The app's own stores, when the plugin runs inside the app (so writes share one queue). */
   sheets?: SheetStore;
   images?: ImageStore;
+  files?: FileStore;
 }
 
 /** Tools the model may run on a document, in the app's vocabulary. */
@@ -116,7 +142,9 @@ export interface SlideSpec extends SlideContent {
 
 const summary = (m: SheetMeta): FileSummary => ({ kind: m.kind as FileKind, id: m.id, title: m.title, updated_at: m.updatedAt, created_at: m.createdAt });
 
-const noun = (kind: FileKind) => (kind === 'doc' ? 'document' : kind === 'deck' ? 'presentation' : 'spreadsheet');
+const fileSummary = (f: StoredFile): FileSummary => ({ kind: 'file', id: f.id, title: f.filename, updated_at: f.createdAt, created_at: f.createdAt, type: f.type, size: f.size });
+
+const noun = (kind: LibraryKind) => (kind === 'doc' ? 'document' : kind === 'deck' ? 'presentation' : kind === 'sheet' ? 'spreadsheet' : 'file');
 
 /** Apply fn to every image address in a document (the content is plain JSON). */
 function mapDocImages(doc: Doc, fn: (src: string) => string): Doc {
@@ -154,8 +182,11 @@ export class FileHub {
   readonly db: DB;
   readonly sheets: SheetStore;
   readonly images: ImageStore;
+  readonly files: FileStore;
   readonly publicUrl: string | null;
   private readonly byUser = new Map<string, FileService>();
+  /** Links to stored files' bytes: the app's iframe has no credentials, so the address carries a token. */
+  private readonly fileLinks = new Map<string, { userId: string; id: string; expires: number }>();
   /** One-time tickets letting the app upload a file for import without a bearer token (it has none). */
   private readonly tickets = new Map<string, { userId: string; expires: number }>();
 
@@ -163,6 +194,7 @@ export class FileHub {
     this.db = opts.db;
     this.sheets = opts.sheets ?? new SheetStore(opts.db, path.join(opts.dataDir, 'sheets'));
     this.images = opts.images ?? new ImageStore(opts.db, path.join(opts.dataDir, 'images'));
+    this.files = opts.files ?? new FileStore(opts.db, path.join(opts.dataDir, 'files'));
     this.publicUrl = opts.publicUrl?.replace(/\/$/, '') ?? null;
   }
 
@@ -176,6 +208,7 @@ export class FileHub {
   async init(): Promise<void> {
     await this.sheets.init();
     await this.images.init();
+    await this.files.init();
   }
 
   /** The files of one account; the same instance (with its open-file state) for every request of that user. */
@@ -216,6 +249,25 @@ export class FileHub {
     return t && t.expires >= Date.now() ? t.userId : null;
   }
 
+  /** A token for reading one stored file's bytes for a few hours; the same one while it has plenty of time left. */
+  issueFileLink(userId: string, id: string): string {
+    const now = Date.now();
+    for (const [k, v] of this.fileLinks) {
+      if (v.expires < now) this.fileLinks.delete(k);
+      else if (v.userId === userId && v.id === id && v.expires - now > FILE_LINK_MS / 2) return k;
+    }
+    const token = randomBytes(24).toString('base64url');
+    this.fileLinks.set(token, { userId, id, expires: now + FILE_LINK_MS });
+    return token;
+  }
+
+  /** The stored file a link's token is for, or null when the token is unknown, expired or for another file. */
+  fileForLink(token: string | null | undefined, id: string): { meta: StoredFile; file: string } | null {
+    const link = token ? this.fileLinks.get(token) : undefined;
+    if (!link || link.id !== id || link.expires < Date.now()) return null;
+    return this.files.get(link.userId, id);
+  }
+
   /** A stored image by id, whoever owns it: the iframe fetches images without credentials, so the id is the secret. */
   /** True for an image address this server stores (either form). */
   isOwnImage(src: string): boolean {
@@ -235,7 +287,7 @@ export class FileService {
   readonly userId: string;
   readonly publicUrl: string | null;
   /** The file shown in the app, which the model's tools act on by default. */
-  open: { kind: FileKind; id: string } | null = null;
+  open: { kind: LibraryKind; id: string } | null = null;
   cursor: Cursor = {};
 
   constructor(hub: FileHub, userId: string) {
@@ -252,14 +304,13 @@ export class FileService {
 
   // --- Listing and lifecycle --------------------------------------------------------
 
-  list(kind?: FileKind, query?: string): FileSummary[] {
+  list(kind?: LibraryKind, query?: string): FileSummary[] {
     const q = query?.trim().toLowerCase();
-    const kinds = kind ? [kind] : FILE_KINDS;
+    const kinds = kind ? [kind] : LIBRARY_KINDS;
     return kinds
-      .flatMap((k) => this.sheets.list(this.userId, k))
+      .flatMap((k) => (k === 'file' ? this.hub.files.list(this.userId).map(fileSummary) : this.sheets.list(this.userId, k).map(summary)))
       .filter((m) => !q || m.title.toLowerCase().includes(q))
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-      .map(summary);
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
   }
 
   async createDoc(title: string, markdown?: string): Promise<FileSummary> {
@@ -291,6 +342,19 @@ export class FileService {
   async importFile(bytes: Buffer, name: string | undefined, title: string | undefined): Promise<{ file: FileSummary; warnings: string[] }> {
     const baseTitle = (title?.trim() || name?.replace(/\.[^.]+$/, '').trim() || '').slice(0, 200);
     const storeImage = (type: string, data: Buffer) => this.images.create(this.userId, type, data);
+    // A PDF or a video is kept as it is and shown in the app's viewer.
+    const fileName = (name ?? '').replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200);
+    const videoType = videoTypeOf(fileName);
+    if (videoType) {
+      if (bytes.length > MAX_VIDEO_BYTES) throw new ToolError(`This video is too large to import (${MAX_VIDEO_BYTES / 1024 / 1024} MB maximum).`);
+      return { file: fileSummary(await this.hub.files.create(this.userId, fileName, videoType, bytes)), warnings: [] };
+    }
+    if (isPdf(bytes)) {
+      if (bytes.length > MAX_PDF_BYTES) throw new ToolError(`This PDF is too large to import (${MAX_PDF_BYTES / 1024 / 1024} MB maximum).`);
+      const pdfName = /\.pdf$/i.test(fileName) ? fileName : `${fileName || baseTitle || 'document'}.pdf`;
+      return { file: fileSummary(await this.hub.files.create(this.userId, pdfName, 'application/pdf', bytes)), warnings: [] };
+    }
+    if (bytes.length > MAX_IMPORT_BYTES) throw new ToolError(`This file is too large to import (${MAX_IMPORT_BYTES / 1024 / 1024} MB maximum).`);
     try {
       if (await isDocx(bytes)) {
         const { doc, warnings } = await importDocx(bytes, storeImage);
@@ -304,6 +368,18 @@ export class FileService {
         if (problem) throw new ToolError(problem);
         return { file: summary(await this.sheets.createDeck(this.userId, baseTitle || 'Imported presentation', deck)), warnings };
       }
+      // Text formats are told by their name: a CSV file stays a CSV file, and Markdown becomes a document.
+      if (/\.csv$/i.test(name ?? '')) {
+        const csv = textOf(bytes);
+        if (csv.length > MAX_CSV_CHARS) throw new ToolError('This file is too large to import (10 MB maximum).');
+        return { file: summary(await this.sheets.createCsv(this.userId, baseTitle || 'Imported CSV', csv)), warnings: [] };
+      }
+      if (/\.(md|markdown)$/i.test(name ?? '')) {
+        const doc = markdownToDoc(textOf(bytes));
+        const problem = validateDoc(doc);
+        if (problem) throw new ToolError(problem);
+        return { file: summary(await this.sheets.createDoc(this.userId, baseTitle || 'Imported document', doc)), warnings: [] };
+      }
       if (/\.xlsx?$/i.test(name ?? '') || bytes.subarray(0, 2).toString('latin1') === 'PK' || bytes[0] === 0xd0) {
         const { workbook, warnings } = await importExcel(bytes);
         const problem = validateWorkbook(workbook);
@@ -311,25 +387,39 @@ export class FileService {
         return { file: summary(await this.sheets.create(this.userId, baseTitle || 'Imported spreadsheet', workbook)), warnings };
       }
     } catch (e) {
-      if (e instanceof ImportError) throw new ToolError(e.message);
+      if (e instanceof ImportError || e instanceof CsvError) throw new ToolError(e.message);
       throw e;
     }
-    throw new ToolError('Only Word documents (.docx), PowerPoint presentations (.pptx) and Excel workbooks (.xlsx) can be imported.');
+    throw new ToolError('Only Word documents (.docx), PowerPoint presentations (.pptx), Excel workbooks (.xlsx), CSV files (.csv), Markdown files (.md), PDFs (.pdf) and videos (.mp4, .mov, .webm) can be imported.');
   }
 
-  rename(kind: FileKind, id: string, title: string): FileSummary {
+  rename(kind: LibraryKind, id: string, title: string): FileSummary {
+    if (kind === 'file') throw new ToolError('A PDF or video keeps the name it was uploaded with.');
     const meta = this.sheets.rename(this.userId, id, title.trim(), kind);
     if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return summary(meta);
   }
 
-  async delete(kind: FileKind, id: string): Promise<void> {
-    if (!(await this.sheets.delete(this.userId, id, kind))) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+  async delete(kind: LibraryKind, id: string): Promise<void> {
+    if (!(kind === 'file' ? await this.hub.files.delete(this.userId, id) : await this.sheets.delete(this.userId, id, kind))) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     if (this.open?.id === id) this.setOpen(null);
   }
 
-  setOpen(file: { kind: FileKind; id: string } | null, cursor: Cursor = {}): void {
-    if (file && !this.sheets.get(this.userId, file.id, file.kind)) throw new ToolError(`There is no ${noun(file.kind)} ${file.id}.`);
+  /** A stored file (a PDF or a video) of this account. */
+  storedFile(id: string): FileSummary {
+    const f = this.hub.files.get(this.userId, id);
+    if (!f) throw new ToolError(`There is no file ${id}.`);
+    return fileSummary(f.meta);
+  }
+
+  /** A stored file with an address the app's iframe can load it from (and seek in) for the next few hours. */
+  fileLink(id: string): { file: FileSummary; url: string } {
+    const file = this.storedFile(id);
+    return { file, url: `${this.publicUrl ?? ''}/plugin/file/${id}?t=${this.hub.issueFileLink(this.userId, id)}` };
+  }
+
+  setOpen(file: { kind: LibraryKind; id: string } | null, cursor: Cursor = {}): void {
+    if (file && !(file.kind === 'file' ? this.hub.files.get(this.userId, file.id) : this.sheets.get(this.userId, file.id, file.kind))) throw new ToolError(`There is no ${noun(file.kind)} ${file.id}.`);
     this.open = file;
     this.cursor = file ? cursor : {};
   }
@@ -341,6 +431,11 @@ export class FileService {
   }
 
   state(): AppState {
+    if (this.open?.kind === 'file') {
+      const f = this.hub.files.get(this.userId, this.open.id)?.meta;
+      if (!f) this.open = null;
+      return { open: f ? { kind: 'file', id: f.id, title: f.filename, rev: f.createdAt } : null };
+    }
     const meta = this.open ? this.sheets.get(this.userId, this.open.id, this.open.kind) : null;
     if (this.open && !meta) this.open = null;
     return { open: meta ? { kind: this.open!.kind, id: meta.id, title: meta.title, rev: meta.updatedAt } : null };
