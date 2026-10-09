@@ -262,7 +262,7 @@ export class LocalFolders implements Folders {
       const code = (e as NodeJS.ErrnoException).code;
       const name = p ? `“${path.posix.basename(p)}”` : 'this folder';
       if (code === 'EPERM' && process.platform === 'darwin') {
-        return `macOS has not given the app permission to read ${name}. Allow it under System Settings → Privacy & Security → Files and Folders (or Full Disk Access), for FreeFlow Docs or for the terminal you started it from, then open the folder again.`;
+        return `macOS has not given the app permission to read ${name}. Allow it under System Settings → Privacy & Security → Files and Folders (or Full Disk Access), for Universal Docs or for the terminal you started it from, then open the folder again.`;
       }
       if (code === 'EPERM' || code === 'EACCES') return `You do not have permission to read ${name}.`;
       return `${name} could not be read (${code ?? 'unknown error'}).`;

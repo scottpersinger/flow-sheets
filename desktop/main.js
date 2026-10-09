@@ -9,6 +9,7 @@ import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 // Also names the app's data directory, which would otherwise be the generic "Electron" one.
+// The name the app's data folder is kept under (last folder, each folder's database): changing it would lose them.
 app.setName('FreeFlow Docs');
 const isDir = (p) => {
   try {
@@ -70,7 +71,7 @@ const TABS = 'freeflow';
 
 function createWindow(url) {
   // On macOS the app's windows share one tab group.
-  const win = new BrowserWindow({ width: 1400, height: 900, title: 'FreeFlow Docs', tabbingIdentifier: TABS });
+  const win = new BrowserWindow({ width: 1400, height: 900, title: 'Universal Docs', tabbingIdentifier: TABS });
   void win.loadURL(url);
   return win;
 }
@@ -96,7 +97,7 @@ async function openFolder(dir) {
   current = await startServer(dir);
   rememberFolder(dir);
   current.child.once('exit', () => {
-    dialog.showErrorBox('FreeFlow Docs', 'The local server stopped unexpectedly. The app will close.');
+    dialog.showErrorBox('Universal Docs', 'The local server stopped unexpectedly. The app will close.');
     app.quit();
   });
   // Only this app's windows hold the token, so nothing else on the machine can use the server.
@@ -120,7 +121,7 @@ function buildMenu() {
       {
         label: 'File',
         submenu: [
-          { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: () => void chooseFolder().catch((e) => dialog.showErrorBox('FreeFlow Docs', String(e.message ?? e))) },
+          { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: () => void chooseFolder().catch((e) => dialog.showErrorBox('Universal Docs', String(e.message ?? e))) },
           { label: mac ? 'Show Folder in Finder' : 'Show Folder', click: () => current && void shell.openPath(current.dir) },
           { label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => current && createWindow(`${current.origin}/`) },
           { type: 'separator' },
@@ -137,7 +138,7 @@ function buildMenu() {
 app.whenReady().then(async () => {
   buildMenu();
   if (!existsSync(path.join(root, 'dist', 'client', 'index.html'))) {
-    dialog.showErrorBox('FreeFlow Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
+    dialog.showErrorBox('Universal Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
     return app.quit();
   }
   // electron [flags] desktop/main.js [folder]: the folder is the argument that is neither a flag nor this script.
@@ -152,11 +153,11 @@ app.whenReady().then(async () => {
     const dir = path.resolve(arg ?? process.cwd());
     if (isDir(dir)) await openFolder(dir);
     else {
-      dialog.showErrorBox('FreeFlow Docs', `"${dir}" is not a folder. Choose a folder to open.`);
+      dialog.showErrorBox('Universal Docs', `"${dir}" is not a folder. Choose a folder to open.`);
       if (!(await chooseFolder())) app.quit();
     }
   } catch (e) {
-    dialog.showErrorBox('FreeFlow Docs', `The app could not start: ${e.message ?? e}`);
+    dialog.showErrorBox('Universal Docs', `The app could not start: ${e.message ?? e}`);
     app.quit();
   }
 });

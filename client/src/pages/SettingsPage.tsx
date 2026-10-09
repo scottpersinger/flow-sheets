@@ -51,7 +51,7 @@ export function SettingsPage() {
       <header className="home-header">
         <div className="home-brand">
           <Link to="/" className="home-back">
-            ‹ FreeFlow Docs
+            ‹ Universal Docs
           </Link>
           <span>Settings</span>
         </div>

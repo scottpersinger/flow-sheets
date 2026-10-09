@@ -408,8 +408,8 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
         </div>
         <div className="wb-user wb-ask">
           {host.appLink({ kind: 'deck', id: meta.id }) && (
-            <button className="btn" title="Open in the full Freeflow app in a new tab" onClick={() => void ctl.saver.flush().then(() => host.openLink(host.appLink({ kind: 'deck', id: meta.id })!))}>
-              Open in Freeflow ↗
+            <button className="btn" title="Open in the full app in a new tab" onClick={() => void ctl.saver.flush().then(() => host.openLink(host.appLink({ kind: 'deck', id: meta.id })!))}>
+              Open in full app ↗
             </button>
           )}
           <button className="btn" title="Ask ChatGPT to summarize this presentation" onClick={() => void host.ask('Summarize the presentation I have open in Docs, slide by slide.')}>

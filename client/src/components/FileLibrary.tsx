@@ -119,7 +119,7 @@ export function formatWhen(iso: string): string {
 }
 
 export interface FileLibraryProps {
-  /** Shown top left, e.g. the logo and "FreeFlow Docs". */
+  /** Shown top left, e.g. the logo and "Universal Docs". */
   brand: ReactNode;
   /** Controls at the right of the header (menus, buttons). */
   headerActions?: ReactNode;
@@ -150,7 +150,7 @@ export interface FileLibraryProps {
   /** The rows, or null while loading. */
   items: LibraryItem[] | null;
   error?: string | null;
-  /** Kinds the "Start something new" tiles offer. */
+  /** Kinds the "New" tile's menu offers. */
   createKinds?: Exclude<LibraryKind, 'file'>[];
   onCreate(kind: Exclude<LibraryKind, 'file'>, title: string): Promise<void>;
   /** Importing: the picker's accept list, the tile label, the hint under the tiles, and what to do with the file. */
@@ -160,6 +160,8 @@ export interface FileLibraryProps {
   /** Name of the file being imported, shown as progress; null when idle. */
   importing: string | null;
   onImport(file: File): void;
+  /** Show the built-in "Getting started" guide. Adds its tile at the start of the "Start something new" row, until the user hides it. */
+  onGettingStarted?(): void;
   /** Open the file in place: the page stays inside the folder, with breadcrumbs back to it. */
   onOpen(item: LibraryItem): void;
   /** Open the file in a new tab (a new window tab in the desktop app). Adds an "Open" button to each row. */
@@ -177,7 +179,20 @@ export interface FileLibraryProps {
 }
 
 const ALL_KINDS: Exclude<LibraryKind, 'file'>[] = ['sheet', 'deck', 'doc', 'markdown'];
-const TILE_CLASS: Record<Exclude<LibraryKind, 'file'>, string> = { sheet: 'new-sheet-tile', deck: 'new-sheet-tile deck-tile', doc: 'new-sheet-tile doc-tile', markdown: 'new-sheet-tile markdown-tile' };
+/** The kinds as the "New" tile's menu lists them. */
+const KIND_LABELS: Record<Exclude<LibraryKind, 'file'>, string> = { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown document' };
+const KIND_ICONS: Record<Exclude<LibraryKind, 'file'>, ReactNode> = { sheet: <Logo size={18} />, deck: <DeckIcon size={18} />, doc: <DocIcon size={18} />, markdown: <MarkdownIcon size={18} /> };
+/** `menuFor` while the "New" tile's menu is open (the other values are row ids). */
+const NEW_MENU = 'tile:new';
+const HELP_HIDDEN_KEY = 'ui.hideGettingStarted';
+
+function loadHelpHidden(): boolean {
+  try {
+    return localStorage.getItem(HELP_HIDDEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function pickFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
@@ -216,6 +231,15 @@ export function FileLibrary(props: FileLibraryProps) {
   }, [kept]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [creating, setCreating] = useState<Exclude<LibraryKind, 'file'> | null>(null);
+  const [helpHidden, setHelpHidden] = useState(loadHelpHidden);
+  const hideHelp = () => {
+    setHelpHidden(true);
+    try {
+      localStorage.setItem(HELP_HIDDEN_KEY, '1');
+    } catch {
+      // Hidden until the page is loaded again, that's all.
+    }
+  };
   const [renaming, setRenaming] = useState<LibraryItem | null>(null);
   const [deleting, setDeleting] = useState<LibraryItem | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -431,14 +455,50 @@ export function FileLibrary(props: FileLibraryProps) {
         <div className="home-inner">
           <h2>Start something new</h2>
           <div className="tiles">
-            {createKinds.map((kind) => (
-              <div key={kind}>
-                <button className={TILE_CLASS[kind]} onClick={() => setCreating(kind)} aria-label={`Create a blank ${KIND_NAMES[kind]}`}>
+            {props.onGettingStarted && !helpHidden && (
+              <div className="tile-box">
+                <button className="new-sheet-tile help-tile" onClick={props.onGettingStarted}>
+                  <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2v.1h5V16c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="help-tile-title">Getting started</span>
+                  <span className="help-tile-sub">
+                    Take the tour <span aria-hidden="true">→</span>
+                  </span>
+                </button>
+                <button className="tile-dismiss" onClick={hideHelp} aria-label="Hide the Getting started tile" title="Hide">
+                  ×
+                </button>
+              </div>
+            )}
+            <div>
+              {/* The menu hangs from the tile itself, not from the label under it. */}
+              <div className="tile-box">
+                <button
+                  className="new-sheet-tile"
+                  aria-label="Create a new file"
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === NEW_MENU}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuFor(menuFor === NEW_MENU ? null : NEW_MENU);
+                  }}
+                >
                   <span className="plus">+</span>
                 </button>
-                <div className="tile-label">Blank {KIND_NAMES[kind]}</div>
+                {menuFor === NEW_MENU && (
+                  <div className="dropdown tile-menu" role="menu">
+                    {createKinds.map((kind) => (
+                      <button key={kind} role="menuitem" onClick={() => (setMenuFor(null), setCreating(kind))}>
+                        {KIND_ICONS[kind]}
+                        {KIND_LABELS[kind]}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
+              <div className="tile-label">New ▾</div>
+            </div>
             <div>
               <button
                 className="new-sheet-tile import-tile"

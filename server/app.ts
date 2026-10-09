@@ -1013,7 +1013,7 @@ export async function buildApp(opts: AppOptions) {
       const { body, files, problems } = await exportAll(sheets, req.user!.id, imageSource(images, req.user!.id));
       req.log.info({ files, problems: problems.length }, 'exported account');
       const date = new Date().toISOString().slice(0, 10);
-      return attachment(reply, `Freeflow export ${date}.zip`, 'application/zip').send(body);
+      return attachment(reply, `Universal Docs export ${date}.zip`, 'application/zip').send(body);
     });
   });
 

@@ -58,8 +58,8 @@ export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBac
         </div>
         <div className="wb-user wb-ask">
           {link && (
-            <button className="btn" title="Open in the full Freeflow app in a new tab" onClick={() => void host.openLink(link)}>
-              Open in Freeflow ↗
+            <button className="btn" title="Open in the full app in a new tab" onClick={() => void host.openLink(link)}>
+              Open in full app ↗
             </button>
           )}
         </div>
@@ -78,7 +78,7 @@ export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBac
         ) : (
           <div className="file-info">
             <h2>{file.title}</h2>
-            <p className="muted">This type of file can’t be shown here.{link ? ' Open it in Freeflow to download it.' : ''}</p>
+            <p className="muted">This type of file can’t be shown here.{link ? ' Open it in the full app to download it.' : ''}</p>
           </div>
         )}
       </main>

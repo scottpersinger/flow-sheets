@@ -245,9 +245,9 @@ function MarkdownWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: 
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
   useEffect(() => {
-    document.title = `${meta.title} - FreeFlow Docs`;
+    document.title = `${meta.title} - Universal Docs`;
     return () => {
-      document.title = 'FreeFlow Docs';
+      document.title = 'Universal Docs';
     };
   }, [meta.title]);
 

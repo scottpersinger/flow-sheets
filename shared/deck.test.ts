@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSlide, deckOutline, fromParagraphs, newDeck, newId, slideContent, toParagraphs, updateSlideContent, validateDeck, type Deck, type TextElement } from './deck.ts';
+import { buildSlide, deckOutline, fromParagraphs, newDeck, newId, slideContent, slideTitle, toParagraphs, updateSlideContent, validateDeck, type Deck, type TextElement } from './deck.ts';
 
 const titleOf = (slide: ReturnType<typeof buildSlide>) => (slide.elements.find((e) => e.type === 'text' && e.role === 'title') as TextElement).paragraphs[0].text;
 
@@ -83,5 +83,19 @@ describe('deck model', () => {
     expect(out).toMatchObject({ theme: 'dark', slide_count: 1, current_slide: 1 });
     expect(out.slides[0]).toMatchObject({ slide: 1, layout: 'title-body', notes: 'n' });
     expect(out.slides[0].elements.map((e) => (e as { text?: string }).text)).toEqual(['Agenda', '- One\n- Two']);
+  });
+});
+
+describe('the built-in guide', () => {
+  it('copies into a valid presentation, found again by its title', async () => {
+    const { findGettingStarted, gettingStartedDeck, GETTING_STARTED_SLIDES, GETTING_STARTED_TITLE } = await import('./gettingStarted.ts');
+    const deck = gettingStartedDeck();
+    expect(validateDeck(deck)).toBeNull();
+    expect(deck.slides).toHaveLength(GETTING_STARTED_SLIDES.length);
+    expect(slideTitle(deck.slides[0])).toBe('Getting started with Universal Docs');
+    // Each copy is its own file, with its own ids.
+    expect(gettingStartedDeck().slides[0].id).not.toBe(deck.slides[0].id);
+    expect(findGettingStarted([{ title: 'Plan' }, { title: GETTING_STARTED_TITLE, id: 'd1' }])).toEqual({ title: GETTING_STARTED_TITLE, id: 'd1' });
+    expect(findGettingStarted([{ title: 'Plan' }])).toBeUndefined();
   });
 });

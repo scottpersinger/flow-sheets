@@ -1,7 +1,8 @@
 // The library inside ChatGPT: the app's home page component (client/src/components/FileLibrary.tsx) fed by
 // the plugin's tools instead of the REST API. The iframe has no cookies, so files come from `list_files`,
 // imports go through a one-time ticket, and opening a file tells the server so the model acts on it.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { findGettingStarted, GETTING_STARTED_SLIDES, GETTING_STARTED_TITLE } from '../../shared/gettingStarted.ts';
 import { FileLibrary, type LibraryItem } from '../../client/src/components/FileLibrary.tsx';
 import { HomeIcon } from '../../client/src/components/Logo.tsx';
 import { Modal } from '../../client/src/components/Modal.tsx';
@@ -27,6 +28,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
   const [imported, setImported] = useState<{ file: FileSummary; warnings: string[] } | null>(null);
+  const openingGuide = useRef(false);
 
   const load = () =>
     host
@@ -56,6 +58,22 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
     }
   };
 
+  // The guide is a presentation of the user's own: the first click makes their copy of the built-in one.
+  const openGuide = async () => {
+    if (openingGuide.current) return;
+    openingGuide.current = true;
+    try {
+      const { files } = await host.call<{ files: FileSummary[] }>('list_files', { kind: 'deck', query: GETTING_STARTED_TITLE });
+      const mine = findGettingStarted(files);
+      const id = mine?.id ?? (await host.call<{ file: FileSummary }>('create_deck', { title: GETTING_STARTED_TITLE, slides: GETTING_STARTED_SLIDES })).file.id;
+      onOpen({ kind: 'deck', id });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      openingGuide.current = false;
+    }
+  };
+
   const openImported = () => {
     if (!imported) return;
     const f = imported.file;
@@ -69,7 +87,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         brand={
           <>
             <HomeIcon />
-            <span>FreeFlow Docs</span>
+            <span>Universal Docs</span>
           </>
         }
         headerActions={
@@ -78,8 +96,8 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
               Ask about my files
             </button>
             {host.appLink() && (
-              <button className="btn" title="Open the full Freeflow app in a new tab" onClick={() => void host.openLink(host.appLink()!)}>
-                Open Freeflow ↗
+              <button className="btn" title="Open the full app in a new tab" onClick={() => void host.openLink(host.appLink()!)}>
+                Open full app ↗
               </button>
             )}
           </>
@@ -87,6 +105,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         items={items}
         error={error}
         createKinds={['sheet', 'deck', 'doc']}
+        onGettingStarted={() => void openGuide()}
         onCreate={async (kind, title) => {
           if (kind === 'markdown') return;
           const r = await host.call<{ file: FileSummary }>(CREATE_TOOLS[kind], { title });
@@ -101,7 +120,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         onOpen={(item) => onOpen(asFile(item))}
         rowActions={(item) => {
           const link = host.appLink(asFile(item));
-          return link ? [{ label: 'Open in Freeflow ↗', onClick: () => void host.openLink(link) }] : [];
+          return link ? [{ label: 'Open in full app ↗', onClick: () => void host.openLink(link) }] : [];
         }}
         onRename={async (item, title) => {
           await host.call('rename_file', { kind: item.kind, id: item.id, title });

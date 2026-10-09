@@ -31,7 +31,7 @@ export function ForgotPasswordPage() {
       <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <div className="auth-brand">
           <HomeIcon size={36} />
-          <span>FreeFlow Docs</span>
+          <span>Universal Docs</span>
         </div>
         <h1>Reset your password</h1>
         {sent ? (
@@ -110,7 +110,7 @@ export function ResetPasswordPage() {
       <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <div className="auth-brand">
           <HomeIcon size={36} />
-          <span>FreeFlow Docs</span>
+          <span>Universal Docs</span>
         </div>
         <h1>Choose a new password</h1>
         {invalid ? (

@@ -94,7 +94,7 @@ export function FilePage() {
       <header className="home-header">
         <Link to={lastListingHref()} className="home-brand" title="Back to the file list">
           <HomeIcon />
-          <span>FreeFlow Docs</span>
+          <span>Universal Docs</span>
         </Link>
         <span className="file-page-title">
           {file && <FolderCrumbs folder={file.folder} />}

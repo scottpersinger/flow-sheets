@@ -161,9 +161,9 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   const zoomIn = ZOOMS.find((z) => z > pageScale * 100 + 0.5);
 
   useEffect(() => {
-    document.title = `${meta.title} - FreeFlow Docs`;
+    document.title = `${meta.title} - Universal Docs`;
     return () => {
-      document.title = 'FreeFlow Docs';
+      document.title = 'Universal Docs';
     };
   }, [meta.title]);
 

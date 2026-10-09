@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { DeletedFile, StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
+import { findGettingStarted, GETTING_STARTED_TITLE, gettingStartedDeck } from '../../../shared/gettingStarted.ts';
 import { api, type FolderInfo } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { Account } from '../components/Account.tsx';
@@ -58,6 +59,22 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
   const [branching, setBranching] = useState<LibraryItem | null>(null);
+
+  // The guide is a presentation of the user's own: the first click copies the built-in one into their files.
+  const openingGuide = useRef(false);
+  const openGuide = async () => {
+    if (openingGuide.current) return;
+    openingGuide.current = true;
+    try {
+      const mine = findGettingStarted((await api.listDecks()).decks);
+      const id = mine?.id ?? (await api.createDeck(GETTING_STARTED_TITLE, gettingStartedDeck())).deck.id;
+      navigate(`/d/${id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      openingGuide.current = false;
+    }
+  };
   // Deleted files kept in the off-box copy for 30 days; null while closed.
   const [trash, setTrash] = useState<{ files: DeletedFile[]; available: boolean } | 'loading' | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -174,7 +191,7 @@ export function HomePage() {
   useEffect(() => setItems(null), [folder]);
 
   useEffect(() => {
-    document.title = 'FreeFlow Docs';
+    document.title = 'Universal Docs';
   }, []);
 
   useEffect(() => {
@@ -196,7 +213,7 @@ export function HomePage() {
       brand={
         <>
           <HomeIcon />
-          <span>FreeFlow Docs</span>
+          <span>Universal Docs</span>
         </>
       }
       listTitle={local ? <span title={local.dir}>{dirName(local.dir)}</span> : undefined}
@@ -204,6 +221,7 @@ export function HomePage() {
       folders={folders}
       onOpenFolder={openFolder}
       thumbnail={(s) => <FileThumb item={s} />}
+      onGettingStarted={() => void openGuide()}
       search={search}
       onSearchChange={setSearch}
       onFind={async (q) => {
@@ -247,6 +265,16 @@ export function HomePage() {
                     Trash
                   </button>
                 )}
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    void openGuide();
+                  }}
+                  title="A short guide to the app, as a presentation in your files"
+                >
+                  Getting started
+                </button>
                 <Link role="menuitem" to="/connectors" title="Connect data sources such as Brex">
                   Connectors
                 </Link>
