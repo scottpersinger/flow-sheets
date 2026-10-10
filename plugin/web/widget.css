@@ -45,6 +45,10 @@ body {
   display: flex;
   gap: 6px;
 }
+/* One line each, however narrow the host makes the app. */
+.docs-plugin .wb-ask .btn {
+  white-space: nowrap;
+}
 
 .docs-library .sheet-list tbody tr {
   cursor: pointer;

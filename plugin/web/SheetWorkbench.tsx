@@ -355,7 +355,7 @@ function Workbench({ host, meta, ctl, onBack, onOpen }: { host: Host; meta: File
         <div className="wb-user wb-ask">
           {host.appLink({ kind: 'sheet', id: meta.id }) && (
             <button className="btn" title="Open in the full app in a new tab" onClick={() => void ctl.saver.flush().then(() => host.openLink(host.appLink({ kind: 'sheet', id: meta.id })!))}>
-              Open in full app ↗
+              Open ↗
             </button>
           )}
           <button className="btn" title="Ask ChatGPT to describe this spreadsheet" onClick={() => void host.ask('Describe the spreadsheet I have open in Docs: what each tab holds and what stands out in the data.')}>

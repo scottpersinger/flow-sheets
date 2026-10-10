@@ -422,15 +422,9 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
         <div className="wb-user wb-ask">
           {host.appLink({ kind: 'deck', id: meta.id }) && (
             <button className="btn" title="Open in the full app in a new tab" onClick={() => void ctl.saver.flush().then(() => host.openLink(host.appLink({ kind: 'deck', id: meta.id })!))}>
-              Open in full app ↗
+              Open ↗
             </button>
           )}
-          <button className="btn" title="Ask ChatGPT to summarize this presentation" onClick={() => void host.ask('Summarize the presentation I have open in Docs, slide by slide.')}>
-            Summarize
-          </button>
-          <button className="btn" title="Ask ChatGPT to improve the current slide" onClick={() => void host.ask('Improve the slide I am on in Docs: tighten the wording and fix anything unclear, keeping the layout.')}>
-            Improve slide
-          </button>
         </div>
       </header>
       <DeckToolbar ctl={ctl} onPresent={() => ctl.setPresenting(true)} onInsertImage={() => void insertImage()} onEditImage={setEditingImage} />

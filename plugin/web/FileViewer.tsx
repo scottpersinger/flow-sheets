@@ -77,7 +77,7 @@ export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBac
           )}
           {link && (
             <button className="btn" title="Open in the full app in a new tab" onClick={() => void host.openLink(link)}>
-              Open in full app ↗
+              Open ↗
             </button>
           )}
         </div>
