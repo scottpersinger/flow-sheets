@@ -15,6 +15,9 @@ import { HomeIcon } from '../components/Logo.tsx';
 import { useFavicon } from '../favicon.ts';
 import { isPowerPointFile, isWordFile, titleFromFileName } from '../importFile.ts';
 
+// Remove background in the image editor: a model that runs in the browser, fetched when it is first used.
+const loadBackgroundRemoval = () => import('@imgly/background-removal');
+
 /** What an Office file becomes when it is converted, or null for any other file. */
 function editableKind(filename: string): string | null {
   if (/\.xlsx?$/i.test(filename)) return 'spreadsheet';
@@ -156,13 +159,21 @@ export function FilePage() {
           <ImageFileEditor
             key={`${file.id}:${version}`}
             file={file}
-            onSaved={(saved) => {
-              setFile(saved);
-              setVersion((v) => v + 1);
-              setCanRevert(true);
-              setEditing(false);
+            store={{
+              load: async () => {
+                const res = await fetch(file.url, { credentials: 'same-origin' });
+                if (!res.ok) throw new Error(`Could not read the picture (${res.status})`);
+                return res.blob();
+              },
+              replace: async (image) => {
+                setFile(await api.updateImageFile(file.id, image));
+                setVersion((v) => v + 1);
+                setCanRevert(true);
+                setEditing(false);
+              },
+              create: async (name, image) => navigate(`/f/${(await api.uploadFile(name, image, file.folder)).id}`),
             }}
-            onCopied={(copy) => navigate(`/f/${copy.id}`)}
+            backgroundRemovalLoader={loadBackgroundRemoval}
             onClose={() => setEditing(false)}
           />
         ) : previewable ? (

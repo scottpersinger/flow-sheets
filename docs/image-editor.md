@@ -1,7 +1,7 @@
 # Image editor
 
-Status: the fork, phase 1 (editing an image file in the app, with background removal) and phase 2 (the
-assistant in the app) are built; the plugin's viewer and phases 3 and 4 are not. Decisions still open are listed at the end.
+Status: the fork and phases 1 to 3 are built (editing an image file in the app and in the plugin, the
+assistant in the app, and the assistant over the MCP). Phase 4 is not. Decisions still open are listed at the end.
 
 A full image editor for pictures stored as files, built so the same editor later edits pictures inside
 documents, spreadsheets and presentations, and so the assistant (in the app and over the MCP plugin) edits
@@ -106,18 +106,30 @@ Two tools, both browser tools (`CLIENT_TOOLS`), following "How to add an assista
 
 ## Phase 3: the assistant over the MCP
 
-MCP tools run on the server with no browser, so `transform_image` is proxied to the plugin's widget:
+Built. MCP tools run on the server with no browser, so the plugin's app does the editing:
 
-1. The model calls `transform_image`. The server queues a job for the user and waits (timeout about 45 s).
-2. The widget's `app_state` poll returns the job.
-3. The widget runs it with `imageTools.ts` and posts the result through a new app-only tool
-   (`image_job_result`).
-4. The MCP call returns that result, with the picture as image content.
+1. The model calls `transform_image`. The plugin server queues a job for the user and waits
+   (`FileService.runImageJob`).
+2. The app asks for `app_state` every few seconds while it is showing; the answer carries the jobs no app
+   has taken yet.
+3. The app does the job with the same code as the app's assistant (`plugin/web/imageJobs.ts`): in the
+   editor when the picture is open in it, else with an engine off screen, saving the result through the
+   upload route (`/plugin/import`, with `replace=<id>` to save over the file).
+4. It answers with the app-only `image_job_result`, with a reduced copy of the result, and the MCP call
+   returns that to the model as a picture.
 
-- New model-facing tools: `view_image`, `transform_image`. New app-only tools: `save_image_file`,
-  `image_job_result`.
-- No widget open: the tool fails with "Open the picture in the app first (open_file)".
-- The queue is in memory, which holds while the server is one replica.
+- Model-facing tools: `view_image` (the picture and its size in pixels; a picture over 4 MB is reduced by
+  the app, when it is showing) and `transform_image`. App-only: `image_job_result`.
+- No app showing: nothing takes the job, and after 25 seconds the tool fails with "call open_file with this
+  picture, then try again". A job an app took has 90 seconds.
+- The plugin's viewer has the same Edit button as the file page (`ImageFileEditor`, with the plugin's own
+  reading and writing in `plugin/web/imageStore.ts`).
+- The editor and Fabric are inlined into the app's one script (2.9 MB to 4.4 MB; 1.33 MB gzipped): scripts
+  loaded from our server were not reliable inside ChatGPT. Background removal is left out of the plugin: its
+  model is a 24 MB file fetched from another origin, which the app's content policy does not allow.
+- Saving over a file is not asked about first here, as it is in the app: an MCP host asks per tool, not per
+  call. The version before is kept.
+- The queue is in memory, which holds while the server is one process.
 
 ## Phase 4: pictures inside documents, spreadsheets and presentations
 

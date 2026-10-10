@@ -1,6 +1,6 @@
 // The image editor's engine without its interface, for editing a picture that is not open: the assistant's
 // transform_image on a stored file. It draws on a canvas kept off the screen. Loaded on demand, like the editor.
-import type { AspExportFormat } from '@ascentsparksoftware/react-image-editor';
+import type { AspBackgroundRemovalLoader, AspExportFormat } from '@ascentsparksoftware/react-image-editor';
 import type { OpsEngine } from './imageOps.ts';
 import { MAX_EDIT_IMAGE_DIM, MAX_EDIT_IMAGE_PIXELS } from './limits.ts';
 
@@ -15,7 +15,7 @@ export interface HiddenEngine {
   close(): Promise<void>;
 }
 
-export async function openHiddenEngine(source: Blob): Promise<HiddenEngine> {
+export async function openHiddenEngine(source: Blob, opts: { /** Makes remove_background available (see ImageEditorHost). */ backgroundRemovalLoader?: AspBackgroundRemovalLoader } = {}): Promise<HiddenEngine> {
   const { EditorEngine } = await import('@ascentsparksoftware/react-image-editor');
   const holder = document.createElement('div');
   holder.style.cssText = 'position:fixed;left:-20000px;top:0;width:1024px;height:768px;visibility:hidden;pointer-events:none';
@@ -31,7 +31,7 @@ export async function openHiddenEngine(source: Blob): Promise<HiddenEngine> {
       exportBounds: 'image',
       maxImportDim: MAX_EDIT_IMAGE_DIM,
       maxExportPixels: MAX_EDIT_IMAGE_PIXELS,
-      backgroundRemovalLoader: () => import('@imgly/background-removal'),
+      backgroundRemovalLoader: opts.backgroundRemovalLoader ?? null,
     });
     await engine.loadImage(source);
   } catch (e) {

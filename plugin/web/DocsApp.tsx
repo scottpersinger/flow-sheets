@@ -5,7 +5,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { DeckWorkbench } from './DeckWorkbench.tsx';
 import { Editor } from './Editor.tsx';
-import { FileViewer } from './FileViewer.tsx';
+import { FileViewer, PICTURE_CHANGED_EVENT } from './FileViewer.tsx';
+import { runImageJob } from './imageJobs.ts';
 import { Library } from './Library.tsx';
 import { SheetWorkbench } from './SheetWorkbench.tsx';
 import type { AppState, Host, LibraryKind, OpenFile } from './host.ts';
@@ -40,6 +41,8 @@ export function DocsApp({ host }: { host: Host }) {
     const tick = async () => {
       try {
         const s = await host.call<AppState>('app_state');
+        // Taken with the state, so they are this page's to do even if it is on its way out.
+        for (const job of s.jobs ?? []) void runImageJob(host, job, (id) => window.dispatchEvent(new CustomEvent(PICTURE_CHANGED_EVENT, { detail: id })));
         if (stop) return;
         setRemote(s.open);
         if (s.open && s.open.id !== current.current?.id) {

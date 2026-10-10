@@ -17,6 +17,8 @@ export interface OpenFile {
 
 export interface AppState {
   open: OpenFile | null;
+  /** Picture edits the model asked for, for the app to make (imageJobs.ts). */
+  jobs?: import('./imageJobs.ts').ImageJob[];
 }
 
 export class Host {

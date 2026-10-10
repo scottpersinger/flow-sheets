@@ -45,7 +45,8 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   The assistant's `transform_image` (`client/src/agent/imageTools.ts`) applies its operations
   (`client/src/image/imageOps.ts`) with the same engine: in the open editor when the picture is open there
   (`activeEditor.ts`), else in one off screen (`hiddenEngine.ts`). The engine needs a browser canvas, so tests
-  use `fakeEngine.ts`.
+  use `fakeEngine.ts`. In the plugin the model's `transform_image` is a job the plugin's app takes with its
+  state and does in the browser (`FileService.runImageJob`, `plugin/web/imageJobs.ts`).
 - Importing a file's bytes, whatever they are, is `server/importFile.ts` (`importBytes`: a Word, PowerPoint,
   Excel, CSV or Markdown file becomes a file the app edits; a PDF, video, picture or web page is stored as
   it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it

@@ -6,11 +6,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
+import { readFile } from 'node:fs/promises';
+import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES } from '../../shared/types.ts';
 import { schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
 import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
+import type { ImageJobResult } from './files.ts';
 import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
@@ -372,6 +375,68 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       }),
   );
 
+  // --- Pictures: look at one, and edit one exactly (the app's image editor does the editing) ---
+
+  /** The largest picture attached to a result for the model to look at; a larger one is described, not shown. */
+  const MAX_SHOWN_IMAGE_BYTES = 4 * 1024 * 1024;
+  const shownImage = async (file: string, type: string, size: number): Promise<CallToolResult['content']> =>
+    size <= MAX_SHOWN_IMAGE_BYTES && CELL_IMAGE_TYPES.includes(type) ? [{ type: 'image', data: (await readFile(file)).toString('base64'), mimeType: type }] : [];
+
+  const previewContent = (r: ImageJobResult): CallToolResult['content'] => (r.preview && CELL_IMAGE_TYPES.includes(r.preview.type) ? [{ type: 'image', data: r.preview.data, mimeType: r.preview.type }] : []);
+
+  server.registerTool(
+    'view_image',
+    {
+      title: 'Look at a picture',
+      description: 'Look at a stored picture (PNG, JPEG, GIF or WebP): it comes back for you to see, with its width and height in pixels, which positions in transform_image are given in. Use it before describing or editing a picture. Find ids with list_files.',
+      inputSchema: { file_id: fileId },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ file_id }) =>
+      guard(async () => {
+        const f = await service.editableImage(file_id);
+        let picture = await shownImage(f.file, f.meta.type, f.meta.size);
+        // A large picture is reduced by the app, when it is showing (the server has nothing to scale pictures with).
+        if (!picture.length) picture = previewContent(await service.runImageJob(file_id, [], 'copy', { preview: true }));
+        const data = {
+          file_id: f.meta.id,
+          filename: f.meta.filename,
+          type: f.meta.type,
+          size: f.meta.size,
+          ...(f.pixels ?? {}),
+          ...(picture.length ? (f.meta.size > MAX_SHOWN_IMAGE_BYTES ? { note: 'Shown reduced; positions are in the full picture’s pixels (width and height above).' } : {}) : { note: 'Too large to attach, and the app is not showing to reduce it: call open_file with this picture, then view_image again. Its width and height are given.' }),
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(data) }, ...picture], structuredContent: data };
+      }),
+  );
+
+  server.registerTool(
+    'transform_image',
+    {
+      title: 'Edit a picture',
+      description: `${schemas.transform_image.description ?? ''} The editing is done by the app, so it must be showing: call open_file with the picture first. A background cannot be removed here (remove_background works in the full app).`.replace(' If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.', ' If the user has the picture open in the app’s image editor, the edits are made there instead, as one undo step, and are saved when the user saves.'),
+      inputSchema: schemas.transform_image.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ file_id, operations, save }) =>
+      guard(async () => {
+        const f = await service.editableImage(file_id);
+        if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) throw new ToolError(`${f.meta.filename} cannot be edited: only PNG, JPEG and WebP pictures can.`);
+        const r = await service.runImageJob(file_id, operations, save === 'replace' ? 'replace' : 'copy');
+        if (!r.ok) return fail(r.error ?? 'The picture could not be edited.');
+        const resultId = r.file_id ?? file_id;
+        const made = r.saved === false ? null : await service.editableImage(resultId).catch(() => null);
+        const note =
+          r.saved === false
+            ? 'Done in the editor the user has open, as one undo step. It is not saved until the user saves there; tell them so.'
+            : save === 'replace'
+              ? 'Saved over the file; the version before it is kept.'
+              : 'A new file, open in the app; the original is unchanged.';
+        const data = { edited: true, file_id: resultId, ...(made ? { filename: made.meta.filename } : {}), ...(resultId !== file_id ? { source_file_id: file_id } : {}), applied: r.applied ?? [], size: r.size ?? null, saved: r.saved !== false, note, ...service.state() };
+        return { content: [{ type: 'text', text: JSON.stringify(data) }, ...(previewContent(r).length ? previewContent(r) : made ? await shownImage(made.file, made.meta.type, made.meta.size) : [])], structuredContent: data };
+      }),
+  );
+
   server.registerTool(
     'rename_file',
     {
@@ -493,7 +558,35 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     }),
   );
 
-  server.registerTool('app_state', { description: 'Which file is open and its revision.', inputSchema: {}, ...appOnly(true) }, async () => ok({ ...service.state() }));
+  // The app asks every few seconds while it is showing, and takes the picture edits waiting for it.
+  server.registerTool('app_state', { description: 'Which file is open and its revision, and the picture edits for the app to make.', inputSchema: {}, ...appOnly(true) }, async () => {
+    const jobs = service.takeImageJobs();
+    return ok({ ...service.state(), ...(jobs.length ? { jobs } : {}) });
+  });
+
+  server.registerTool(
+    'image_job_result',
+    {
+      description: 'What the app did with a picture edit it took from app_state.',
+      inputSchema: {
+        job_id: z.string(),
+        ok: z.boolean(),
+        error: z.string().max(2000).optional(),
+        applied: z.array(z.string().max(300)).max(40).optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        file_id: z.string().optional(),
+        saved: z.boolean().optional(),
+        preview_data: z.string().max(4_000_000).optional().describe('The picture as it is now, reduced, in base64.'),
+        preview_type: z.string().max(40).optional(),
+      },
+      ...appOnly(false),
+    },
+    async ({ job_id, ok: done, error, applied, width, height, file_id, saved, preview_data, preview_type }) =>
+      guard(() =>
+        ok({ taken: service.finishImageJob(job_id, { ok: done, error, applied, size: width && height ? { width, height } : null, file_id, saved, ...(preview_data && preview_type ? { preview: { data: preview_data, type: preview_type } } : {}) }) }),
+      ),
+  );
 
   server.registerTool(
     'set_open_file',

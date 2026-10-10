@@ -19,8 +19,10 @@ import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
-import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
-import { FileStore } from '../../server/files.ts';
+import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import { FileStore, isImageOfType } from '../../server/files.ts';
+import { imageSize } from '../../server/imageSize.ts';
+import { open } from 'node:fs/promises';
 import { importBytes, ImportFileError } from '../../server/importFile.ts';
 
 export { ToolError };
@@ -35,6 +37,39 @@ export const LIBRARY_KINDS: readonly LibraryKind[] = [...FILE_KINDS, 'file'];
 export { importLimit, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType } from '../../server/importFile.ts';
 /** How long a link to a stored file's bytes works (the player asks for the file in pieces as it plays). */
 const FILE_LINK_MS = 6 * 60 * 60 * 1000;
+
+/** An edit to a stored picture for the app to make (the image editor needs a browser). */
+export interface ImageJob {
+  id: string;
+  file_id: string;
+  /** transform_image's operations, as the model gave them (validated by the tool's schema). */
+  operations: unknown[];
+  save: 'copy' | 'replace';
+  /** Not an edit: only a reduced copy of the picture is wanted, for the model to look at. */
+  preview?: boolean;
+}
+
+/** What the app did with a job. */
+export interface ImageJobResult {
+  ok: boolean;
+  /** Why not, in words for the model. */
+  error?: string;
+  /** A line about each operation applied. */
+  applied?: string[];
+  size?: { width: number; height: number } | null;
+  /** The file that holds the result (the copy, or the picture itself). */
+  file_id?: string;
+  /** False when the edit was made in the editor the user has open, which saves when the user does. */
+  saved?: boolean;
+  /** The picture as it is now, reduced for the model to look at (base64). */
+  preview?: { data: string; type: string };
+}
+
+/** How long the app has to do a job, and to take one when no app has asked for its state lately. */
+const IMAGE_JOB_MS = 90_000;
+const IMAGE_JOB_UNSEEN_MS = 25_000;
+const IMAGE_PREVIEW_MS = 20_000;
+const APP_SEEN_MS = 15_000;
 
 /** A save with a stale revision: someone else (the app, the model) changed the file first. */
 export class ConflictError extends Error {
@@ -357,6 +392,87 @@ export class FileService {
     const f = this.hub.files.get(this.userId, id);
     if (!f) throw new ToolError(`There is no file ${id}.`);
     return fileSummary(f.meta);
+  }
+
+  // --- Pictures: the image editor runs in the app (a browser), so the model's edits are jobs the app takes ---
+
+  private readonly imageJobs = new Map<string, { job: ImageJob; claimed: boolean; settle(result: ImageJobResult): void }>();
+  /** When the app last asked for its state, which is when it takes jobs. */
+  private lastAppPoll = 0;
+
+  /** A stored picture the image editor can change, with its bytes' place and its size in pixels. */
+  async editableImage(id: string): Promise<{ meta: StoredFile; file: string; pixels: { width: number; height: number } | null }> {
+    const f = this.hub.files.get(this.userId, id);
+    if (!f) throw new ToolError(`There is no file ${id}. Use list_files to find ids.`);
+    if (!f.meta.type.startsWith('image/')) throw new ToolError(`${f.meta.filename} is not a picture.`);
+    // The size is in the first part of the file, wherever a camera's notes put the frame header.
+    const head = Buffer.alloc(Math.min(f.meta.size, 256 * 1024));
+    const handle = await open(f.file, 'r');
+    try {
+      await handle.read(head, 0, head.length, 0);
+    } finally {
+      await handle.close();
+    }
+    return { ...f, pixels: imageSize(head) };
+  }
+
+  /**
+   * Hand a picture's edit to the app and wait for it. The app takes jobs when it asks for its state, every few
+   * seconds while it is showing; with no app showing nothing takes the job, and the wait ends with a message
+   * saying what to do. Sooner when no app has been seen lately.
+   */
+  runImageJob(fileId: string, operations: unknown[], save: 'copy' | 'replace', opts: { preview?: boolean } = {}, now = Date.now()): Promise<ImageJobResult> {
+    const id = randomBytes(9).toString('base64url');
+    const seen = now - this.lastAppPoll < APP_SEEN_MS;
+    // A look at a picture is not worth waiting for an app that is not there.
+    if (opts.preview && !seen) return Promise.resolve({ ok: false, error: 'The app is not showing.' });
+    const wait = opts.preview ? IMAGE_PREVIEW_MS : seen ? IMAGE_JOB_MS : IMAGE_JOB_UNSEEN_MS;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const claimed = this.imageJobs.get(id)?.claimed;
+        this.imageJobs.delete(id);
+        resolve({ ok: false, error: claimed ? 'The app took too long to edit the picture. Try again with fewer operations.' : 'The picture is edited by the app, which is not showing. Call open_file with this picture so the app is on screen, then call transform_image again.' });
+      }, wait);
+      this.imageJobs.set(id, {
+        job: { id, file_id: fileId, operations, save, ...(opts.preview ? { preview: true } : {}) },
+        claimed: false,
+        settle: (result) => {
+          clearTimeout(timer);
+          this.imageJobs.delete(id);
+          resolve(result);
+        },
+      });
+    });
+  }
+
+  /** The app asked for its state: the jobs no app has taken yet are its to do. */
+  takeImageJobs(now = Date.now()): ImageJob[] {
+    this.lastAppPoll = now;
+    const jobs: ImageJob[] = [];
+    for (const entry of this.imageJobs.values()) {
+      if (entry.claimed) continue;
+      entry.claimed = true;
+      jobs.push(entry.job);
+    }
+    return jobs;
+  }
+
+  /** The app's answer to a job; false when the job is unknown (it ran out of time, or was answered already). */
+  finishImageJob(id: string, result: ImageJobResult): boolean {
+    const entry = this.imageJobs.get(id);
+    if (!entry) return false;
+    entry.settle(result);
+    return true;
+  }
+
+  /** Save an edited picture over a stored one, as the type it is; the version before is kept for one revert. */
+  async saveImage(id: string, bytes: Buffer): Promise<FileSummary> {
+    const f = this.hub.files.get(this.userId, id);
+    if (!f) throw new ToolError(`There is no file ${id}.`);
+    if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) throw new ToolError('Only PNG, JPEG and WebP pictures can be saved over.');
+    if (!isImageOfType(bytes, f.meta.type)) throw new ToolError(`The edited picture must be saved as ${f.meta.type}, the type of ${f.meta.filename}.`);
+    const saved = await this.hub.files.update(this.userId, id, bytes);
+    return fileSummary(saved!);
   }
 
   /** A stored file with an address the app's iframe can load it from (and seek in) for the next few hours. */

@@ -46,6 +46,16 @@ describe('import from the app', () => {
     const text = await post(hub.issueTicket('u1'), Buffer.from('not an office file'));
     expect(text.status).toBe(400);
     expect(((await text.json()) as { error: string }).error).toMatch(/Only Word documents/);
+    // An edited picture from the image editor is saved over the stored one, with a ticket of the same account.
+    const png = (n: number) => Buffer.concat([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64'), Buffer.alloc(n, 0)]);
+    const pic = (await hub.forUser('u1').importFile(png(0), 'logo.png', undefined)).file;
+    const over = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&name=logo.png&replace=${pic.id}`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: new Uint8Array(png(25)) });
+    expect(over.status).toBe(200);
+    expect(await over.json()).toMatchObject({ file: { id: pic.id, kind: 'file', size: png(25).length } });
+    const wrong = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&name=logo.png&replace=${pic.id}`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: 'not a picture' });
+    expect(wrong.status).toBe(400);
+    expect(hub.files.get('u1', pic.id)?.meta.size).toBe(png(25).length);
+
     const pre = await fetch(`${base}/plugin/import`, { method: 'OPTIONS' });
     expect(pre.status).toBe(204);
   });

@@ -231,6 +231,9 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           const service = hub.forUser(userId);
           const bytes = Buffer.concat(chunks);
           const name = url.searchParams.get('name') ?? undefined;
+          // replace=<id>: an edited picture from the image editor, saved over the stored one.
+          const replace = url.searchParams.get('replace');
+          if (replace) return json(res, 200, { file: await service.saveImage(replace, bytes) });
           // convert=1: an Excel file's tabs for the open spreadsheet (File → Import), not a new file.
           if (url.searchParams.get('convert')) return json(res, 200, await service.convertExcel(bytes, name));
           const r = await service.importFile(bytes, name, url.searchParams.get('title') ?? undefined);

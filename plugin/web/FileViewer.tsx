@@ -4,8 +4,13 @@
 // cookies), in ranges, so a video can seek and a long PDF starts with its first pages.
 import { useEffect, useRef, useState } from 'react';
 import { HtmlPreview } from '../../client/src/components/HtmlPreview.tsx';
-import { HTML_TYPE } from '../../shared/types.ts';
+import { ImageFileEditor } from '../../client/src/image/ImageFileEditor.tsx';
+import { EDITABLE_IMAGE_TYPES, HTML_TYPE } from '../../shared/types.ts';
 import type { Host } from './host.ts';
+import { createPicture, loadPicture, replacePicture } from './imageStore.ts';
+
+/** Sent on the window, with the file's id, when a stored picture was saved over (by the editor or the model). */
+export const PICTURE_CHANGED_EVENT = 'plugin-picture-changed';
 
 interface StoredFileSummary {
   id: string;
@@ -20,6 +25,14 @@ const PAGE_BATCH = 5;
 export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBack(): void }) {
   const [state, setState] = useState<{ file: StoredFileSummary; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A picture opens to be looked at; Edit opens the image editor on it. Each save over it shows the new version.
+  const [editing, setEditing] = useState(false);
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const changed = (e: Event) => (e as CustomEvent<string>).detail === id && setVersion((v) => v + 1);
+    window.addEventListener(PICTURE_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(PICTURE_CHANGED_EVENT, changed);
+  }, [id]);
 
   useEffect(() => {
     let stop = false;
@@ -57,6 +70,11 @@ export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBac
           </div>
         </div>
         <div className="wb-user wb-ask">
+          {file.type && EDITABLE_IMAGE_TYPES.includes(file.type) && !editing && (
+            <button className="btn" title="Crop, rotate, adjust and draw on the picture" onClick={() => setEditing(true)}>
+              Edit
+            </button>
+          )}
           {link && (
             <button className="btn" title="Open in the full app in a new tab" onClick={() => void host.openLink(link)}>
               Open in full app ↗
@@ -73,8 +91,25 @@ export function FileViewer({ host, id, onBack }: { host: Host; id: string; onBac
         ) : file.type === HTML_TYPE ? (
           // The link carries its own token, so the page's text is fetched without credentials.
           <HtmlPreview url={url} title={file.title} credentials="omit" />
+        ) : file.type && EDITABLE_IMAGE_TYPES.includes(file.type) && editing ? (
+          <ImageFileEditor
+            key={version}
+            file={{ id, filename: file.title, type: file.type }}
+            store={{
+              load: async () => (await loadPicture(host, id)).data,
+              replace: async (image) => {
+                await replacePicture(host, id, file.title, image);
+                setVersion((v) => v + 1);
+                setEditing(false);
+              },
+              // The server opens the new file, and the app follows it there.
+              create: async (name, image) => void (await createPicture(host, name, image)),
+            }}
+            onClose={() => setEditing(false)}
+          />
         ) : file.type?.startsWith('image/') ? (
-          <img className="file-preview-image" src={url} alt={file.title} />
+          // A picture that was saved over is asked for by a new address, so the copy the browser kept is not shown.
+          <img key={version} className="file-preview-image" src={version ? `${url}&v=${version}` : url} alt={file.title} />
         ) : (
           <div className="file-info">
             <h2>{file.title}</h2>

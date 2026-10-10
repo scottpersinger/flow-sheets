@@ -1,18 +1,25 @@
 // A stored picture being edited: the image editor over the file's bytes, with Save (over the file, keeping the
-// version before for one revert), Save a copy (a new file next to it) and Close.
+// version before for one revert), Save a copy (a new file next to it) and Close. Where the bytes come from and
+// go is the page's business (`store`): the app's own API on the file page, the plugin's tools in its viewer.
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import type { AspEditorHandle } from '@ascentsparksoftware/react-image-editor';
-import type { StoredFile } from '../../../shared/types.ts';
-import { api } from '../api.ts';
+import type { AspBackgroundRemovalLoader, AspEditorHandle } from '@ascentsparksoftware/react-image-editor';
 import { ConfirmModal } from '../components/Modal.tsx';
 import { setActiveImageEditor } from './activeEditor.ts';
 import { editedCopyName, editSize } from './limits.ts';
 import { hasTransparency, pngName } from './transparency.ts';
 
 const ImageEditorHost = lazy(() => import('./ImageEditorHost.tsx'));
-const loadBackgroundRemoval = () => import('@imgly/background-removal');
 
-export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: StoredFile; /** The file was saved over. */ onSaved(file: StoredFile): void; /** A copy was made. */ onCopied(file: StoredFile): void; onClose(): void }) {
+/** Reading and writing the picture being edited. */
+export interface EditedImageStore {
+  load(): Promise<Blob>;
+  /** Save the edited picture over the file (it is of the file's type). */
+  replace(image: Blob): Promise<void>;
+  /** Save the edited picture as a new file with this name, next to the file. */
+  create(name: string, image: Blob): Promise<void>;
+}
+
+export function ImageFileEditor({ file, store, onClose, backgroundRemovalLoader }: { file: { id: string; filename: string; type: string }; store: EditedImageStore; onClose(): void; /** See ImageEditorHost. */ backgroundRemovalLoader?: AspBackgroundRemovalLoader }) {
   const [source, setSource] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Said when the picture is too large to be edited at its own size. */
@@ -21,13 +28,13 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
   const [ready, setReady] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const handle = useRef<AspEditorHandle | null>(null);
+  const storeRef = useRef(store);
+  storeRef.current = store;
 
   useEffect(() => {
     let stop = false;
     (async () => {
-      const res = await fetch(file.url, { credentials: 'same-origin' });
-      if (!res.ok) throw new Error(`Could not read the picture (${res.status})`);
-      const blob = await res.blob();
+      const blob = await storeRef.current.load();
       const bitmap = await createImageBitmap(blob);
       const size = editSize(bitmap.width, bitmap.height);
       const was = `${bitmap.width} × ${bitmap.height}`;
@@ -40,7 +47,7 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
     return () => {
       stop = true;
     };
-  }, [file.url, file.type]);
+  }, [file.id, file.type]);
 
   // While the editor is open the assistant's transform_image edits in it instead of the file.
   const onReady = useCallback(
@@ -62,12 +69,14 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
       // A JPEG cannot be see-through: where the edit made the picture transparent (a removed background, the
       // corners of a straightened photo) it is saved as a PNG next to the JPEG, which stays as it was.
       const png = file.type === 'image/jpeg' ? await h.engine.exportImage('png', 100, ['png']) : null;
-      if (png && (await hasTransparency(png))) onCopied(await api.uploadFile(what === 'save' ? pngName(file.filename) : editedCopyName(file.filename, 'image/png'), png, file.folder));
+      if (png && (await hasTransparency(png))) await store.create(what === 'save' ? pngName(file.filename) : editedCopyName(file.filename, 'image/png'), png);
       else {
         const blob = await h.exportBlob();
-        if (what === 'save') onSaved(await api.updateImageFile(file.id, blob));
-        else onCopied(await api.uploadFile(editedCopyName(file.filename), blob, file.folder));
+        if (what === 'save') await store.replace(blob);
+        else await store.create(editedCopyName(file.filename), blob);
       }
+      // The page shows what was saved, which usually takes this editor away; if it stays, it can be used again.
+      setBusy(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(null);
@@ -98,7 +107,7 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
       <div className="image-editor-stage">
         {source ? (
           <Suspense fallback={<div className="muted">Loading the editor…</div>}>
-            <ImageEditorHost source={source} type={file.type} onReady={onReady} onError={setError} backgroundRemovalLoader={loadBackgroundRemoval} />
+            <ImageEditorHost source={source} type={file.type} onReady={onReady} onError={setError} backgroundRemovalLoader={backgroundRemovalLoader} />
           </Suspense>
         ) : (
           !error && <div className="muted">Loading…</div>

@@ -537,7 +537,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             return file;
           },
           saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename, image.type), image, of.folder),
-          openImageEngine: async (source) => (await import('../image/hiddenEngine.ts')).openHiddenEngine(source),
+          openImageEngine: async (source) => (await import('../image/hiddenEngine.ts')).openHiddenEngine(source, { backgroundRemovalLoader: () => import('@imgly/background-removal') }),
           toAgentImage: async (file, data) => {
             const { mediaType, data: base64 } = await prepareImage(new File([data], file.filename, { type: file.type }));
             return { mediaType, data: base64 };

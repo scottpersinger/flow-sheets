@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb } from '../../server/db.ts';
 import type { Workbook } from '../../shared/types.ts';
 import { ConflictError, FileHub, type FileService } from './files.ts';
@@ -198,5 +198,56 @@ describe('spreadsheets', () => {
     const converted = await svc.convertExcel(bytes, 'sales.xlsx');
     expect(converted.workbook.tabs.map((t) => t.name)).toEqual(['Sales']);
     await expect(svc.convertExcel(Buffer.from('nope'), 'notes.txt')).rejects.toThrow(/Excel/);
+  });
+});
+
+describe('pictures edited by the app', () => {
+  const png = (n: number) => Buffer.concat([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64'), Buffer.alloc(n, 0)]);
+
+  it('hands an edit to the app with its state, once, and takes its answer', async () => {
+    const waiting = svc.runImageJob('f1', [{ op: 'rotate', degrees: 90 }], 'copy');
+    const [job] = svc.takeImageJobs();
+    expect(job).toMatchObject({ file_id: 'f1', operations: [{ op: 'rotate', degrees: 90 }], save: 'copy' });
+    // Another app (or the next poll) is not given the same job.
+    expect(svc.takeImageJobs()).toEqual([]);
+    expect(svc.finishImageJob(job.id, { ok: true, applied: ['Rotated 90°'], file_id: 'f2', saved: true })).toBe(true);
+    expect(await waiting).toMatchObject({ ok: true, applied: ['Rotated 90°'], file_id: 'f2' });
+    // An answer that comes twice, or for a job nobody is waiting on, is dropped.
+    expect(svc.finishImageJob(job.id, { ok: true })).toBe(false);
+    expect(svc.finishImageJob('nope', { ok: true })).toBe(false);
+  });
+
+  it('gives up on an edit no app takes, and on one an app took and never answered', async () => {
+    vi.useFakeTimers();
+    try {
+      // No app has asked for its state lately: nothing will take the job, so the wait is short.
+      const unseen = svc.runImageJob('f1', [], 'copy');
+      await vi.advanceTimersByTimeAsync(26_000);
+      expect(await unseen).toMatchObject({ ok: false, error: expect.stringContaining('Call open_file with this picture') });
+      expect(svc.takeImageJobs()).toEqual([]);
+      // An app is there (it just asked) and takes the job, but does not answer.
+      const stuck = svc.runImageJob('f1', [], 'copy');
+      expect(svc.takeImageJobs()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      let settled = false;
+      void stuck.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(await stuck).toMatchObject({ ok: false, error: expect.stringContaining('took too long') });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('saves an edited picture over a stored one, as the type it is, and tells a picture’s size', async () => {
+    const { file } = await svc.importFile(png(0), 'logo.png', undefined);
+    expect(await svc.editableImage(file.id)).toMatchObject({ meta: { filename: 'logo.png', type: 'image/png' }, pixels: { width: 1, height: 1 } });
+    expect(await svc.saveImage(file.id, png(40))).toMatchObject({ id: file.id, kind: 'file', size: png(40).length });
+    await expect(svc.saveImage(file.id, Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).rejects.toThrow(/must be saved as image\/png/);
+    await expect(svc.saveImage('nope', png(1))).rejects.toThrow(/no file/);
+    const { file: pdf } = await svc.importFile(Buffer.from('%PDF-1.7\n'), 'a.pdf', undefined);
+    await expect(svc.saveImage(pdf.id, png(1))).rejects.toThrow(/Only PNG, JPEG and WebP/);
+    await expect(svc.editableImage(pdf.id)).rejects.toThrow(/not a picture/);
   });
 });
