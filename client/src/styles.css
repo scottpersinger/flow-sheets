@@ -2612,6 +2612,52 @@ button.agent-tool-label:hover {
   cursor: nwse-resize;
 }
 
+/* The crop frame on a picture being cropped (CropOverlay): the whole picture faint, the kept part bright. */
+.sl-crop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 3;
+}
+.sl-crop img {
+  position: absolute;
+  max-width: none;
+  user-select: none;
+  pointer-events: none;
+}
+.sl-crop-whole {
+  opacity: 0.35;
+}
+.sl-crop-frame {
+  position: absolute;
+  overflow: hidden;
+  outline: 1.5px solid #202124;
+  cursor: move;
+}
+.sl-crop-thirds {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.7) var(--line), transparent var(--line)), linear-gradient(to bottom, rgba(255, 255, 255, 0.7) var(--line), transparent var(--line));
+  background-position: -0.5px -0.5px;
+}
+.sl-crop-handle {
+  position: absolute;
+  background: #202124;
+  border: 1.5px solid #fff;
+  box-sizing: border-box;
+  z-index: 2;
+}
+.sl-crop-bar {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  transform-origin: 0 0;
+  white-space: nowrap;
+}
+
 /* Present mode */
 .present {
   position: fixed;

@@ -275,9 +275,16 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onEditImage }: { ct
       <Btn title="Send backward" disabled={!selected.length} onClick={() => ctl.reorder(ctl.selection, 'backward')}>
         ▼
       </Btn>
-      {onEditImage && selected.length === 1 && selected[0].type === 'image' && (
+      {selected.length === 1 && selected[0].type === 'image' && (
         <>
           <span className="tb-sep" />
+          <button className={`btn${ctl.cropping ? ' active' : ''}`} disabled={!!ctl.cropping} onMouseDown={(e) => e.preventDefault()} onClick={() => ctl.startCropping(selected[0].id)} title="Cut the picture's sides: drag the frame's handles, then press Enter">
+            Crop
+          </button>
+        </>
+      )}
+      {onEditImage && selected.length === 1 && selected[0].type === 'image' && !ctl.cropping && (
+        <>
           <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={() => onEditImage(selected[0].id)} title="Crop, rotate, adjust and draw on the picture (or double-click it)">
             Edit image
           </button>

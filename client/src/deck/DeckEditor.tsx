@@ -7,6 +7,7 @@ import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { fitZoomActions, useWheelZoom, ZoomControls } from '../components/ZoomControls.tsx';
 import { SLIDE_H, SLIDE_W, THEMES, type LineElement, type SlideElement } from '../../../shared/deck.ts';
 import { boxFromEnds, compactLine, DEFAULT_LINE_WIDTH, lineEnds, lineGeometry, nearSites, SITES, sitePoint, snapAngle, type SiteHit } from '../../../shared/lines.ts';
+import { CropOverlay } from './CropOverlay.tsx';
 import type { DeckController } from './controller.ts';
 import { LineDrawing, SlideView, type BoxPreview } from './SlideView.tsx';
 
@@ -340,7 +341,9 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     return { left: r.left + left * scale + 24, top: r.top + top * scale, bottom: r.top + bottom * scale };
   };
 
-  const single = selected.length === 1 && !ctl.editing ? selected[0] : null;
+  const cropped = ctl.cropping ? slide.elements.find((e) => e.id === ctl.cropping) : undefined;
+  // A picture being cropped has its own frame and handles, not the selection's.
+  const single = selected.length === 1 && !ctl.editing && !cropped ? selected[0] : null;
   const boxOf = (el: SlideElement): Box => ({ x: el.x, y: el.y, w: el.w, h: el.h, ...drag?.preview[el.id] });
   const preview: Record<string, BoxPreview> | undefined = lineDrag && lineDrag.mode !== 'draw' ? { ...drag?.preview, [lineDrag.line.id]: linePreview(lineDrag.line) } : drag?.preview;
   const theme = THEMES[ctl.deck.theme];
@@ -403,8 +406,9 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
             );
             return [handle('start', x1, y1, 'start'), handle('end', x2, y2, 'end'), ...(live.kind !== 'straight' && geo.bendAxis ? [handle('mid', geo.mid.x, geo.mid.y, 'mid', 'mid')] : [])];
           })()}
+        {cropped?.type === 'image' && <CropOverlay key={cropped.id} el={cropped} scale={scale} toSlide={toSlide} onDone={(next) => ctl.stopCropping(next)} onCancel={() => ctl.stopCropping()} />}
         {selected.map((el) => {
-          if (el.type === 'line') return null;
+          if (el.type === 'line' || el.id === cropped?.id) return null;
           const b = boxOf(el);
           return <div key={el.id} className="sl-outline" style={{ left: b.x, top: b.y, width: b.w, height: b.h, borderWidth: 1.5 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} />;
         })}

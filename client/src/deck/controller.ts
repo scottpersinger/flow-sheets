@@ -20,6 +20,7 @@ import {
   type TextStyle,
   type ThemeId,
   withEditedPicture,
+  type ImageElement,
 } from '../../../shared/deck.ts';
 import { boxFromEnds, cloneElements, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPES } from '../../../shared/shapes.ts';
@@ -45,6 +46,8 @@ export class DeckController {
   selection: string[] = [];
   /** Element whose text is being edited inline. */
   editing: string | null = null;
+  /** The picture element being cropped (its crop frame is on the slide), if any. */
+  cropping: string | null = null;
   /** The line tool picked in the toolbar: the next drag on the slide draws this kind of line. */
   tool: { kind: LineKind; arrow: boolean } | null = null;
   /** Presenting (full-screen) mode. */
@@ -96,6 +99,7 @@ export class DeckController {
     const ids = new Set(this.slide.elements.map((e) => e.id));
     this.selection = this.selection.filter((id) => ids.has(id));
     if (this.editing && !ids.has(this.editing)) this.editing = null;
+    if (this.cropping && !ids.has(this.cropping)) this.cropping = null;
   }
 
   private meta(): Meta {
@@ -107,6 +111,7 @@ export class DeckController {
     if (i >= 0) this.current = i;
     this.selection = m.selection;
     this.editing = null;
+    this.cropping = null;
     this.clamp();
   }
 
@@ -121,6 +126,7 @@ export class DeckController {
   /** A change made by the agent. All changes with the same group (one agent request) undo as one step. */
   runAgent(group: string, fn: (tx: DeckTx) => void): boolean {
     this.editing = null;
+    this.cropping = null;
     const before = this.meta();
     const changed = this.store.transact(fn, { before }, group);
     if (changed) this.store.amendLastMeta(this.meta());
@@ -162,16 +168,18 @@ export class DeckController {
 
   goTo(index: number): void {
     const i = Math.max(0, Math.min(index, this.deck.slides.length - 1));
-    if (i === this.current && !this.selection.length && !this.editing) return;
+    if (i === this.current && !this.selection.length && !this.editing && !this.cropping) return;
     this.current = i;
     this.selection = [];
     this.editing = null;
+    this.cropping = null;
     this.emit();
   }
 
   select(ids: string[]): void {
     this.selection = ids;
     if (this.editing && !ids.includes(this.editing)) this.editing = null;
+    if (this.cropping && !ids.includes(this.cropping)) this.cropping = null;
     this.emit();
   }
 
@@ -184,7 +192,28 @@ export class DeckController {
     if (!el || (el.type !== 'text' && el.type !== 'shape')) return;
     this.selection = [id];
     this.editing = id;
+    this.cropping = null;
     this.emit();
+  }
+
+  /** Put the crop frame on a picture of the current slide (DeckEditor draws it; CropOverlay ends it). */
+  startCropping(id: string): void {
+    const el = this.slide.elements.find((e) => e.id === id);
+    if (!el || el.type !== 'image') return;
+    this.selection = [id];
+    this.editing = null;
+    this.cropping = id;
+    this.emit();
+  }
+
+  /** Take the crop frame away; with `cropped`, the element as the frame leaves it (one step, for undo). */
+  stopCropping(cropped?: ImageElement): void {
+    const id = this.cropping;
+    if (!id) return;
+    this.cropping = null;
+    const now = this.slide.elements.find((e) => e.id === id);
+    if (cropped && now && JSON.stringify(now) !== JSON.stringify(cropped)) this.updateElements([id], (e) => (e.type === 'image' ? cropped : e));
+    else this.emit();
   }
 
   stopEditing(): void {
@@ -197,6 +226,7 @@ export class DeckController {
     this.tool = tool;
     if (tool) {
       this.editing = null;
+      this.cropping = null;
       this.selection = [];
     }
     this.emit();
@@ -212,6 +242,7 @@ export class DeckController {
     this.presenting = on;
     this.assistant = null;
     this.editing = null;
+    this.cropping = null;
     this.emit();
   }
 

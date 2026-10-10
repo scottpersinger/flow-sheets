@@ -28,3 +28,48 @@ describe('replacing a picture with its edited version', () => {
     if (title) expect(ctl.replacePicture(title.id, '/api/images/new', null, null)).toBe(false);
   });
 });
+
+describe('cropping a picture on a slide', () => {
+  it('crops as one step that undo takes back, and only pictures', () => {
+    const ctl = new DeckController(newDeck(), async () => {});
+    const id = ctl.addImage('/api/images/pic', { w: 800, h: 600 });
+    const before = ctl.slide.elements.find((e) => e.id === id)!;
+    if (before.type !== 'image') throw new Error('not a picture');
+    ctl.startCropping(id);
+    expect(ctl.cropping).toBe(id);
+    expect(ctl.selection).toEqual([id]);
+    const cropped = { ...before, w: before.w / 2, crop: { l: 0, t: 0, r: 0.5, b: 0 } };
+    ctl.stopCropping(cropped);
+    expect(ctl.cropping).toBeNull();
+    expect(ctl.slide.elements.find((e) => e.id === id)).toEqual(cropped);
+    ctl.undo();
+    expect(ctl.slide.elements.find((e) => e.id === id)).toEqual(before);
+    // Cancelled, or left as it was: nothing to undo is added.
+    ctl.startCropping(id);
+    ctl.stopCropping();
+    ctl.startCropping(id);
+    ctl.stopCropping(before);
+    ctl.undo();
+    expect(ctl.slide.elements.some((e) => e.id === id)).toBe(false);
+    const title = ctl.slide.elements.find((e) => e.type === 'text');
+    if (title) {
+      ctl.startCropping(title.id);
+      expect(ctl.cropping).toBeNull();
+    }
+  });
+
+  it('puts the frame away when the picture is no longer what is being worked on', () => {
+    const ctl = new DeckController(newDeck(), async () => {});
+    const id = ctl.addImage('/api/images/pic');
+    for (const leave of [() => ctl.select([]), () => ctl.goTo(0), () => ctl.setPresenting(true), () => ctl.addSlide(), () => ctl.undo()]) {
+      if (!ctl.slide.elements.some((e) => e.id === id)) break;
+      ctl.startCropping(id);
+      expect(ctl.cropping).toBe(id);
+      leave();
+      expect(ctl.cropping).toBeNull();
+      ctl.setPresenting(false);
+      ctl.goTo(0);
+    }
+  });
+});
+

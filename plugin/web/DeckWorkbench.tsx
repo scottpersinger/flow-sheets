@@ -185,7 +185,7 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
   // Global shortcuts (not while typing in an input, the notes or an inline text editor).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (ctl.presenting || isTyping(e.target)) return;
+      if (ctl.presenting || ctl.cropping || isTyping(e.target)) return;
       const mod = isMac ? e.metaKey : e.ctrlKey;
       const k = e.key.toLowerCase();
       if (mod && k === 'z') {

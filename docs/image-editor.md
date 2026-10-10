@@ -151,6 +151,9 @@ surface adds an entry point and a save.
 - On a slide (`withEditedPicture` in `shared/deck.ts`): a picture that kept its shape only changes address.
   One that was cropped or turned loses the element's own crop and its box takes the new shape, at the same
   width and centre, made smaller if it would be taller than the slide.
+- Slides also have a crop of their own, for the commonest edit, without opening the editor: "Crop" in the
+  toolbar puts a frame on the picture (`CropOverlay`, geometry in `shared/deckCrop.ts`). It changes the
+  element's `crop` and box, not the picture, so the picture can be cropped wider again later.
 - The assistant: `transform_image` takes `image` (a stored `/api/images/...` address) in place of
   `file_id`, stores the result anew and returns its address, which the model puts in place with the tools it
   has (`edit_elements`, `set_cell_image`, `insert_image`). Not in the plugin, whose `transform_image` edits

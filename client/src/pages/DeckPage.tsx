@@ -227,7 +227,8 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
   // Global shortcuts (not while typing in an input, the notes or an inline text editor).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (ctl.presenting || imageDialogOpen() || isTyping(e.target)) return;
+      // A picture being cropped keeps the keys to itself (CropOverlay takes Enter and Escape).
+      if (ctl.presenting || ctl.cropping || imageDialogOpen() || isTyping(e.target)) return;
       const mod = isMac ? e.metaKey : e.ctrlKey;
       const k = e.key.toLowerCase();
       if (mod && k === 'z') {
