@@ -7,6 +7,7 @@ import { api } from '../api.ts';
 import { ConfirmModal } from '../components/Modal.tsx';
 import { setActiveImageEditor } from './activeEditor.ts';
 import { editedCopyName, editSize } from './limits.ts';
+import { hasTransparency, pngName } from './transparency.ts';
 
 const ImageEditorHost = lazy(() => import('./ImageEditorHost.tsx'));
 const loadBackgroundRemoval = () => import('@imgly/background-removal');
@@ -58,9 +59,15 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
     setBusy(what);
     setError(null);
     try {
-      const blob = await h.exportBlob();
-      if (what === 'save') onSaved(await api.updateImageFile(file.id, blob));
-      else onCopied(await api.uploadFile(editedCopyName(file.filename), blob, file.folder));
+      // A JPEG cannot be see-through: where the edit made the picture transparent (a removed background, the
+      // corners of a straightened photo) it is saved as a PNG next to the JPEG, which stays as it was.
+      const png = file.type === 'image/jpeg' ? await h.engine.exportImage('png', 100, ['png']) : null;
+      if (png && (await hasTransparency(png))) onCopied(await api.uploadFile(what === 'save' ? pngName(file.filename) : editedCopyName(file.filename, 'image/png'), png, file.folder));
+      else {
+        const blob = await h.exportBlob();
+        if (what === 'save') onSaved(await api.updateImageFile(file.id, blob));
+        else onCopied(await api.uploadFile(editedCopyName(file.filename), blob, file.folder));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(null);
@@ -76,7 +83,7 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
   return (
     <div className="image-editor">
       <div className="html-editor-bar">
-        <span className="muted">{error ? <span className="form-error">{error}</span> : (notice ?? 'Save replaces the picture; the version before it is kept.')}</span>
+        <span className="muted">{error ? <span className="form-error">{error}</span> : (notice ?? (file.type === 'image/jpeg' ? 'Save replaces the picture; the version before it is kept. With a transparent background it is saved as a PNG next to this JPEG.' : 'Save replaces the picture; the version before it is kept.'))}</span>
         <span className="html-editor-space" />
         <button className="btn" disabled={busy !== null} onClick={close}>
           Close

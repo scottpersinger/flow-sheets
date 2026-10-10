@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { editedCopyName, editSize, MAX_EDIT_IMAGE_DIM } from './limits.ts';
+import { pngName } from './transparency.ts';
 
 describe('image editor limits', () => {
   it('keeps a picture that fits at its own size', () => {
@@ -21,5 +22,7 @@ describe('image editor limits', () => {
     expect(editedCopyName('portrait.JPEG', 'image/jpeg')).toBe('portrait-edited.JPEG');
     expect(editedCopyName('portrait.jpg', 'image/png')).toBe('portrait-edited.png');
     expect(editedCopyName('scan', 'image/png')).toBe('scan-edited.png');
+    expect(pngName('portrait.JPEG')).toBe('portrait.png');
+    expect(pngName('team.photo.jpg')).toBe('team.photo.png');
   });
 });
