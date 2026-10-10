@@ -2587,6 +2587,16 @@ button.agent-tool-label:hover {
   pointer-events: none;
   box-sizing: border-box;
 }
+/* A frame the pointer is on the line of: a click there takes it (shared/deckHit.ts). */
+.sl-outline-hover {
+  border-color: rgba(26, 115, 232, 0.55);
+  border-style: dashed;
+}
+.deck-canvas.over-frame,
+.deck-canvas.over-frame .slide,
+.deck-canvas.over-frame .sl-el {
+  cursor: move;
+}
 .sl-handle {
   position: absolute;
   background: #fff;

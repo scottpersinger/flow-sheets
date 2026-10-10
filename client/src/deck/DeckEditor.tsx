@@ -7,7 +7,7 @@ import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { fitZoomActions, useWheelZoom, ZoomControls } from '../components/ZoomControls.tsx';
 import { SLIDE_H, SLIDE_W, THEMES, type LineElement, type SlideElement } from '../../../shared/deck.ts';
 import { boxFromEnds, compactLine, DEFAULT_LINE_WIDTH, lineEnds, lineGeometry, nearSites, SITES, sitePoint, snapAngle, type SiteHit } from '../../../shared/lines.ts';
-import { clickTarget } from '../../../shared/deckHit.ts';
+import { clickTarget, frameUnderPointer } from '../../../shared/deckHit.ts';
 import { CropOverlay } from './CropOverlay.tsx';
 import type { DeckController } from './controller.ts';
 import { LineDrawing, SlideView, type BoxPreview } from './SlideView.tsx';
@@ -259,8 +259,22 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!drag, scale]);
 
-  /** A click inside a frame (a shape that is only an outline) is for what lies under it: see clickTarget. */
-  const through = (e: { clientX: number; clientY: number }, el: SlideElement): SlideElement => clickTarget(slide.elements, el, ...toSlide(e), 6 / scale);
+  // Around a frame (a shape that is only an outline) a click is for the frame near its line, on either side,
+  // and for what lies under it in its open middle: see shared/deckHit.ts. The band is in screen pixels, so a
+  // thin line is as easy to take hold of at any zoom.
+  const reach = 8 / scale;
+  const through = (e: { clientX: number; clientY: number }, el: SlideElement): SlideElement => clickTarget(slide.elements, el, ...toSlide(e), reach) ?? el;
+  /** The frame the pointer is on the line of, shown outlined: a click there takes it. */
+  const [hoverFrame, setHoverFrame] = useState<string | null>(null);
+  const onPointerMove = (e: ReactMouseEvent) => {
+    let over: string | null = null;
+    if (!drag && !lineDrag && !ctl.tool && !ctl.editing && !ctl.cropping) {
+      const at = (e.target as Element).closest?.('[data-el]')?.getAttribute('data-el');
+      const hit = at ? (slide.elements.find((el) => el.id === at) ?? null) : null;
+      over = frameUnderPointer(slide.elements, hit, ...toSlide(e), reach)?.id ?? null;
+    }
+    if (over !== hoverFrame) setHoverFrame(over);
+  };
 
   const onElementMouseDown = (e: ReactMouseEvent, el: SlideElement) => {
     if (e.button !== 0) return;
@@ -269,7 +283,11 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
       startDraw(e);
       return;
     }
-    el = through(e, el);
+    pressElement(e, through(e, el));
+  };
+
+  /** A press that is for this element: select it (or add it to the selection) and be ready to drag it. */
+  const pressElement = (e: ReactMouseEvent, el: SlideElement) => {
     if (ctl.editing === el.id) return;
     const wasSelected = ctl.selection.length === 1 && ctl.selection[0] === el.id;
     caretRef.current = null;
@@ -360,15 +378,23 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     <div ref={frameRef} className="deck-canvas-frame">
     <div
       ref={wrapRef}
-      className={`deck-canvas${zoom > 1 ? ' zoomed' : ''}${drag ? ` dragging ${drag.kind}` : ''}${ctl.tool ? ' drawing' : ''}`}
+      className={`deck-canvas${zoom > 1 ? ' zoomed' : ''}${drag ? ` dragging ${drag.kind}` : ''}${ctl.tool ? ' drawing' : ''}${hoverFrame ? ' over-frame' : ''}`}
+      onMouseMove={onPointerMove}
+      onMouseLeave={() => hoverFrame && setHoverFrame(null)}
       tabIndex={-1}
       onMouseDown={(e) => {
         if (e.button === 0 && ctl.tool) {
           startDraw(e);
           return;
         }
-        // A click on the backdrop or the slide background clears the selection.
+        // A click on the backdrop or the slide background clears the selection, unless it is just outside a
+        // frame's line, which takes the frame.
         if (e.button === 0 && (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('slide') || (e.target as HTMLElement).classList.contains('slide-scaler'))) {
+          const frame = clickTarget(slide.elements, null, ...toSlide(e), reach);
+          if (frame) {
+            pressElement(e, frame);
+            return;
+          }
           if (ctl.editing) ctl.stopEditing();
           ctl.select([]);
           wrapRef.current?.focus();
@@ -413,6 +439,11 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
             return [handle('start', x1, y1, 'start'), handle('end', x2, y2, 'end'), ...(live.kind !== 'straight' && geo.bendAxis ? [handle('mid', geo.mid.x, geo.mid.y, 'mid', 'mid')] : [])];
           })()}
         {cropped?.type === 'image' && <CropOverlay key={cropped.id} el={cropped} scale={scale} toSlide={toSlide} onDone={(next) => ctl.stopCropping(next)} onCancel={() => ctl.stopCropping()} />}
+        {(() => {
+          // The frame a click would take, when it is not the selection already.
+          const el = hoverFrame && !ctl.selection.includes(hoverFrame) ? slide.elements.find((x) => x.id === hoverFrame) : undefined;
+          return el ? <div className="sl-outline sl-outline-hover" style={{ left: el.x, top: el.y, width: el.w, height: el.h, borderWidth: 2 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} /> : null;
+        })()}
         {selected.map((el) => {
           if (el.type === 'line' || el.id === cropped?.id) return null;
           const b = boxOf(el);
