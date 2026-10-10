@@ -198,3 +198,44 @@ describe('agent document tools', () => {
     expect(docToMarkdown(docNode(doc.store.document))).toBe('# T\n\nBody *x*');
   });
 });
+
+describe('a stored picture file used as a picture in a document', () => {
+  const OLD = '/api/images/11111111-1111-1111-1111-111111111111';
+  const images = (doc: DocController) => {
+    const found: string[] = [];
+    doc.doc.descendants((node) => void (node.type.name === 'image' && found.push(String(node.attrs.src))));
+    return found;
+  };
+
+  it('stores the file as a picture and uses that address, in Markdown and in insert_image', async () => {
+    const { doc, env, call } = setup(`Before\n\n![Test picture](${OLD})\n\nAfter`);
+    const stored: string[] = [];
+    env.readFile = async (id) => {
+      if (id === 'notes123') return { file: { id, filename: 'notes.pdf', type: 'application/pdf', size: 3, createdAt: '', url: '', downloadUrl: '' }, data: new ArrayBuffer(3) };
+      if (id !== '4guw62cidzmm') throw new Error('no such file');
+      return { file: { id, filename: 'edited.png', type: 'image/png', size: 5, createdAt: '', url: `/api/files/${id}`, downloadUrl: '' }, data: new TextEncoder().encode('PNG!!').buffer as ArrayBuffer };
+    };
+    env.uploadImage = async (blob) => {
+      stored.push(`${blob.type}:${await blob.text()}`);
+      return `/api/images/22222222-2222-2222-2222-22222222222${stored.length}`;
+    };
+    // What the assistant did: replaced the picture's block with Markdown naming the edited file.
+    await call('replace_blocks', { from: 2, to: 2, markdown: '![Test picture](/api/files/4guw62cidzmm)' });
+    expect(images(doc)).toEqual(['/api/images/22222222-2222-2222-2222-222222222221']);
+    expect(stored).toEqual(['image/png:PNG!!']);
+    expect(docText(doc.doc)).not.toContain('/api/files/');
+    // With the app's own origin in front, and in insert_image.
+    await call('insert_image', { src: 'http://localhost:5173/api/files/4guw62cidzmm/download', alt: 'Again' });
+    expect(images(doc)).toContain('/api/images/22222222-2222-2222-2222-222222222222');
+    // A file that is not a picture, or is not there, or any other address that cannot be a picture, is refused
+    // in words, not put in the document as text.
+    await expect(call('replace_blocks', { from: 2, to: 2, markdown: '![Notes](/api/files/notes123)' })).rejects.toThrow(/picture address \/api\/files\/notes123 cannot be used/);
+    await expect(call('insert_content', { markdown: 'Fine.\n\n![Gone](/api/files/gone9999)' })).rejects.toThrow(/cannot be used/);
+    await expect(call('insert_content', { markdown: '![Odd](ftp://example.com/a.png)' })).rejects.toThrow(/cannot be used/);
+    expect(docText(doc.doc)).not.toContain('![');
+    // A picture named inside a sentence stays the sentence it is.
+    await call('insert_content', { markdown: 'Write a picture as ![alt](address) on its own line.' });
+    expect(docText(doc.doc)).toContain('Write a picture as ![alt](address) on its own line.');
+  });
+});
+

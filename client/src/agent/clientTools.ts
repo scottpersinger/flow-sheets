@@ -20,6 +20,7 @@ import type { MarkdownController } from '../markdown/controller.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
 import type { DocController } from '../doc/controller.ts';
 import { TransactionRefused } from '../state/store.ts';
+import { withFilePictures } from './filePictures.ts';
 import { IMAGE_TOOLS, replacesImageFile, runImageTool, type ImageToolEnv } from './imageTools.ts';
 import { ToolError } from './toolError.ts';
 
@@ -173,6 +174,9 @@ async function attachPicture(env: ClientToolEnv, file: StoredFile, data: ArrayBu
 }
 
 export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): Promise<string> {
+  // A stored picture file given where a picture goes (on a slide, in a document, in a cell) is stored as a
+  // picture, and that address used. A Markdown document keeps addresses as the text they are.
+  if (DECK_TOOLS.has(call.name) || call.name === 'set_cell_image' || (DOC_TOOLS.has(call.name) && !(env.markdown && !env.doc))) call = { ...call, input: await withFilePictures(call.input, env) };
   const i = call.input;
   if (call.name === 'request_app_change') {
     const { id } = await env.requestAppChange(String(i.title), String(i.spec));

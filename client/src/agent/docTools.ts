@@ -68,6 +68,12 @@ function checkImage(src: unknown): string {
 function parseMarkdown(md: unknown): PMNode[] {
   const nodes = markdownToNodes(typeof md === 'string' ? md : '');
   const check = (d: PMNode) => void (d.type === n.image && checkImage(d.attrs.src));
+  // A picture whose address cannot be used is left by the parser as the text it was written as, which would
+  // put "![alt](address)" in the document for the user to read. Say what is wrong instead.
+  for (const node of nodes) {
+    const written = node.type === n.paragraph ? /^!\[[^\]]*\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)$/.exec(node.textContent.trim()) : null;
+    if (written) throw new ToolError(`The picture address ${written[1]} cannot be used: ${checkCellImage(written[1]) ?? 'it is not a picture address'}. Use a stored picture's /api/images/... address (transform_image returns one for image), an https address of the picture file itself, or a stored picture file's /api/files/... address.`);
+  }
   for (const node of nodes) {
     check(node);
     node.descendants(check);
