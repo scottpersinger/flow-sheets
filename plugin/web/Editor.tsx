@@ -3,6 +3,9 @@
 // and selection go to the model as context, so "make this shorter" in the composer means the selection.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickImageFile, uploadImageFile } from '../../client/src/cellImage.ts';
+import { ImageEditDialog } from '../../client/src/image/ImageEditDialog.tsx';
+import type { PictureSizes } from '../../client/src/image/ImageFileEditor.tsx';
+import { storePicture } from './imageStore.ts';
 import { MOD } from '../../client/src/commands.ts';
 import { MenuList, type MenuItem } from '../../client/src/components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../../client/src/components/Modal.tsx';
@@ -186,6 +189,18 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: DocSummary; 
     },
     [ctl, upload, notify],
   );
+  // The picture open in the image editor (as on the app's document page): saving stores the edited picture as a
+  // new image and puts it in the block as one step.
+  const [editingImage, setEditingImage] = useState<{ pos: number; src: string } | null>(null);
+  const editImage = useCallback(() => {
+    const img = ctl.selectedImage();
+    if (img) setEditingImage({ pos: img.pos, src: String(img.node.attrs.src) });
+  }, [ctl]);
+  const saveEditedImage = async (editing: { pos: number; src: string }, image: Blob, sizes: PictureSizes) => {
+    const url = await storePicture(host, image);
+    if (!ctl.replaceImage(editing.pos, editing.src, url, sizes.before, sizes.after)) notify('The picture is no longer in the document, so the edit was not put in.');
+  };
+
   const insertImage = async () => {
     const file = await pickImageFile();
     if (file) await addImageFiles([file]);
@@ -368,7 +383,7 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: DocSummary; 
           </button>
         </div>
       </header>
-      <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} />
+      <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} onEditImage={editImage} />
       <div className="doc-body-row" ref={rowRef}>
         {showThumbs && (
           <>
@@ -393,10 +408,11 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: DocSummary; 
             if (e.dataTransfer.types.includes('Files')) e.preventDefault();
           }}
         >
-          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
+          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} onEditImage={editImage} />
         </div>
       </div>
 
+      {editingImage && <ImageEditDialog src={editingImage.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
       {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'docStyle' && <DocStyleDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}

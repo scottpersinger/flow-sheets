@@ -56,6 +56,19 @@ describe('import from the app', () => {
     expect(wrong.status).toBe(400);
     expect(hub.files.get('u1', pic.id)?.meta.size).toBe(png(25).length);
 
+    // An edited picture for a document or slide is stored as a picture, and can be read back by the app's
+    // opaque origin (the image editor reads a picture with fetch).
+    const stored = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&image=1`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: new Uint8Array(png(7)) });
+    expect(stored.status).toBe(200);
+    const { src } = (await stored.json()) as { src: string };
+    expect(src).toMatch(/\/(plugin\/img|api\/images)\/[0-9a-f-]{36}$/);
+    const back = await fetch(`${base}/plugin/img/${src.split('/').pop()}`);
+    expect(back.status).toBe(200);
+    expect(back.headers.get('access-control-allow-origin')).toBe('*');
+    expect((await back.arrayBuffer()).byteLength).toBe(png(7).length);
+    const notPicture = await fetch(`${base}/plugin/import?ticket=${hub.issueTicket('u1')}&image=1`, { method: 'POST', headers: { 'content-type': 'application/pdf' }, body: '%PDF-1.7' });
+    expect(notPicture.status).toBe(400);
+
     const pre = await fetch(`${base}/plugin/import`, { method: 'OPTIONS' });
     expect(pre.status).toBe(204);
   });

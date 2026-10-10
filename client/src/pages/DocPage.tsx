@@ -12,6 +12,9 @@ import { api, ApiError } from '../api.ts';
 import { Account } from '../components/Account.tsx';
 import { pickImageFile, uploadImageFile } from '../cellImage.ts';
 import { ImageEditDialog } from '../image/ImageEditDialog.tsx';
+
+// Remove background in the image editor: a model that runs in the browser, fetched when it is first used.
+const loadBackgroundRemoval = () => import('@imgly/background-removal');
 import type { PictureSizes } from '../image/ImageFileEditor.tsx';
 import { MOD } from '../commands.ts';
 import { DocIcon } from '../components/Logo.tsx';
@@ -522,7 +525,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
 
       {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'docStyle' && <DocStyleDialog ctl={ctl} onClose={() => setDialog(null)} />}
-      {editingImage && <ImageEditDialog src={editingImage.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
+      {editingImage && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editingImage.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'link' && (
         <PromptModal

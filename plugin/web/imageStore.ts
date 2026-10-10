@@ -25,6 +25,15 @@ async function upload(host: Host, params: Record<string, string>, image: Blob): 
   return body.file;
 }
 
+/** Store a picture for a document, slide or cell; resolves to its address. Sent as it is, not as text through a tool, so a large one is no trouble. */
+export async function storePicture(host: Host, image: Blob): Promise<string> {
+  const { ticket, url } = await host.call<{ ticket: string; url: string }>('upload_ticket');
+  const res = await fetch(`${url}?${new URLSearchParams({ ticket, image: '1' })}`, { method: 'POST', headers: { 'content-type': image.type }, body: image });
+  const body = (await res.json().catch(() => ({}))) as { src?: string; error?: string };
+  if (!res.ok || !body.src) throw new Error(body.error ?? `Saving the picture failed (${res.status}).`);
+  return body.src;
+}
+
 /** Save an edited picture over the stored one (the version before is kept for one revert). */
 export const replacePicture = (host: Host, id: string, name: string, image: Blob) => upload(host, { name, replace: id }, image);
 

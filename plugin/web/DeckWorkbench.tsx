@@ -4,6 +4,10 @@
 // user is on go to the model as context.
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { pickImageFile, uploadImageFile } from '../../client/src/cellImage.ts';
+import { imageDialogOpen } from '../../client/src/image/dialogOpen.ts';
+import { ImageEditDialog } from '../../client/src/image/ImageEditDialog.tsx';
+import type { PictureSizes } from '../../client/src/image/ImageFileEditor.tsx';
+import { storePicture } from './imageStore.ts';
 import { isMac, MOD } from '../../client/src/commands.ts';
 import { MenuList, type MenuItem } from '../../client/src/components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../../client/src/components/Modal.tsx';
@@ -177,6 +181,15 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
     },
     [ctl, host, notify],
   );
+  // The picture element open in the image editor (as on the app's presentation page): saving stores the edited
+  // picture as a new image and puts it on the slide as one step.
+  const [editingImage, setEditingImage] = useState<string | null>(null);
+  const editedPicture = ctl.deck.slides.flatMap((s) => s.elements).find((e) => e.id === editingImage && e.type === 'image');
+  const saveEditedImage = async (id: string, image: Blob, sizes: PictureSizes) => {
+    const url = await storePicture(host, image);
+    if (!ctl.replacePicture(id, url, sizes.before, sizes.after)) notify('The picture is no longer in the presentation, so the edit was not put in.');
+  };
+
   const insertImage = async () => {
     const file = await pickImageFile();
     if (file) await addImageFiles([file]);
@@ -185,7 +198,7 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
   // Global shortcuts (not while typing in an input, the notes or an inline text editor).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (ctl.presenting || ctl.cropping || isTyping(e.target)) return;
+      if (ctl.presenting || ctl.cropping || imageDialogOpen() || isTyping(e.target)) return;
       const mod = isMac ? e.metaKey : e.ctrlKey;
       const k = e.key.toLowerCase();
       if (mod && k === 'z') {
@@ -244,7 +257,7 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
       }
     };
     const onPaste = (e: ClipboardEvent) => {
-      if (ctl.presenting || isTyping(e.target)) return;
+      if (ctl.presenting || imageDialogOpen() || isTyping(e.target)) return;
       const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
       if (files.length) {
         e.preventDefault();
@@ -420,12 +433,12 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
           </button>
         </div>
       </header>
-      <DeckToolbar ctl={ctl} onPresent={() => ctl.setPresenting(true)} onInsertImage={() => void insertImage()} />
+      <DeckToolbar ctl={ctl} onPresent={() => ctl.setPresenting(true)} onInsertImage={() => void insertImage()} onEditImage={setEditingImage} />
       <div className="deck-body" ref={bodyRef}>
         <ThumbnailStrip ctl={ctl} width={tray.width} onContextMenu={onThumbContextMenu} />
         <ResizeHandle panel={tray} side="left" label="Resize slide thumbnails" className="deck-thumbs-resize" />
         <div className="deck-main">
-          <DeckEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} />
+          <DeckEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} onEditImage={setEditingImage} />
           {showNotes && <NotesPane ctl={ctl} />}
         </div>
       </div>
@@ -437,6 +450,7 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: FileSummary;
       )}
 
       {ctl.presenting && <PresentMode ctl={ctl} onExit={() => ctl.setPresenting(false)} />}
+      {editingImage && editedPicture?.type === 'image' && <ImageEditDialog src={editedPicture.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
 
       {dialog?.kind === 'rename' && <PromptModal title="Rename presentation" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'delete' && (

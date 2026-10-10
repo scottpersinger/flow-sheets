@@ -10,6 +10,9 @@ import { Account } from '../components/Account.tsx';
 import { uploadImageFile, pickImageFile } from '../cellImage.ts';
 import { imageDialogOpen } from '../image/dialogOpen.ts';
 import { ImageEditDialog } from '../image/ImageEditDialog.tsx';
+
+// Remove background in the image editor: a model that runs in the browser, fetched when it is first used.
+const loadBackgroundRemoval = () => import('@imgly/background-removal');
 import type { PictureSizes } from '../image/ImageFileEditor.tsx';
 import { isMac, MOD } from '../commands.ts';
 import { DeckIcon } from '../components/Logo.tsx';
@@ -541,7 +544,7 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
       )}
 
       {ctl.presenting && <PresentMode ctl={ctl} onExit={() => ctl.setPresenting(false)} />}
-      {editingImage && editedPicture?.type === 'image' && <ImageEditDialog src={editedPicture.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
+      {editingImage && editedPicture?.type === 'image' && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editedPicture.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
 
       {dialog?.kind === 'rename' && <PromptModal title="Rename presentation" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'delete' && (

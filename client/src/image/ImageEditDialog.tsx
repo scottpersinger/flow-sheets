@@ -2,11 +2,10 @@
 // picture is never rewritten. Save hands the edited picture to the page, which stores it as a new image and
 // puts it where the old one was, so undo there brings the old one back.
 import { useEffect, useRef, useState } from 'react';
+import type { AspBackgroundRemovalLoader } from '@ascentsparksoftware/react-image-editor';
 import { EDITABLE_IMAGE_TYPES } from '../../../shared/types.ts';
 import { IMAGE_DIALOG_CLASS } from './dialogOpen.ts';
 import { ImageFileEditor, type PictureSizes } from './ImageFileEditor.tsx';
-
-const loadBackgroundRemoval = () => import('@imgly/background-removal');
 
 /** The picture at an address, as bytes: ours with the session, anyone else's only if their server allows it. */
 async function fetchPicture(src: string): Promise<Blob> {
@@ -23,7 +22,7 @@ async function fetchPicture(src: string): Promise<Blob> {
   return blob;
 }
 
-export function ImageEditDialog({ src, name, onSave, onClose }: { /** The picture's address. */ src: string; /** What to call it in messages. */ name: string; /** The edited picture, to store and put in place; the dialog closes when this resolves. */ onSave(image: Blob, sizes: PictureSizes): Promise<void>; onClose(): void }) {
+export function ImageEditDialog({ src, name, onSave, onClose, backgroundRemovalLoader }: { /** See ImageEditorHost: the page passes it where the model can be loaded. */ backgroundRemovalLoader?: AspBackgroundRemovalLoader; /** The picture's address. */ src: string; /** What to call it in messages. */ name: string; /** The edited picture, to store and put in place; the dialog closes when this resolves. */ onSave(image: Blob, sizes: PictureSizes): Promise<void>; onClose(): void }) {
   const [source, setSource] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -61,7 +60,7 @@ export function ImageEditDialog({ src, name, onSave, onClose }: { /** The pictur
                 onClose();
               },
             }}
-            backgroundRemovalLoader={loadBackgroundRemoval}
+            backgroundRemovalLoader={backgroundRemovalLoader}
             onClose={onClose}
           />
         ) : (

@@ -160,7 +160,10 @@ surface adds an entry point and a save.
 - The assistant: `transform_image` takes `image` (a stored `/api/images/...` address) in place of
   `file_id`, stores the result anew and returns its address, which the model puts in place with the tools it
   has (`edit_elements`, `set_cell_image`, `insert_image`). Not in the plugin, whose `transform_image` edits
-  stored files only; the plugin's presentation editor has no Edit image button yet either.
+  stored files only.
+- The plugin's document and presentation editors have the same Edit image (and slides the same Crop). The
+  picture is read from `/plugin/img/<id>`, which answers any origin, and the edited one goes to the upload
+  route with `image=1` (`storePicture` in `plugin/web/imageStore.ts`). There is no background removal there.
 - A picture at another site's address can be edited only if that site allows it to be read; otherwise the
   dialog says so. A GIF is not edited.
 

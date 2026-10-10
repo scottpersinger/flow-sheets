@@ -231,6 +231,8 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           const service = hub.forUser(userId);
           const bytes = Buffer.concat(chunks);
           const name = url.searchParams.get('name') ?? undefined;
+          // image=1: a picture for a document, slide or cell (an edit from the image editor), stored as one.
+          if (url.searchParams.get('image')) return json(res, 200, { src: await service.storeImage(String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase(), bytes) });
           // replace=<id>: an edited picture from the image editor, saved over the stored one.
           const replace = url.searchParams.get('replace');
           if (replace) return json(res, 200, { file: await service.saveImage(replace, bytes) });
@@ -296,7 +298,8 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           res.writeHead(404).end('Not found');
           return;
         }
-        res.writeHead(200, { 'content-type': img.type, 'content-length': statSync(img.file).size, 'cache-control': 'private, max-age=86400' });
+        // Read with fetch by the image editor, from the app's opaque origin (the id in the address is the secret).
+        res.writeHead(200, { 'content-type': img.type, 'content-length': statSync(img.file).size, 'cache-control': 'private, max-age=86400', 'access-control-allow-origin': '*' });
         createReadStream(img.file).pipe(res);
         return;
       }
