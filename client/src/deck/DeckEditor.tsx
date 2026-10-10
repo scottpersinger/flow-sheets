@@ -7,6 +7,7 @@ import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { fitZoomActions, useWheelZoom, ZoomControls } from '../components/ZoomControls.tsx';
 import { SLIDE_H, SLIDE_W, THEMES, type LineElement, type SlideElement } from '../../../shared/deck.ts';
 import { boxFromEnds, compactLine, DEFAULT_LINE_WIDTH, lineEnds, lineGeometry, nearSites, SITES, sitePoint, snapAngle, type SiteHit } from '../../../shared/lines.ts';
+import { clickTarget } from '../../../shared/deckHit.ts';
 import { CropOverlay } from './CropOverlay.tsx';
 import type { DeckController } from './controller.ts';
 import { LineDrawing, SlideView, type BoxPreview } from './SlideView.tsx';
@@ -258,6 +259,9 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!drag, scale]);
 
+  /** A click inside a frame (a shape that is only an outline) is for what lies under it: see clickTarget. */
+  const through = (e: { clientX: number; clientY: number }, el: SlideElement): SlideElement => clickTarget(slide.elements, el, ...toSlide(e), 6 / scale);
+
   const onElementMouseDown = (e: ReactMouseEvent, el: SlideElement) => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -265,6 +269,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
       startDraw(e);
       return;
     }
+    el = through(e, el);
     if (ctl.editing === el.id) return;
     const wasSelected = ctl.selection.length === 1 && ctl.selection[0] === el.id;
     caretRef.current = null;
@@ -288,7 +293,8 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     }
   };
 
-  const onElementDoubleClick = (_e: ReactMouseEvent, el: SlideElement) => {
+  const onElementDoubleClick = (e: ReactMouseEvent, hit: SlideElement) => {
+    const el = through(e, hit);
     if (el.type === 'text' || el.type === 'shape') ctl.startEditing(el.id);
     else if (el.type === 'image') onEditImage?.(el.id);
   };
