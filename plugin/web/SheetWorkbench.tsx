@@ -358,12 +358,6 @@ function Workbench({ host, meta, ctl, onBack, onOpen }: { host: Host; meta: File
               Open ↗
             </button>
           )}
-          <button className="btn" title="Ask ChatGPT to describe this spreadsheet" onClick={() => void host.ask('Describe the spreadsheet I have open in Docs: what each tab holds and what stands out in the data.')}>
-            Summarize
-          </button>
-          <button className="btn" title="Ask ChatGPT to analyze the selected range" onClick={() => void host.ask('Analyze the range I have selected in the spreadsheet open in Docs: totals, trends and anything unusual.')}>
-            Analyze selection
-          </button>
         </div>
       </header>
       <Toolbar host={cmd} />

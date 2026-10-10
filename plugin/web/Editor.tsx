@@ -375,12 +375,6 @@ function Workbench({ host, meta, ctl, onBack }: { host: Host; meta: DocSummary; 
               Open ↗
             </button>
           )}
-          <button className="btn" title="Ask ChatGPT to summarize this document" onClick={() => void host.ask('Summarize the document I have open in Docs.')}>
-            Summarize
-          </button>
-          <button className="btn" title="Ask ChatGPT to proofread this document" onClick={() => void host.ask('Proofread the document I have open in Docs: fix spelling, grammar and awkward wording in place, and tell me what you changed.')}>
-            Proofread
-          </button>
         </div>
       </header>
       <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} onEditImage={editImage} />
