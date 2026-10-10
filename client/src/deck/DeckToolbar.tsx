@@ -163,118 +163,134 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onEditImage }: { ct
       </Btn>
       <ShapePicker ctl={ctl} />
       <LinePicker ctl={ctl} />
+      {/* The controls for a kind of element are there while one is selected, so the bar holds what can be
+          used now and stays on one line. */}
+      {line && (
+        <>
+          <span className="tb-sep" />
+          <ColorPicker title="Line color" icon={lineIcon('M4 20L20 4')} value={line?.strokeColor} disabled={!line} onPick={(c) => ctl.styleLines({ strokeColor: c })} />
+          <select className="tb-select" title="Line weight" aria-label="Line weight" disabled={!line} value={line?.strokeWidth ?? DEFAULT_LINE_WIDTH} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ strokeWidth: Number(e.target.value) })}>
+            {!WEIGHTS.includes(line?.strokeWidth ?? DEFAULT_LINE_WIDTH) && <option value={line?.strokeWidth}>{line?.strokeWidth}</option>}
+            {WEIGHTS.map((w) => (
+              <option key={w} value={w}>
+                {w}px
+              </option>
+            ))}
+          </select>
+          <select className="tb-select" title="Line dash" aria-label="Line dash" disabled={!line} value={line?.dash ?? 'solid'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ dash: e.target.value === 'solid' ? undefined : (e.target.value as LineElement['dash']) })}>
+            {DASH_STYLES.map((d) => (
+              <option key={d} value={d}>
+                {d === 'solid' ? 'Solid' : d === 'dash' ? 'Dash' : 'Dot'}
+              </option>
+            ))}
+          </select>
+          <select className="tb-select" title="Start arrowhead" aria-label="Start arrowhead" disabled={!line} value={line?.startArrow ?? 'none'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ startArrow: e.target.value === 'none' ? undefined : (e.target.value as ArrowStyle) })}>
+            {ARROW_STYLES.map((a) => (
+              <option key={a} value={a}>
+                Start: {ARROW_NAMES[a]}
+              </option>
+            ))}
+          </select>
+          <select className="tb-select" title="End arrowhead" aria-label="End arrowhead" disabled={!line} value={line?.endArrow ?? 'none'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ endArrow: e.target.value === 'none' ? undefined : (e.target.value as ArrowStyle) })}>
+            {ARROW_STYLES.map((a) => (
+              <option key={a} value={a}>
+                End: {ARROW_NAMES[a]}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      {text && (
+        <>
+          <span className="tb-sep" />
+          <Btn title={`Bold (${MOD}B)`} active={bold} disabled={!text} onClick={() => ctl.styleSelected({ bold: !bold })}>
+            <b>B</b>
+          </Btn>
+          <Btn title={`Italic (${MOD}I)`} active={italic} disabled={!text} onClick={() => ctl.styleSelected({ italic: italic ? undefined : true })}>
+            <i>I</i>
+          </Btn>
+          <select
+            className="tb-select"
+            title="Font"
+            aria-label="Font"
+            disabled={!text}
+            value={text?.style?.font ?? ''}
+            onMouseDown={(e) => e.stopPropagation()}
+            onChange={(e) => ctl.styleSelected({ font: e.target.value || undefined })}
+          >
+            <option value="">Theme font</option>
+            {text?.style?.font && !FONTS.includes(text.style.font) && <option value={text.style.font}>{text.style.font}</option>}
+            {FONTS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+          <select
+            className="tb-select"
+            title="Font size"
+            aria-label="Font size"
+            disabled={!text}
+            value={SIZES.includes(size) ? size : ''}
+            onMouseDown={(e) => e.stopPropagation()}
+            onChange={(e) => ctl.styleSelected({ size: Number(e.target.value) })}
+          >
+            {!SIZES.includes(size) && <option value="">{size}</option>}
+            {SIZES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <ColorPicker title="Text color" icon={<span className="a-icon">A</span>} value={text?.style?.color} disabled={!text} onPick={(c) => ctl.styleSelected({ color: c })} />
+          <span className="tb-sep" />
+          <Btn title="Align left" active={align === 'left'} disabled={!text} onClick={() => ctl.styleSelected({ align: undefined })}>
+            ≡
+          </Btn>
+          <Btn title="Align center" active={align === 'center'} disabled={!text} onClick={() => ctl.styleSelected({ align: 'center' })}>
+            ☰
+          </Btn>
+          <Btn title="Align right" active={align === 'right'} disabled={!text} onClick={() => ctl.styleSelected({ align: 'right' })}>
+            ≣
+          </Btn>
+          <Btn title="Bulleted list" active={bullets} disabled={!text} onClick={() => ctl.toggleBullets()}>
+            •≡
+          </Btn>
+        </>
+      )}
       <span className="tb-sep" />
-      <ColorPicker title="Line color" icon={lineIcon('M4 20L20 4')} value={line?.strokeColor} disabled={!line} onPick={(c) => ctl.styleLines({ strokeColor: c })} />
-      <select className="tb-select" title="Line weight" aria-label="Line weight" disabled={!line} value={line?.strokeWidth ?? DEFAULT_LINE_WIDTH} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ strokeWidth: Number(e.target.value) })}>
-        {!WEIGHTS.includes(line?.strokeWidth ?? DEFAULT_LINE_WIDTH) && <option value={line?.strokeWidth}>{line?.strokeWidth}</option>}
-        {WEIGHTS.map((w) => (
-          <option key={w} value={w}>
-            {w}px
-          </option>
-        ))}
-      </select>
-      <select className="tb-select" title="Line dash" aria-label="Line dash" disabled={!line} value={line?.dash ?? 'solid'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ dash: e.target.value === 'solid' ? undefined : (e.target.value as LineElement['dash']) })}>
-        {DASH_STYLES.map((d) => (
-          <option key={d} value={d}>
-            {d === 'solid' ? 'Solid' : d === 'dash' ? 'Dash' : 'Dot'}
-          </option>
-        ))}
-      </select>
-      <select className="tb-select" title="Start arrowhead" aria-label="Start arrowhead" disabled={!line} value={line?.startArrow ?? 'none'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ startArrow: e.target.value === 'none' ? undefined : (e.target.value as ArrowStyle) })}>
-        {ARROW_STYLES.map((a) => (
-          <option key={a} value={a}>
-            Start: {ARROW_NAMES[a]}
-          </option>
-        ))}
-      </select>
-      <select className="tb-select" title="End arrowhead" aria-label="End arrowhead" disabled={!line} value={line?.endArrow ?? 'none'} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => ctl.styleLines({ endArrow: e.target.value === 'none' ? undefined : (e.target.value as ArrowStyle) })}>
-        {ARROW_STYLES.map((a) => (
-          <option key={a} value={a}>
-            End: {ARROW_NAMES[a]}
-          </option>
-        ))}
-      </select>
-      <span className="tb-sep" />
-      <Btn title={`Bold (${MOD}B)`} active={bold} disabled={!text} onClick={() => ctl.styleSelected({ bold: !bold })}>
-        <b>B</b>
-      </Btn>
-      <Btn title={`Italic (${MOD}I)`} active={italic} disabled={!text} onClick={() => ctl.styleSelected({ italic: italic ? undefined : true })}>
-        <i>I</i>
-      </Btn>
-      <select
-        className="tb-select"
-        title="Font"
-        aria-label="Font"
-        disabled={!text}
-        value={text?.style?.font ?? ''}
-        onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => ctl.styleSelected({ font: e.target.value || undefined })}
-      >
-        <option value="">Theme font</option>
-        {text?.style?.font && !FONTS.includes(text.style.font) && <option value={text.style.font}>{text.style.font}</option>}
-        {FONTS.map((f) => (
-          <option key={f} value={f}>
-            {f}
-          </option>
-        ))}
-      </select>
-      <select
-        className="tb-select"
-        title="Font size"
-        aria-label="Font size"
-        disabled={!text}
-        value={SIZES.includes(size) ? size : ''}
-        onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => ctl.styleSelected({ size: Number(e.target.value) })}
-      >
-        {!SIZES.includes(size) && <option value="">{size}</option>}
-        {SIZES.map((s) => (
-          <option key={s} value={s}>
-            {s}
-          </option>
-        ))}
-      </select>
-      <ColorPicker title="Text color" icon={<span className="a-icon">A</span>} value={text?.style?.color} disabled={!text} onPick={(c) => ctl.styleSelected({ color: c })} />
-      <span className="tb-sep" />
-      <Btn title="Align left" active={align === 'left'} disabled={!text} onClick={() => ctl.styleSelected({ align: undefined })}>
-        ≡
-      </Btn>
-      <Btn title="Align center" active={align === 'center'} disabled={!text} onClick={() => ctl.styleSelected({ align: 'center' })}>
-        ☰
-      </Btn>
-      <Btn title="Align right" active={align === 'right'} disabled={!text} onClick={() => ctl.styleSelected({ align: 'right' })}>
-        ≣
-      </Btn>
-      <Btn title="Bulleted list" active={bullets} disabled={!text} onClick={() => ctl.toggleBullets()}>
-        •≡
-      </Btn>
-      <span className="tb-sep" />
-      <ColorPicker
-        title="Fill color"
-        icon={<span className="fill-icon">◆</span>}
-        value={shapes[0]?.type === 'shape' ? shapes[0].fill : undefined}
-        disabled={!shapes.length}
-        onPick={(c) =>
-          ctl.updateElements(
-            shapes.map((s) => s.id),
-            (e) => {
-              if (e.type !== 'shape') return e;
-              const next = { ...e };
-              if (c) next.fill = c;
-              else delete next.fill;
-              return next;
-            },
-          )
-        }
-      />
+      {shapes.length > 0 && (
+        <ColorPicker
+          title="Fill color"
+          icon={<span className="fill-icon">◆</span>}
+          value={shapes[0]?.type === 'shape' ? shapes[0].fill : undefined}
+          disabled={!shapes.length}
+          onPick={(c) =>
+            ctl.updateElements(
+              shapes.map((s) => s.id),
+              (e) => {
+                if (e.type !== 'shape') return e;
+                const next = { ...e };
+                if (c) next.fill = c;
+                else delete next.fill;
+                return next;
+              },
+            )
+          }
+        />
+      )}
       <ColorPicker title="Slide background" icon={<span className="fill-icon">▭</span>} value={ctl.slide.bg} onPick={(c) => ctl.setBackground(c)} />
-      <span className="tb-sep" />
-      <Btn title="Bring forward" disabled={!selected.length} onClick={() => ctl.reorder(ctl.selection, 'forward')}>
-        ▲
-      </Btn>
-      <Btn title="Send backward" disabled={!selected.length} onClick={() => ctl.reorder(ctl.selection, 'backward')}>
-        ▼
-      </Btn>
+      {selected.length > 0 && (
+        <>
+          <span className="tb-sep" />
+          <Btn title="Bring forward" onClick={() => ctl.reorder(ctl.selection, 'forward')}>
+            ▲
+          </Btn>
+          <Btn title="Send backward" onClick={() => ctl.reorder(ctl.selection, 'backward')}>
+            ▼
+          </Btn>
+        </>
+      )}
       {selected.length === 1 && selected[0].type === 'image' && (
         <>
           <span className="tb-sep" />
