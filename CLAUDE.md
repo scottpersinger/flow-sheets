@@ -47,6 +47,8 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   (`activeEditor.ts`), else in one off screen (`hiddenEngine.ts`). The engine needs a browser canvas, so tests
   use `fakeEngine.ts`. In the plugin the model's `transform_image` is a job the plugin's app takes with its
   state and does in the browser (`FileService.runImageJob`, `plugin/web/imageJobs.ts`).
+  A picture inside a file is edited in `ImageEditDialog` over the page and never rewritten: the page uploads
+  the result and puts it in place as an undoable step (on a slide, `DeckController.replacePicture`).
 - Importing a file's bytes, whatever they are, is `server/importFile.ts` (`importBytes`: a Word, PowerPoint,
   Excel, CSV or Markdown file becomes a file the app edits; a PDF, video, picture or web page is stored as
   it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it

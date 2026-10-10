@@ -19,6 +19,7 @@ import {
   type TextElement,
   type TextStyle,
   type ThemeId,
+  withEditedPicture,
 } from '../../../shared/deck.ts';
 import { boxFromEnds, cloneElements, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPES } from '../../../shared/shapes.ts';
@@ -371,6 +372,16 @@ export class DeckController {
       h = Math.round(natural.h * scale);
     }
     return this.addElement({ type: 'image', src, x: Math.round((SLIDE_W - w) / 2), y: Math.round((SLIDE_H - h) / 2), w, h });
+  }
+
+  /**
+   * Put an edited picture in place of an image element's, wherever that element is now (the presentation may
+   * have changed while the image editor was open). False when the element is gone.
+   */
+  replacePicture(id: string, src: string, before: { width: number; height: number } | null, after: { width: number; height: number } | null): boolean {
+    const at = this.store.deck.slides.findIndex((s) => s.elements.some((e) => e.id === id && e.type === 'image'));
+    if (at < 0) return false;
+    return this.run((tx) => tx.updateSlide(at, (s) => ({ ...s, elements: s.elements.map((e) => (e.id === id && e.type === 'image' ? withEditedPicture(e, src, before, after) : e)) })));
   }
 
   /** Change elements of the current slide with a function (used for drags and style changes). */

@@ -310,7 +310,7 @@ describe('stored files', () => {
   });
 
   it('edits a stored picture exactly: a copy by default, over the file when asked, in the open editor when there is one', async () => {
-    const { env, call } = setup();
+    const { env, call, uploads } = setup();
     const meta = (id: string, filename: string, type: string) => ({ id, filename, type, size: 10, createdAt: '2026-01-01', url: `/api/files/${id}`, downloadUrl: `/api/files/${id}/download` });
     const files: Record<string, ReturnType<typeof meta>> = { p: meta('p', 'photo.jpg', 'image/jpeg'), g: meta('g', 'anim.gif', 'image/gif') };
     const attached: string[] = [];
@@ -370,6 +370,24 @@ describe('stored files', () => {
     await expect(call('transform_image', { file_id: 'g', operations: ops })).rejects.toThrow(/only PNG, JPEG and WebP/);
     await expect(call('transform_image', { file_id: 'p', operations: [] })).rejects.toThrow(/at least one operation/);
 
+    // A picture inside a presentation, by its address: stored anew, and the new address comes back to be put in place.
+    const stored = '/api/images/0f8fad5b-d9cb-469f-a165-70867728950e';
+    const read: string[] = [];
+    env.readImage = async (src) => (read.push(src), new Blob(['slide picture'], { type: 'image/jpeg' }));
+    const uploadsBefore = saved.length;
+    const embedded = await call('transform_image', { image: stored, operations: [{ op: 'crop', x: 0, y: 0, width: 1000, height: 1000 }] });
+    expect(embedded).toMatchObject({ edited: true, image_address: '/api/images/00000000-0000-0000-0000-000000000001', source_image: stored, applied: ['Cropped to 1000 × 1000'], size: { width: 1000, height: 1000 }, saved: true, note: expect.stringContaining('edit_elements (src)') });
+    expect(read).toEqual([stored]);
+    expect(saved).toHaveLength(uploadsBefore);
+    expect(attached.at(-1)).toBe(`/api/images/00000000-0000-0000-0000-000000000001:crop 0,0 1000x1000`);
+    // With its background removed it is stored as a PNG, whatever it was.
+    expect(await call('transform_image', { image: stored, operations: [{ op: 'remove_background' }] })).toMatchObject({ image_address: '/api/images/00000000-0000-0000-0000-000000000002' });
+    expect(uploads.map((u) => u.type)).toEqual(['image/jpeg', 'image/png']);
+    await expect(call('transform_image', { image: 'https://example.com/a.png', operations: ops })).rejects.toThrow(/stored picture’s address/);
+    await expect(call('transform_image', { image: stored, file_id: 'p', operations: ops })).rejects.toThrow(/either file_id .* or image/);
+    await expect(call('transform_image', { operations: ops })).rejects.toThrow(/either file_id .* or image/);
+    expect(confirmationFor({ id: 't', name: 'transform_image', input: { image: stored, operations: ops, save: 'replace' } }, null)).toBeNull();
+    closed -= 2;
     // Open in the image editor: the edits are made there as one step, shown, and not saved.
     const live = fakeEngine(3000, 2000);
     let refreshed = 0;

@@ -408,6 +408,27 @@ export function layoutElements(layout: LayoutId, c: SlideContent, nextId: () => 
   }
 }
 
+/**
+ * A picture element after its picture was edited (in the image editor) and stored at `src`. When the picture
+ * kept its shape only the address changes. When it did not (it was cropped or turned), the element's own crop
+ * no longer means anything and is dropped, and its box takes the new shape at the same width and centre, made
+ * smaller if it would be taller than the slide.
+ */
+export function withEditedPicture(el: ImageElement, src: string, before: { width: number; height: number } | null, after: { width: number; height: number } | null): ImageElement {
+  const ratio = (s: { width: number; height: number } | null) => (s && s.width > 0 && s.height > 0 ? s.width / s.height : null);
+  const [was, now] = [ratio(before), ratio(after)];
+  if (!was || !now || Math.abs(was - now) / was < 0.01) return { ...el, src };
+  const { crop: _crop, ...rest } = el;
+  let w = el.w;
+  let h = w / now;
+  if (h > SLIDE_H) {
+    h = SLIDE_H;
+    w = h * now;
+  }
+  [w, h] = [Math.max(1, Math.round(w)), Math.max(1, Math.round(h))];
+  return { ...rest, src, x: Math.round(el.x + el.w / 2 - w / 2), y: Math.round(el.y + el.h / 2 - h / 2), w, h };
+}
+
 /** A new slide from a layout and content. */
 export function buildSlide(layout: LayoutId, content: SlideContent, nextId: () => string): Slide {
   const elements = layoutElements(layout, content, nextId);

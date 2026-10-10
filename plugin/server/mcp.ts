@@ -410,12 +410,15 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       }),
   );
 
+  const { image: _embedded, ...transformShape } = schemas.transform_image.shape;
+
   server.registerTool(
     'transform_image',
     {
       title: 'Edit a picture',
-      description: `${schemas.transform_image.description ?? ''} The editing is done by the app, so it must be showing: call open_file with the picture first. A background cannot be removed here (remove_background works in the full app).`.replace(' If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.', ' If the user has the picture open in the app’s image editor, the edits are made there instead, as one undo step, and are saved when the user saves.'),
-      inputSchema: schemas.transform_image.shape,
+      description: `${(schemas.transform_image.description ?? '').replace(' (a stored picture file by file_id, or a picture inside a presentation, document or spreadsheet by image)', '')} The editing is done by the app, so it must be showing: call open_file with the picture first. A background cannot be removed here (remove_background works in the full app).`.replace(' If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.', ' If the user has the picture open in the app’s image editor, the edits are made there instead, as one undo step, and are saved when the user saves.'),
+      // Stored picture files only: a picture inside a document is edited in the full app.
+      inputSchema: { ...transformShape, file_id: fileId },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ file_id, operations, save }) =>

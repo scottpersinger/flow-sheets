@@ -309,7 +309,11 @@ export const schemas = {
     ),
   transform_image: z
     .object({
-      file_id: z.string().describe('The picture to edit (PNG, JPEG or WebP).'),
+      file_id: z.string().optional().describe('The stored picture file to edit (PNG, JPEG or WebP). Give this or image.'),
+      image: z
+        .string()
+        .optional()
+        .describe('Instead of file_id: the /api/images/... address of a picture inside a presentation, document or spreadsheet (an image element’s src in read_deck, for example). The edited picture is stored at a new address, which is returned: put it in place with edit_elements (src), insert_image or set_cell_image. The picture at the old address is not changed.'),
       operations: z
         .array(
           z
@@ -353,10 +357,10 @@ export const schemas = {
         .min(1)
         .max(30)
         .describe('Applied in order. Positions are pixels of the picture as it is at that point: after a crop they count from the cropped picture’s corner.'),
-      save: z.enum(['copy', 'replace']).optional().describe('copy (default): a new file next to the original, which stays as it is. replace: save over the original (the user is asked; the version before is kept for one undo).'),
+      save: z.enum(['copy', 'replace']).optional().describe('For file_id. copy (default): a new file next to the original, which stays as it is. replace: save over the original (the user is asked; the version before is kept for one undo).'),
     })
     .describe(
-      'Edit a stored picture exactly, with the app’s image editor: crop, rotate, flip, resize, adjust colors, filters, add text, shapes and arrows, redact, remove the background. Every pixel you do not name stays as it was. Call view_image first: it reports the picture’s width and height, which positions are given in. The result is attached after the tool results; look at it, and if something landed in the wrong place call transform_image again on the original with better numbers. If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.',
+      'Edit a picture exactly, with the app’s image editor (a stored picture file by file_id, or a picture inside a presentation, document or spreadsheet by image): crop, rotate, flip, resize, adjust colors, filters, add text, shapes and arrows, redact, remove the background. Every pixel you do not name stays as it was. Call view_image first: it reports the picture’s width and height, which positions are given in. The result is attached after the tool results; look at it, and if something landed in the wrong place call transform_image again on the original with better numbers. If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.',
     ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),

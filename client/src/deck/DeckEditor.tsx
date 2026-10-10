@@ -72,7 +72,7 @@ function resizeBox(orig: Box, h: Handle, dx: number, dy: number, ratio: number |
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(hh) };
 }
 
-export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImageFiles(files: File[]): void }) {
+export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckController; onImageFiles(files: File[]): void; /** Open the image editor on a picture element (a double-click on it). */ onEditImage?(id: string): void }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 450 });
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -289,6 +289,7 @@ export function DeckEditor({ ctl, onImageFiles }: { ctl: DeckController; onImage
 
   const onElementDoubleClick = (_e: ReactMouseEvent, el: SlideElement) => {
     if (el.type === 'text' || el.type === 'shape') ctl.startEditing(el.id);
+    else if (el.type === 'image') onEditImage?.(el.id);
   };
 
   // The id is captured here, not read at commit time: a click outside the box ends editing first, and the

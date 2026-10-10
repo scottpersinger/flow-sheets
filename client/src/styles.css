@@ -3671,6 +3671,33 @@ button.agent-tool-label:hover {
 .html-editor-space {
   flex: 1;
 }
+/* The image editor over the page, for a picture inside a slide, a document or a cell. */
+.image-edit-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  padding: 20px;
+  background: rgba(32, 33, 36, 0.6);
+}
+.image-edit-dialog-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.image-edit-dialog-wait {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
 /* A stored picture in the image editor, which fills the room under its bar. */
 .image-editor {
   flex: 1;

@@ -1,7 +1,8 @@
 # Image editor
 
 Status: the fork and phases 1 to 3 are built (editing an image file in the app and in the plugin, the
-assistant in the app, and the assistant over the MCP). Phase 4 is not. Decisions still open are listed at the end.
+assistant in the app, and the assistant over the MCP). Of phase 4, pictures on slides are built; those in
+documents and spreadsheet cells are not. Decisions still open are listed at the end.
 
 A full image editor for pictures stored as files, built so the same editor later edits pictures inside
 documents, spreadsheets and presentations, and so the assistant (in the app and over the MCP plugin) edits
@@ -133,18 +134,29 @@ Built. MCP tools run on the server with no browser, so the plugin's app does the
 
 ## Phase 4: pictures inside documents, spreadsheets and presentations
 
-The host and the tools do not change. Each surface adds an entry point and a save:
+Presentations are built; documents and spreadsheets are not. The editor and the tools do not change: each
+surface adds an entry point and a save.
 
-| Surface | Entry | Save |
-|---|---|---|
-| Document | Selected image block: toolbar button, double-click | Upload, then swap `src` in one transaction (scale `width` after a crop) |
-| Spreadsheet | Cell with an image | Upload, then set `img` in a `Tx` |
-| Presentation | Selected image element | Upload, then set `src` in `ctl.run` |
+| Surface | Entry | Save | Built |
+|---|---|---|---|
+| Presentation | Selected image element: "Edit image" in the toolbar, or a double-click | Upload, then `DeckController.replacePicture` | Yes |
+| Document | Selected image block: toolbar button, double-click | Upload, then swap `src` in one transaction (scale `width` after a crop) | No |
+| Spreadsheet | Cell with an image | Upload, then set `img` in a `Tx` | No |
 
-Embedded pictures are never rewritten: a save uploads a new stored image and the old one stays, so undo in
-the document restores it. `transform_image` takes a stored image address as well as a `file_id` and returns
-the new address; the model places it with the tools it has (`replace_blocks`, `set_cell_image`,
-`edit_elements`). Remote `http(s)` pictures that do not allow cross-origin reads cannot be edited.
+- `ImageEditDialog` (`client/src/image`) is the editor over the page for an embedded picture: it reads the
+  picture from its address and hands the edited one to the page. While it is open the page leaves the
+  keyboard alone (`imageDialogOpen`): a Backspace there deletes a layer of the picture, not the element.
+- An embedded picture is never rewritten: a save uploads a new stored image and the old one stays, so undo
+  on the page restores it. It may change type (a JPEG whose background was removed becomes a PNG).
+- On a slide (`withEditedPicture` in `shared/deck.ts`): a picture that kept its shape only changes address.
+  One that was cropped or turned loses the element's own crop and its box takes the new shape, at the same
+  width and centre, made smaller if it would be taller than the slide.
+- The assistant: `transform_image` takes `image` (a stored `/api/images/...` address) in place of
+  `file_id`, stores the result anew and returns its address, which the model puts in place with the tools it
+  has (`edit_elements`, `set_cell_image`, `insert_image`). Not in the plugin, whose `transform_image` edits
+  stored files only; the plugin's presentation editor has no Edit image button yet either.
+- A picture at another site's address can be edited only if that site allows it to be read; otherwise the
+  dialog says so. A GIF is not edited.
 
 ## Testing
 

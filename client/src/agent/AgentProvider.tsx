@@ -531,6 +531,11 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             bitmap.close();
             return size;
           },
+          readImage: async (src) => {
+            const res = await fetch(src, { credentials: 'same-origin' });
+            if (!res.ok) throw new ToolError(`There is no stored picture at ${src}.`);
+            return res.blob();
+          },
           saveImage: async (id, image) => {
             const file = await api.updateImageFile(id, image);
             window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));

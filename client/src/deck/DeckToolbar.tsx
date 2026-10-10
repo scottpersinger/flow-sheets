@@ -128,7 +128,7 @@ function Drop({ title, label, items, disabled }: { title: string; label: ReactNo
   );
 }
 
-export function DeckToolbar({ ctl, onPresent, onInsertImage }: { ctl: DeckController; onPresent(): void; onInsertImage(): void }) {
+export function DeckToolbar({ ctl, onPresent, onInsertImage, onEditImage }: { ctl: DeckController; onPresent(): void; onInsertImage(): void; /** Open the image editor on a picture element; without it the button is not shown. */ onEditImage?(id: string): void }) {
   const selected = ctl.selected;
   const texts = selected.filter((e): e is TextElement => e.type === 'text');
   const text = texts[0];
@@ -275,6 +275,14 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage }: { ctl: DeckContro
       <Btn title="Send backward" disabled={!selected.length} onClick={() => ctl.reorder(ctl.selection, 'backward')}>
         ▼
       </Btn>
+      {onEditImage && selected.length === 1 && selected[0].type === 'image' && (
+        <>
+          <span className="tb-sep" />
+          <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={() => onEditImage(selected[0].id)} title="Crop, rotate, adjust and draw on the picture (or double-click it)">
+            Edit image
+          </button>
+        </>
+      )}
       <span className="tb-grow" />
       <button className="btn primary present-btn" onClick={onPresent} title="Present from the current slide">
         ▶ Present

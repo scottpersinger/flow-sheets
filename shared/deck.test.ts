@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSlide, deckOutline, fromParagraphs, newDeck, newId, slideContent, slideTitle, toParagraphs, updateSlideContent, validateDeck, type Deck, type TextElement } from './deck.ts';
+import { buildSlide, deckOutline, fromParagraphs, newDeck, newId, slideContent, slideTitle, toParagraphs, updateSlideContent, validateDeck, withEditedPicture, type Deck, type ImageElement, type TextElement } from './deck.ts';
 
 const titleOf = (slide: ReturnType<typeof buildSlide>) => (slide.elements.find((e) => e.type === 'text' && e.role === 'title') as TextElement).paragraphs[0].text;
 
@@ -97,5 +97,25 @@ describe('the built-in guide', () => {
     expect(gettingStartedDeck().slides[0].id).not.toBe(deck.slides[0].id);
     expect(findGettingStarted([{ title: 'Plan' }, { title: GETTING_STARTED_TITLE, id: 'd1' }])).toEqual({ title: GETTING_STARTED_TITLE, id: 'd1' });
     expect(findGettingStarted([{ title: 'Plan' }])).toBeUndefined();
+  });
+});
+
+describe('a picture element after its picture was edited', () => {
+  const el: ImageElement = { id: 'p', type: 'image', src: '/api/images/old', x: 100, y: 100, w: 400, h: 300, crop: { l: 0.1, t: 0, r: 0.1, b: 0 }, clip: 'circle(50%)', opacity: 0.8 };
+  const size = (width: number, height: number) => ({ width, height });
+
+  it('changes only the address when the picture kept its shape', () => {
+    expect(withEditedPicture(el, '/api/images/new', size(2000, 1500), size(2000, 1500))).toEqual({ ...el, src: '/api/images/new' });
+    // A resize, or a size that could not be told, is not a change of shape.
+    expect(withEditedPicture(el, '/api/images/new', size(2000, 1500), size(1000, 750))).toEqual({ ...el, src: '/api/images/new' });
+    expect(withEditedPicture(el, '/api/images/new', null, size(10, 900))).toEqual({ ...el, src: '/api/images/new' });
+  });
+
+  it('takes the new shape at the same width and centre, without its old crop, when the picture was cropped or turned', () => {
+    const wide = withEditedPicture(el, '/api/images/new', size(2000, 1500), size(2000, 500));
+    expect(wide).toEqual({ id: 'p', type: 'image', src: '/api/images/new', x: 100, y: 200, w: 400, h: 100, clip: 'circle(50%)', opacity: 0.8 });
+    expect('crop' in wide).toBe(false);
+    // Turned on its side it would be taller than the slide: it is made to fit, still centred.
+    expect(withEditedPicture({ ...el, w: 800, h: 450 }, '/api/images/new', size(1600, 900), size(900, 1600))).toMatchObject({ w: 304, h: 540, x: 348, y: 55 });
   });
 });
