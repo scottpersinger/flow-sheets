@@ -41,6 +41,29 @@ export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title' | 'format'>):
   return { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown' }[item.kind];
 }
 
+/** The groups of the file type filter, in the order the menu lists them. */
+export const TYPE_GROUPS = [
+  ['sheet', 'Spreadsheets'],
+  ['deck', 'Presentations'],
+  ['doc', 'Documents'],
+  ['pdf', 'PDFs'],
+  ['image', 'Images'],
+  ['video', 'Videos'],
+  ['other', 'Other files'],
+] as const;
+export type TypeGroup = (typeof TYPE_GROUPS)[number][0];
+
+/** The filter group an item is in: its kind, or for a stored file what its name says it is. */
+export function typeGroup(item: Pick<LibraryItem, 'kind' | 'title'>): TypeGroup {
+  if (item.kind === 'sheet' || item.kind === 'deck') return item.kind;
+  if (item.kind === 'doc' || item.kind === 'markdown') return 'doc';
+  const ext = /\.([a-z0-9]+)$/i.exec(item.title)?.[1]?.toLowerCase() ?? '';
+  if (ext === 'pdf') return 'pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+  if (['mp4', 'm4v', 'mov', 'webm', 'ogv'].includes(ext)) return 'video';
+  return 'other';
+}
+
 export type SortKey = 'title' | 'kind' | 'updatedAt' | 'createdAt';
 export interface SortOrder {
   key: SortKey;
@@ -256,6 +279,8 @@ export function FileLibrary(props: FileLibraryProps) {
   });
   const [dragOver, setDragOver] = useState(false);
   const [sort, setSortState] = useState<SortOrder>(loadSort);
+  /** Show only one type of file (the menu next to the view buttons); folders are not listed while it is on. */
+  const [typeFilter, setTypeFilter] = useState<TypeGroup | 'all'>('all');
   const [viewChoice, setViewChoice] = useState<View>(loadView);
   const view: View = props.thumbnail ? viewChoice : 'list';
   const setView = (v: View) => {
@@ -342,8 +367,18 @@ export function FileLibrary(props: FileLibraryProps) {
     }
   }
 
+  // The type menu offers the types that are here (and the one chosen, so it can always be seen and cleared).
+  const typesHere = new Set(visible.map((v) => typeGroup(v.s)));
+  const typeOptions = TYPE_GROUPS.filter(([g]) => typesHere.has(g) || g === typeFilter);
+  if (typeFilter !== 'all') {
+    const kept = visible.filter((v) => typeGroup(v.s) === typeFilter);
+    visible.length = 0;
+    // A branch whose spreadsheet is listed stays under it; nothing else is indented under something hidden.
+    visible.push(...kept);
+  }
+
   // Folders come first, by name whatever the files are sorted by.
-  const folders = (results ? results.folders : (props.folders ?? []).filter((f) => !q || f.name.toLowerCase().includes(q))).sort((a, b) => collator.compare(a.name, b.name));
+  const folders = typeFilter !== 'all' ? [] : (results ? results.folders : (props.folders ?? []).filter((f) => !q || f.name.toLowerCase().includes(q))).sort((a, b) => collator.compare(a.name, b.name));
   /** Where a search result is, shown after its name. */
   const whereTag = (folder: string) => <span className="found-in">in {folder || top}</span>;
   const trail = props.folder;
@@ -548,6 +583,16 @@ export function FileLibrary(props: FileLibraryProps) {
             <h2>{props.listTitle ?? 'Your files'}</h2>
           )}
           <div className="list-tools">
+            {(typeOptions.length > 1 || typeFilter !== 'all') && (
+              <select className="grid-sort" aria-label="File type" title="Show one type of file" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as TypeGroup | 'all')}>
+                <option value="all">All types</option>
+                {typeOptions.map(([g, label]) => (
+                  <option key={g} value={g}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
             {props.thumbnail && (
               <div className="view-toggle" role="group" aria-label="View">
                 <button className={view === 'list' ? 'active' : undefined} aria-pressed={view === 'list'} title="List" onClick={() => setView('list')}>
@@ -582,7 +627,7 @@ export function FileLibrary(props: FileLibraryProps) {
         {items === null ? (
           <div className="muted">Loading…</div>
         ) : visible.length === 0 && folders.length === 0 && error ? null : visible.length === 0 && folders.length === 0 ? (
-          <div className="empty-state">{results ? 'Nothing found in any folder.' : q ? (props.onFind ? 'Nothing here matches your search.' : 'Nothing matches your search.') : trail?.length ? 'This folder is empty.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
+          <div className="empty-state">{typeFilter !== 'all' ? `No ${TYPE_GROUPS.find(([g]) => g === typeFilter)![1].toLowerCase().replace('pdfs', 'PDFs')} ${results ? 'found' : q ? 'match your search' : 'here'}.` : results ? 'Nothing found in any folder.' : q ? (props.onFind ? 'Nothing here matches your search.' : 'Nothing matches your search.') : trail?.length ? 'This folder is empty.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
         ) : view === 'grid' ? (
           <div className="file-grid">
             {folders.map((f) => (

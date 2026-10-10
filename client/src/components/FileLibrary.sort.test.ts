@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareItems, kindLabel, type LibraryItem } from './FileLibrary.tsx';
+import { compareItems, kindLabel, typeGroup, type LibraryItem } from './FileLibrary.tsx';
 
 const item = (title: string, kind: LibraryItem['kind'], updatedAt: string, createdAt = updatedAt): LibraryItem => ({ id: title, title, kind, updatedAt, createdAt });
 
@@ -21,5 +21,23 @@ describe('file list sorting', () => {
     expect(titles('kind', 'asc')).toEqual(['gamma', 'alpha 10', 'beta.pdf', 'alpha 2', 'Alpha']);
     expect(items.map(kindLabel)).toEqual(['PDF', 'Spreadsheet', 'Document', 'Markdown', 'Presentation']);
     expect(kindLabel({ kind: 'file', title: 'noext' })).toBe('File');
+  });
+});
+
+describe('file type filter', () => {
+  it('groups items by what they are', () => {
+    const group = (title: string, kind: LibraryItem['kind']) => typeGroup({ title, kind });
+    expect(group('Budget', 'sheet')).toBe('sheet');
+    expect(group('Pitch', 'deck')).toBe('deck');
+    expect(group('Notes', 'doc')).toBe('doc');
+    expect(group('README', 'markdown')).toBe('doc');
+    expect(group('Report.PDF', 'file')).toBe('pdf');
+    expect(group('photo.jpeg', 'file')).toBe('image');
+    expect(group('logo.webp', 'file')).toBe('image');
+    expect(group('demo.mov', 'file')).toBe('video');
+    expect(group('chart.html', 'file')).toBe('other');
+    expect(group('archive', 'file')).toBe('other');
+    // A document whose title happens to end like a file is still a document.
+    expect(group('holiday.png', 'doc')).toBe('doc');
   });
 });
