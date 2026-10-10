@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
+import { webImportName } from '../../server/importFile.ts';
+import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
 import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
@@ -139,23 +141,26 @@ const attachedFile = z.object({
   file_name: z.string().optional(),
 });
 
-/** Fetch an attached file from the host, within limits. Only https, and never an address on a private network. */
-async function download(url: string, fetchFn: typeof fetch, limit: number): Promise<Buffer> {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    throw new ToolError('The file address is not a valid URL.');
+/**
+ * Fetch a file from the web, within limits: one the host attached, or one at an address the model gave. Only
+ * https, and never an address on a private network (server/webFetch.ts checks every hop).
+ */
+async function download(url: string, fetchFn: typeof fetch, limit: number | ((name: string) => number)): Promise<FetchedFile> {
+  if (!/^https:\/\//i.test(url.trim())) {
+    let valid = true;
+    try {
+      new URL(url);
+    } catch {
+      valid = false;
+    }
+    throw new ToolError(valid ? 'Files can only be fetched from public https addresses.' : 'The file address is not a valid URL.');
   }
-  if (u.protocol !== 'https:' || /^(localhost|127\.|10\.|192\.168\.|169\.254\.|\[|0\.)/.test(u.hostname) || /^172\.(1[6-9]|2\d|3[01])\./.test(u.hostname)) throw new ToolError('Files can only be fetched from public https addresses.');
-  const res = await fetchFn(u, { redirect: 'follow', signal: AbortSignal.timeout(60_000) });
-  if (!res.ok) throw new ToolError(`Could not download the file (${res.status}).`);
-  const declared = Number(res.headers.get('content-length') ?? 0);
-  if (declared > limit) throw new ToolError(`The file is too large to import (over ${limit / 1024 / 1024} MB).`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > limit) throw new ToolError(`The file is too large to import (over ${limit / 1024 / 1024} MB).`);
-  if (!bytes.length) throw new ToolError('The file is empty.');
-  return bytes;
+  try {
+    return await fetchPublicFile(url.trim(), { limit, fetchFn });
+  } catch (e) {
+    if (e instanceof WebFetchError) throw new ToolError(/public internet/.test(e.message) ? 'Files can only be fetched from public https addresses.' : e.message);
+    throw e;
+  }
 }
 
 function ok(data: Record<string, unknown>): CallToolResult {
@@ -328,18 +333,21 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     {
       title: 'Import a file',
       description:
-        'Import any file the user attached and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) or Markdown file (.md) a new document; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, web page (.html, such as a page or chart you generated), video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer (a web page is rendered, with its scripts running in a sandbox), which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
+        'Import a file the user attached, or a file at a web address (url), and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files, including a picture or document found on the web: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) or Markdown file (.md) a new document; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, web page (.html, such as a page or chart you generated), video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer (a web page is rendered, with its scripts running in a sandbox), which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
       inputSchema: {
-        file: attachedFile.describe('The attached file.'),
+        file: attachedFile.optional().describe('The attached file. Give this or url.'),
+        url: z.string().max(2000).optional().describe('The https address of a file on the web to import instead of an attachment: the file itself (an image, a PDF, a .docx), not a page that shows it.'),
         title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: { 'openai/fileParams': ['file'] },
     },
-    async ({ file, title }) =>
+    async ({ file, url, title }) =>
       guard(async () => {
-        const bytes = await download(file.download_url, opts.fetchFn ?? fetch, importLimit(file.file_name));
-        const r = await service.importFile(bytes, file.file_name, title);
+        if (!file === !url) throw new ToolError('Give either file (an attachment) or url (a web address), not both.');
+        // An attachment brings its name; a web address gives one in its last part or its headers.
+        const got = file ? await download(file.download_url, opts.fetchFn ?? fetch, importLimit(file.file_name)) : await download(url!, opts.fetchFn ?? fetch, importLimit);
+        const r = await service.importFile(got.bytes, file ? file.file_name : webImportName(got.name, title), title);
         service.setOpen({ kind: r.file.kind, id: r.file.id });
         return ok({ ...r, ...service.state() });
       }),
@@ -416,13 +424,13 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     const { file, ...rest } = input as Record<string, unknown> & { file?: z.infer<typeof attachedFile> };
     const url = typeof rest[field] === 'string' ? rest[field].trim() : '';
     if (file?.download_url) {
-      const bytes = await download(file.download_url, opts.fetchFn ?? fetch, MAX_IMPORT_BYTES);
+      const { bytes } = await download(file.download_url, opts.fetchFn ?? fetch, MAX_IMPORT_BYTES);
       const type = sniffImageType(bytes) ?? file.mime_type ?? '';
       rest[field] = await service.storeImage(type, bytes);
     } else if (/^https?:/i.test(url) && !service.isOwnImage(url)) {
       // A web image is fetched and stored too: the app runs under a CSP that only allows our own origin,
       // and the model should hear now if the address is not an image.
-      const bytes = await download(url, opts.fetchFn ?? fetch, MAX_IMPORT_BYTES);
+      const { bytes } = await download(url, opts.fetchFn ?? fetch, MAX_IMPORT_BYTES);
       const type = sniffImageType(bytes);
       if (!type) throw new ToolError(`${url} is not a PNG, JPEG, GIF or WebP image. Give the address of the image file itself, not of a page that shows it.`);
       rest[field] = await service.storeImage(type, bytes);

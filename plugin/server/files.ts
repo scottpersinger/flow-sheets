@@ -7,8 +7,6 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { runClientTool, type ClientToolEnv } from '../../client/src/agent/clientTools.ts';
 import { runDeckTool } from '../../client/src/agent/deckTools.ts';
-import { importDocx, isDocx } from '../../server/docxImport.ts';
-import { importPptx, isPptx } from '../../server/pptxImport.ts';
 import { importExcel, ImportError } from '../../server/xlsxImport.ts';
 import { runDocTool } from '../../client/src/agent/docTools.ts';
 import { ToolError } from '../../client/src/agent/toolError.ts';
@@ -21,10 +19,9 @@ import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
-import { CsvError, MAX_CSV_CHARS } from '../../shared/csv.ts';
-import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, videoTypeOf, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import { FileStore } from '../../server/files.ts';
-import { isPdf } from '../../server/pdfImport.ts';
+import { importBytes, ImportFileError } from '../../server/importFile.ts';
 
 export { ToolError };
 
@@ -35,31 +32,9 @@ export type FileData = Doc | Deck | Workbook;
 export type LibraryKind = FileKind | 'file';
 export const LIBRARY_KINDS: readonly LibraryKind[] = [...FILE_KINDS, 'file'];
 
-/** The largest file that can be imported: videos and PDFs are stored as they are, so they may be bigger. */
-export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
-export const MAX_PDF_BYTES = 50 * 1024 * 1024;
-export function importLimit(name: string | undefined): number {
-  if (name && videoTypeOf(name)) return MAX_VIDEO_BYTES;
-  return /\.pdf$/i.test(name ?? '') ? MAX_PDF_BYTES : MAX_IMPORT_BYTES;
-}
+export { importLimit, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType } from '../../server/importFile.ts';
 /** How long a link to a stored file's bytes works (the player asks for the file in pieces as it plays). */
 const FILE_LINK_MS = 6 * 60 * 60 * 1000;
-
-/** The image type from its first bytes (attachments arrive without a reliable type). */
-export function sniffImageType(bytes: Buffer): string | null {
-  if (bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) return 'image/png';
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
-  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
-  return null;
-}
-const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
-
-/** The text of an uploaded text file (UTF-8, without a byte order mark); refuses bytes that are not text. */
-function textOf(bytes: Buffer): string {
-  if (bytes.includes(0)) throw new ToolError('This file is not a text file.');
-  return bytes.toString('utf8').replace(/^\uFEFF/, '');
-}
 
 /** A save with a stale revision: someone else (the app, the model) changed the file first. */
 export class ConflictError extends Error {
@@ -356,70 +331,13 @@ export class FileService {
    * converters (pictures are stored for the account). The kind comes from the bytes, not the name.
    */
   async importFile(bytes: Buffer, name: string | undefined, title: string | undefined): Promise<{ file: FileSummary; warnings: string[] }> {
-    const baseTitle = (title?.trim() || name?.replace(/\.[^.]+$/, '').trim() || '').slice(0, 200);
-    const storeImage = (type: string, data: Buffer) => this.images.create(this.userId, type, data);
-    // A PDF, a video, an image or a web page is kept as it is and shown in the app's viewer.
-    const fileName = (name ?? '').replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200);
-    const videoType = videoTypeOf(fileName);
-    if (videoType) {
-      if (bytes.length > MAX_VIDEO_BYTES) throw new ToolError(`This video is too large to import (${MAX_VIDEO_BYTES / 1024 / 1024} MB maximum).`);
-      return { file: fileSummary(await this.hub.files.create(this.userId, fileName, videoType, bytes)), warnings: [] };
-    }
-    if (isPdf(bytes)) {
-      if (bytes.length > MAX_PDF_BYTES) throw new ToolError(`This PDF is too large to import (${MAX_PDF_BYTES / 1024 / 1024} MB maximum).`);
-      const pdfName = /\.pdf$/i.test(fileName) ? fileName : `${fileName || baseTitle || 'document'}.pdf`;
-      return { file: fileSummary(await this.hub.files.create(this.userId, pdfName, 'application/pdf', bytes)), warnings: [] };
-    }
-    if (bytes.length > MAX_IMPORT_BYTES) throw new ToolError(`This file is too large to import (${MAX_IMPORT_BYTES / 1024 / 1024} MB maximum).`);
-    // A web page (by its name, or by how it starts) is kept as it is too, and shown in a sandboxed frame.
-    if (isHtmlName(fileName) || /^\s*(<!doctype html|<html[\s>])/i.test(bytes.subarray(0, 1024).toString('utf8').replace(/^\uFEFF/, ''))) {
-      textOf(bytes);
-      const htmlName = isHtmlName(fileName) ? fileName : `${fileName || baseTitle || 'page'}.html`;
-      return { file: fileSummary(await this.hub.files.create(this.userId, htmlName, HTML_TYPE, bytes)), warnings: [] };
-    }
-    const imageType = sniffImageType(bytes);
-    if (imageType) {
-      const imageName = /\.(png|jpe?g|gif|webp)$/i.test(fileName) ? fileName : `${fileName || baseTitle || 'image'}.${IMAGE_EXT[imageType]}`;
-      return { file: fileSummary(await this.hub.files.create(this.userId, imageName, imageType, bytes)), warnings: [] };
-    }
     try {
-      if (await isDocx(bytes)) {
-        const { doc, warnings } = await importDocx(bytes, storeImage);
-        const problem = validateDoc(doc);
-        if (problem) throw new ToolError(problem);
-        return { file: summary(await this.sheets.createDoc(this.userId, baseTitle || 'Imported document', doc)), warnings };
-      }
-      if (await isPptx(bytes)) {
-        const { deck, warnings } = await importPptx(bytes, storeImage);
-        const problem = validateDeck(deck);
-        if (problem) throw new ToolError(problem);
-        return { file: summary(await this.sheets.createDeck(this.userId, baseTitle || 'Imported presentation', deck)), warnings };
-      }
-      // Text formats are told by their name: a CSV file stays a CSV file, and Markdown becomes a document.
-      if (/\.csv$/i.test(name ?? '')) {
-        const csv = textOf(bytes);
-        if (csv.length > MAX_CSV_CHARS) throw new ToolError('This file is too large to import (10 MB maximum).');
-        return { file: summary(await this.sheets.createCsv(this.userId, baseTitle || 'Imported CSV', csv)), warnings: [] };
-      }
-      if (/\.(md|markdown)$/i.test(name ?? '')) {
-        const doc = markdownToDoc(textOf(bytes));
-        const problem = validateDoc(doc);
-        if (problem) throw new ToolError(problem);
-        return { file: summary(await this.sheets.createDoc(this.userId, baseTitle || 'Imported document', doc)), warnings: [] };
-      }
-      if (/\.xlsx?$/i.test(name ?? '') || bytes.subarray(0, 2).toString('latin1') === 'PK' || bytes[0] === 0xd0) {
-        const { workbook, warnings } = await importExcel(bytes);
-        const problem = validateWorkbook(workbook);
-        if (problem) throw new ToolError(problem);
-        return { file: summary(await this.sheets.create(this.userId, baseTitle || 'Imported spreadsheet', workbook)), warnings };
-      }
+      const made = await importBytes({ sheets: this.sheets, images: this.images, files: this.hub.files }, this.userId, bytes, name, title);
+      return { file: made.sheet ? summary(made.sheet) : fileSummary(made.file), warnings: made.warnings };
     } catch (e) {
-      if (e instanceof ImportError || e instanceof CsvError) throw new ToolError(e.message);
+      if (e instanceof ImportFileError) throw new ToolError(e.message);
       throw e;
     }
-    throw new ToolError(
-      `This type of file${name ? ` (${fileName})` : ''} cannot be imported. Only Word documents (.docx), PowerPoint presentations (.pptx), Excel workbooks (.xlsx), CSV files (.csv), Markdown files (.md), PDFs (.pdf), web pages (.html), videos (.mp4, .mov, .webm) and images (PNG, JPEG, GIF, WebP) can be imported.`,
-    );
   }
 
   rename(kind: LibraryKind, id: string, title: string): FileSummary {

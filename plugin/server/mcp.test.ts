@@ -10,6 +10,7 @@ import { buildSlide, newId } from '../../shared/deck.ts';
 import { buildPptx } from '../../shared/pptxExport.ts';
 import { buildDocx } from '../../server/testing.ts';
 import { appHtml, appUri, createMcpServer } from './mcp.ts';
+import { resolver } from '../../server/webFetch.ts';
 
 const APP_URI = appUri('abc');
 
@@ -27,7 +28,11 @@ let dir: string;
 let client: Client;
 let svc: FileService;
 
+const realLookup = resolver.lookup;
+
 beforeEach(async () => {
+  // The pretend download hosts are on the public internet; nothing is looked up for real.
+  resolver.lookup = async (host) => (host === 'intranet.example' ? ['10.0.0.8'] : ['93.184.216.34']);
   dir = await mkdtemp(path.join(tmpdir(), 'docs-mcp-'));
   const db = openDb(path.join(dir, 'app.db'));
   db.prepare('INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)').run('u1', 'a@example.com', 'x', new Date().toISOString());
@@ -42,6 +47,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resolver.lookup = realLookup;
   await client.close();
   await rm(dir, { recursive: true, force: true });
 });
@@ -183,6 +189,17 @@ describe('MCP server', () => {
     attachments.set('https://files.example/photo', Buffer.from(PNG_BASE64, 'base64'));
     const img = await call('import_file', { file: { download_url: 'https://files.example/photo', file_name: 'photo' } });
     expect(img.data?.file).toMatchObject({ kind: 'file', title: 'photo.png', type: 'image/png' });
+    // A file at a web address is imported the same way, named by its address, and opened.
+    attachments.set('https://dogs.example/pics/golden-retriever.png', Buffer.from(PNG_BASE64, 'base64'));
+    const web = await call('import_file', { url: 'https://dogs.example/pics/golden-retriever.png' });
+    expect(web.data?.file).toMatchObject({ kind: 'file', title: 'golden-retriever.png', type: 'image/png' });
+    expect(web.data?.open).toMatchObject({ kind: 'file', title: 'golden-retriever.png' });
+    expect((await call('import_file', { url: 'https://dogs.example/pics/golden-retriever.png', title: 'Rex' })).data?.file).toMatchObject({ title: 'Rex.png' });
+    // Not from a private network, whatever the name; and one source at a time.
+    expect((await call('import_file', { url: 'https://intranet.example/a.png' })).text).toMatch(/public https/);
+    expect((await call('import_file', { url: 'http://dogs.example/pics/golden-retriever.png' })).text).toMatch(/public https/);
+    expect((await call('import_file', {})).text).toMatch(/either file .* or url/);
+    expect((await call('import_file', { url: 'https://dogs.example/x.png', file: { download_url: 'https://files.example/photo' } })).text).toMatch(/either file .* or url/);
     expect(((await call('list_files', { kind: 'doc' })).data?.files as unknown[]).length).toBe(2);
     // A web page is stored as it is, by its name or by how it starts.
     attachments.set('https://files.example/chart.html', Buffer.from('<h1>Chart</h1><script>document.title = 1</script>'));

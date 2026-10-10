@@ -9,6 +9,8 @@ import { openaiModel } from './openai.ts';
 import { renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
 import type { AssistantSettingsStore } from './settings.ts';
 import { AgentStore, type MessageParam, type Pending } from './store.ts';
+import type { FileStore } from '../files.ts';
+import type { ImageStore } from '../images.ts';
 import { runServerTool, TOOL_DEFS, ToolFailure, validateToolInput } from './tools.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
@@ -33,6 +35,9 @@ export interface AgentOptions {
   dailyRequestLimit?: number;
   /** Makes the model call for a user running the assistant on their own OpenAI key. Tests pass a stub. */
   openai?: (apiKey: string, model: string) => ModelCall;
+  /** Where import_file puts pictures and stored files. */
+  images?: ImageStore;
+  files?: FileStore;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -57,6 +62,8 @@ export class AgentService {
   private model: ModelCall | null;
   private openai: (apiKey: string, model: string) => ModelCall;
   private dailyLimit: number;
+  private images: ImageStore | undefined;
+  private files: FileStore | undefined;
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -66,6 +73,8 @@ export class AgentService {
     this.settings = settings;
     this.model = opts.model ?? null;
     this.openai = opts.openai ?? openaiModel;
+    this.images = opts.images;
+    this.files = opts.files;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -136,7 +145,7 @@ export class AgentService {
     this.store.append(conv.id, { role: 'user', content });
     this.store.setPending(conv.id, null);
 
-    const env = { userId, sheets: this.sheets, context: req.context };
+    const env = { userId, sheets: this.sheets, images: this.images, files: this.files, context: req.context };
     // The user's own OpenAI key and model when they set one in Settings; otherwise the server's model.
     const own = this.settings.openai(userId);
     const callModel = own ? this.openai(own.apiKey, own.model) : this.getModel();

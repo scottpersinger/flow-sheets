@@ -173,7 +173,7 @@ export async function buildApp(opts: AppOptions) {
   registerConnectorService(sheets, connectors);
   // Created after the connector service, which makes the encryption key file they share.
   const assistantSettings = new AssistantSettingsStore(db, path.join(opts.dataDir, 'connector.key'));
-  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, opts.agent);
+  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { ...opts.agent, images, files: storedFiles });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.

@@ -11,6 +11,10 @@ import { mailbox, signUp } from './testing.ts';
 
 const box = mailbox();
 import type { SheetStore } from './sheets.ts';
+import type { FileStore } from './files.ts';
+import type { ImageStore } from './images.ts';
+import { resolver } from './webFetch.ts';
+import { webImportName } from './importFile.ts';
 
 type Params = Parameters<ModelCall>[0];
 type Block = Anthropic.Beta.BetaContentBlock;
@@ -391,6 +395,49 @@ describe('web and image search tools', () => {
     resetSearchRateLimit();
     for (let i = 0; i < 20; i++) await runServerTool('web_search', { query: 'q' }, env).catch(() => {});
     await expect(runServerTool('web_search', { query: 'q' }, env)).rejects.toThrow(/rate limit/);
+  });
+
+  it('imports a file from a web address into the user’s files', async () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(20, 1)]);
+    const created: { filename: string; type: string; size: number }[] = [];
+    const csvs: { title: string; csv: string }[] = [];
+    const files = { create: async (_owner: string, filename: string, type: string, data: Buffer) => (created.push({ filename, type, size: data.length }), { id: `f${created.length}`, filename, type, size: data.length, createdAt: '2026-01-01', url: '', downloadUrl: '' }) } as unknown as FileStore;
+    const sheets = { createCsv: async (_owner: string, title: string, csv: string) => (csvs.push({ title, csv }), { id: 's1', kind: 'sheet', title, updatedAt: '', createdAt: '' }) } as unknown as SheetStore;
+    const env = { userId: 'import-user', sheets, images: {} as ImageStore, files, context: home };
+    const realLookup = resolver.lookup;
+    resolver.lookup = async (host) => (host === 'intranet.example.com' ? ['192.168.1.20'] : ['93.184.216.34']);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url === 'https://cdn.example.com/dogs/golden.png') return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } });
+        if (url === 'https://cdn.example.com/photo?id=3') return new Response(new Uint8Array(png));
+        if (url === 'https://data.example.com/sales.csv') return new Response('a,b\n1,2\n');
+        if (url === 'https://cdn.example.com/notes.txt') return new Response('just some words');
+        return new Response('gone', { status: 404 });
+      }),
+    );
+    try {
+      expect(JSON.parse(await runServerTool('import_file', { url: 'https://cdn.example.com/dogs/golden.png' }, env))).toMatchObject({ imported: true, kind: 'file', file_id: 'f1', filename: 'golden.png', type: 'image/png', size: 28, note: expect.stringContaining('view_image') });
+      // An address without a file name: the title names the picture, and its bytes give the type.
+      expect(JSON.parse(await runServerTool('import_file', { url: 'https://cdn.example.com/photo?id=3', title: 'Golden retriever' }, env))).toMatchObject({ filename: 'Golden retriever.png' });
+      expect(webImportName('IMG_8392.JPG', 'Golden retriever')).toBe('Golden retriever.JPG');
+      expect(webImportName('sales.csv', 'Q3/Q4 sales.csv')).toBe('Q3_Q4 sales.csv');
+      expect(webImportName('', ' ')).toBeUndefined();
+      expect(created.map((c) => c.type)).toEqual(['image/png', 'image/png']);
+      expect(JSON.parse(await runServerTool('import_file', { url: 'https://data.example.com/sales.csv', title: 'Sales' }, env))).toMatchObject({ kind: 'spreadsheet', sheet_id: 's1', title: 'Sales', note: expect.stringContaining('open_sheet') });
+      expect(csvs).toEqual([{ title: 'Sales', csv: 'a,b\n1,2\n' }]);
+      // Problems come back as something to tell the user.
+      await expect(runServerTool('import_file', { url: 'https://cdn.example.com/notes.txt' }, env)).rejects.toThrow(/cannot be imported/);
+      await expect(runServerTool('import_file', { url: 'https://cdn.example.com/missing.png' }, env)).rejects.toThrow(/\(404\)/);
+      await expect(runServerTool('import_file', { url: 'https://intranet.example.com/a.png' }, env)).rejects.toThrow(/public internet/);
+      await expect(runServerTool('import_file', { url: 'http://169.254.169.254/latest' }, env)).rejects.toThrow(/public internet/);
+      await expect(runServerTool('import_file', { url: 'https://cdn.example.com/dogs/golden.png' }, { ...env, files: undefined })).rejects.toThrow(/cannot be imported here/);
+    } finally {
+      resolver.lookup = realLookup;
+    }
+    expect(validateToolInput('import_file', { url: '' }).ok).toBe(false);
+    expect(validateToolInput('import_file', { url: 'https://x.example.com/a.png', title: 'A' }).ok).toBe(true);
   });
 
   it('validates the inputs', () => {

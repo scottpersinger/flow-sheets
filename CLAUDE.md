@@ -46,6 +46,10 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   (`client/src/image/imageOps.ts`) with the same engine: in the open editor when the picture is open there
   (`activeEditor.ts`), else in one off screen (`hiddenEngine.ts`). The engine needs a browser canvas, so tests
   use `fakeEngine.ts`.
+- Importing a file's bytes, whatever they are, is `server/importFile.ts` (`importBytes`: a Word, PowerPoint,
+  Excel, CSV or Markdown file becomes a file the app edits; a PDF, video, picture or web page is stored as
+  it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
+  with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app
