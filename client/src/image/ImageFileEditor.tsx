@@ -8,6 +8,7 @@ import { ConfirmModal } from '../components/Modal.tsx';
 import { editedCopyName, editSize } from './limits.ts';
 
 const ImageEditorHost = lazy(() => import('./ImageEditorHost.tsx'));
+const loadBackgroundRemoval = () => import('@imgly/background-removal');
 
 export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: StoredFile; /** The file was saved over. */ onSaved(file: StoredFile): void; /** A copy was made. */ onCopied(file: StoredFile): void; onClose(): void }) {
   const [source, setSource] = useState<Blob | null>(null);
@@ -83,7 +84,7 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
       <div className="image-editor-stage">
         {source ? (
           <Suspense fallback={<div className="muted">Loading the editor…</div>}>
-            <ImageEditorHost source={source} type={file.type} onReady={onReady} onError={setError} />
+            <ImageEditorHost source={source} type={file.type} onReady={onReady} onError={setError} backgroundRemovalLoader={loadBackgroundRemoval} />
           </Suspense>
         ) : (
           !error && <div className="muted">Loading…</div>

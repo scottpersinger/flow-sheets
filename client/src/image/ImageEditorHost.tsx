@@ -3,7 +3,7 @@
 // and Fabric stay out of the app's first load. It knows nothing about where the picture came from or where it
 // is saved: the surface that opens it (an image file, later a picture in a document) supplies both.
 import { useMemo } from 'react';
-import { ImageEditor, type AspEditorError, type AspEditorHandle, type AspExportFormat } from '@ascentsparksoftware/react-image-editor';
+import { ImageEditor, type AspBackgroundRemovalLoader, type AspEditorError, type AspEditorHandle, type AspExportFormat } from '@ascentsparksoftware/react-image-editor';
 import '@ascentsparksoftware/react-image-editor/styles.css';
 import { MAX_EDIT_IMAGE_DIM, MAX_EDIT_IMAGE_PIXELS } from './limits.ts';
 
@@ -16,9 +16,15 @@ export interface ImageEditorHostProps {
   /** The editor's engine, each time the picture has loaded into it; `exportBlob()` gives the edited picture. */
   onReady(handle: AspEditorHandle): void;
   onError(message: string): void;
+  /**
+   * Turns on Remove background and Cut out subject: a model that runs in the browser, fetched the first time
+   * one of them is used (the picture itself is not sent anywhere). The surface passes it, so one that cannot
+   * load the model (the plugin's app, one inlined script under a strict content policy) does not carry it.
+   */
+  backgroundRemovalLoader?: AspBackgroundRemovalLoader;
 }
 
-export default function ImageEditorHost({ source, type, onReady, onError }: ImageEditorHostProps) {
+export default function ImageEditorHost({ source, type, onReady, onError, backgroundRemovalLoader }: ImageEditorHostProps) {
   const formats = useMemo(() => [FORMATS[type] ?? 'png'], [type]);
   return (
     <ImageEditor
@@ -31,6 +37,7 @@ export default function ImageEditorHost({ source, type, onReady, onError }: Imag
       exportFormats={formats}
       exportQuality={92}
       accentColor="#1a73e8"
+      backgroundRemovalLoader={backgroundRemovalLoader ?? null}
       onReady={onReady}
       onError={(e: AspEditorError) => onError(e.message)}
     />
