@@ -6,6 +6,9 @@ import { csvToWorkbook } from '../../../shared/csv.ts';
 import { SheetController } from '../state/controller.ts';
 import { csvGuard } from '../state/store.ts';
 import { confirmationFor, runClientTool, ToolError, type ClientToolEnv } from './clientTools.ts';
+import type { AspEditorHandle } from '@ascentsparksoftware/react-image-editor';
+import { setActiveImageEditor } from '../image/activeEditor.ts';
+import { fakeEngine } from '../image/fakeEngine.ts';
 
 function setup(wb: Workbook = newWorkbook('t1')) {
   const ctl = new SheetController(wb, async () => {});
@@ -304,6 +307,79 @@ describe('stored files', () => {
     await expect(call('edit_image', { file_id: 'd', prompt: 'x' })).rejects.toThrow(/Only PNG, JPEG and WebP/);
     // No room left in the message: the tool says so instead of failing.
     expect(await call('view_image', { file_id: 'p' })).toMatchObject({ image: expect.stringContaining('Not attached') });
+  });
+
+  it('edits a stored picture exactly: a copy by default, over the file when asked, in the open editor when there is one', async () => {
+    const { env, call } = setup();
+    const meta = (id: string, filename: string, type: string) => ({ id, filename, type, size: 10, createdAt: '2026-01-01', url: `/api/files/${id}`, downloadUrl: `/api/files/${id}/download` });
+    const files: Record<string, ReturnType<typeof meta>> = { p: meta('p', 'photo.jpg', 'image/jpeg'), g: meta('g', 'anim.gif', 'image/gif') };
+    const attached: string[] = [];
+    const opened: string[] = [];
+    const saved: string[] = [];
+    let last = fakeEngine(1, 1);
+    let closed = 0;
+    env.readFile = async (id) => ({ file: files[id], data: new TextEncoder().encode(`bytes of ${id}`).buffer as ArrayBuffer });
+    env.toAgentImage = async (file, data) => ({ mediaType: 'image/png', data: `${file.id}:${new TextDecoder().decode(data)}` });
+    env.attachImage = (img) => attached.push(img.data) > 0;
+    env.imageSize = async () => ({ width: 3000, height: 2000 });
+    env.openFile = async (id) => (opened.push(id), files[id]);
+    env.saveImage = async (id, image) => (saved.push(`over ${id}: ${await image.text()} (${image.type})`), files[id]);
+    env.saveImageCopy = async (of, image) => {
+      saved.push(`copy of ${of.id}: ${await image.text()} (${image.type})`);
+      files.c = meta('c', 'photo-edited.jpg', 'image/jpeg');
+      return files.c;
+    };
+    env.openImageEngine = async () => {
+      last = fakeEngine(3000, 2000);
+      const made = last;
+      return { engine: made.engine, bake: made.bake, export: async (type) => new Blob([made.log.join('; ')], { type }), close: async () => void closed++ };
+    };
+
+    // view_image reports the size positions are given in.
+    expect(await call('view_image', { file_id: 'p' })).toMatchObject({ width: 3000, height: 2000 });
+
+    const ops = [{ op: 'crop', x: 0, y: 0, width: 1500, height: 1000 }, { op: 'text', text: 'Sale', x: 50, y: 50, size: 100 }];
+    expect(await call('transform_image', { file_id: 'p', operations: ops })).toMatchObject({ edited: true, file_id: 'c', filename: 'photo-edited.jpg', source_file_id: 'p', applied: ['Cropped to 1500 × 1000', 'Added text “Sale”'], size: { width: 1500, height: 1000 }, saved: true, note: 'A new file, open now; the original is unchanged.' });
+    expect(saved).toEqual(['copy of p: crop 0,0 1500x1000; text "Sale" at 50,50 size 100 #000000 (image/jpeg)']);
+    expect(opened).toEqual(['c']);
+    expect(attached.at(-1)).toBe('c:crop 0,0 1500x1000; text "Sale" at 50,50 size 100 #000000');
+    expect(closed).toBe(1);
+
+    // Saving over the file is asked about first, and done when asked for.
+    const replace = { id: 't', name: 'transform_image', input: { file_id: 'p', operations: [{ op: 'rotate', degrees: 90 }], save: 'replace' } };
+    expect(confirmationFor(replace, null)).toMatch(/over the original file/);
+    expect(confirmationFor({ ...replace, input: { ...replace.input, save: 'copy' } }, null)).toBeNull();
+    expect(await call('transform_image', replace.input)).toMatchObject({ file_id: 'p', saved: true, size: { width: 2000, height: 3000 }, note: expect.stringContaining('Saved over the file') });
+    expect(saved.at(-1)).toBe('over p: rotate 90 (image/jpeg)');
+
+    // A problem with an operation is one Claude can fix; nothing is saved, and the engine is let go.
+    await expect(call('transform_image', { file_id: 'p', operations: [{ op: 'crop', x: 9000, y: 0, width: 10, height: 10 }] })).rejects.toThrow(/Operation 1 \(crop\): That rectangle is outside the picture/);
+    await expect(call('transform_image', { file_id: 'p', operations: [{ op: 'crop', x: 9000, y: 0, width: 10, height: 10 }] })).rejects.toBeInstanceOf(ToolError);
+    expect(saved).toHaveLength(2);
+    expect(closed).toBe(4);
+    await expect(call('transform_image', { file_id: 'g', operations: ops })).rejects.toThrow(/only PNG, JPEG and WebP/);
+    await expect(call('transform_image', { file_id: 'p', operations: [] })).rejects.toThrow(/at least one operation/);
+
+    // Open in the image editor: the edits are made there as one step, shown, and not saved.
+    const live = fakeEngine(3000, 2000);
+    let refreshed = 0;
+    const batches: string[] = [];
+    const engine = Object.assign(live.engine, { batch: async <T,>(label: string, fn: () => T | Promise<T>) => (batches.push(label), fn()) });
+    setActiveImageEditor({ fileId: 'p', handle: { engine, refresh: () => void refreshed++, exportBlob: async () => new Blob(['the editor’s picture'], { type: 'image/jpeg' }) } as unknown as AspEditorHandle });
+    try {
+      expect(confirmationFor(replace, null)).toBeNull();
+      expect(await call('transform_image', { file_id: 'p', operations: ops, save: 'replace' })).toMatchObject({ file_id: 'p', saved: false, applied: ['Cropped to 1500 × 1000', 'Added text “Sale”'], note: expect.stringContaining('not saved until the user saves') });
+      expect(live.log).toEqual(['crop 0,0 1500x1000', 'text "Sale" at 50,50 size 100 #000000']);
+      expect(batches).toEqual(['Assistant edit']);
+      expect(refreshed).toBe(1);
+      expect(attached.at(-1)).toBe('p:the editor’s picture');
+      expect(saved).toHaveLength(2);
+      // The panels follow even when an operation fails part way.
+      await expect(call('transform_image', { file_id: 'p', operations: [{ op: 'rotate', degrees: 90 }] })).rejects.toThrow(/cropped or has layers/);
+      expect(refreshed).toBe(2);
+    } finally {
+      setActiveImageEditor(null);
+    }
   });
 
   it('edits a text file with exact replacements, saving nothing unless every one matches', async () => {

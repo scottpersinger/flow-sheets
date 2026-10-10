@@ -109,6 +109,10 @@ export function toolLabel(name: string, i: Input): string {
       return 'Looked at a picture';
     case 'edit_image':
       return 'Made an edited copy of a picture';
+    case 'transform_image': {
+      const n = Array.isArray(i.operations) ? i.operations.length : 0;
+      return `Edited a picture (${n} ${n === 1 ? 'change' : 'changes'})`;
+    }
     case 'read_file':
       return i.offset ? 'Read more of a file' : 'Read a file';
     case 'render_slide':

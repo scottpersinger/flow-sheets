@@ -20,6 +20,7 @@ import type { MarkdownController } from '../markdown/controller.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
 import type { DocController } from '../doc/controller.ts';
 import { TransactionRefused } from '../state/store.ts';
+import { IMAGE_TOOLS, replacesImageFile, runImageTool, type ImageToolEnv } from './imageTools.ts';
 import { ToolError } from './toolError.ts';
 
 export { ToolError };
@@ -27,7 +28,7 @@ export { ToolError };
 /** What open_doc resolves with: the controller of the text or Markdown document now open. */
 export type OpenedDoc = { kind: 'doc'; ctl: DocController } | { kind: 'markdown'; ctl: MarkdownController };
 
-export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImage'> {
+export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImage'>, ImageToolEnv {
   /** The open spreadsheet, or null on other pages. */
   ctl: SheetController | null;
   /** The open presentation, or null on other pages. */
@@ -53,6 +54,8 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   /** Replace a stored text file's contents, or (revert) put back the version before the last replacement. */
   writeFile?(id: string, text: string): Promise<StoredFile>;
   revertFile?(id: string): Promise<StoredFile>;
+  /** A picture's size in pixels, which positions in transform_image are given in. */
+  imageSize?(data: ArrayBuffer, type: string): Promise<{ width: number; height: number }>;
   /** A stored picture made ready for Claude to look at (scaled down if it is large). */
   toAgentImage?(file: StoredFile, data: ArrayBuffer): Promise<AgentImage>;
   /** Make an edited copy of a stored picture with the image model; resolves with the new file. */
@@ -129,6 +132,7 @@ export function confirmationFor(call: ClientToolCall, ctl: SheetController | nul
   if (call.name === 'request_app_change') {
     return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.`;
   }
+  if (replacesImageFile(call)) return 'Save the edited picture over the original file? The version before it is kept, and can be put back once.';
   if (DECK_TOOLS.has(call.name)) return deckConfirmationFor(call, deck);
   if (DOC_TOOLS.has(call.name)) return markdown ? markdownConfirmationFor(call, markdown) : docConfirmationFor(call, doc);
   if (!ctl) return null;
@@ -229,8 +233,11 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
   if (call.name === 'view_image') {
     if (!env.readFile) throw new ToolError('Stored files are not available here.');
     const { file, data } = await env.readFile(String(i.file_id));
-    return JSON.stringify({ file_id: file.id, filename: file.filename, type: file.type, size: file.size, image: await attachPicture(env, file, data) });
+    // Its size in pixels, when it can be measured: what you are shown may be scaled down.
+    const pixels = await env.imageSize?.(data, file.type).catch(() => undefined);
+    return JSON.stringify({ file_id: file.id, filename: file.filename, type: file.type, size: file.size, ...(pixels ? { width: pixels.width, height: pixels.height } : {}), image: await attachPicture(env, file, data) });
   }
+  if (IMAGE_TOOLS.has(call.name)) return runImageTool(call, env, (file, data) => attachPicture(env, file, data));
   if (call.name === 'edit_image') {
     if (!env.editImage || !env.readFile) throw new ToolError('Pictures cannot be edited here.');
     const made = await env.editImage(String(i.file_id), String(i.prompt));

@@ -7,6 +7,7 @@ import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELE
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, ApiError } from '../api.ts';
+import { editedCopyName } from '../image/limits.ts';
 import { prepareImage } from './images.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
@@ -524,6 +525,19 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
             return file;
           },
+          imageSize: async (data, type) => {
+            const bitmap = await createImageBitmap(new Blob([data], { type }));
+            const size = { width: bitmap.width, height: bitmap.height };
+            bitmap.close();
+            return size;
+          },
+          saveImage: async (id, image) => {
+            const file = await api.updateImageFile(id, image);
+            window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
+            return file;
+          },
+          saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename), image, of.folder),
+          openImageEngine: async (source) => (await import('../image/hiddenEngine.ts')).openHiddenEngine(source),
           toAgentImage: async (file, data) => {
             const { mediaType, data: base64 } = await prepareImage(new File([data], file.filename, { type: file.type }));
             return { mediaType, data: base64 };

@@ -5,6 +5,7 @@ import type { AspEditorHandle } from '@ascentsparksoftware/react-image-editor';
 import type { StoredFile } from '../../../shared/types.ts';
 import { api } from '../api.ts';
 import { ConfirmModal } from '../components/Modal.tsx';
+import { setActiveImageEditor } from './activeEditor.ts';
 import { editedCopyName, editSize } from './limits.ts';
 
 const ImageEditorHost = lazy(() => import('./ImageEditorHost.tsx'));
@@ -40,10 +41,16 @@ export function ImageFileEditor({ file, onSaved, onCopied, onClose }: { file: St
     };
   }, [file.url, file.type]);
 
-  const onReady = useCallback((h: AspEditorHandle) => {
-    handle.current = h;
-    setReady(true);
-  }, []);
+  // While the editor is open the assistant's transform_image edits in it instead of the file.
+  const onReady = useCallback(
+    (h: AspEditorHandle) => {
+      handle.current = h;
+      setActiveImageEditor({ fileId: file.id, handle: h });
+      setReady(true);
+    },
+    [file.id],
+  );
+  useEffect(() => () => setActiveImageEditor(null), [file.id]);
 
   const run = async (what: 'save' | 'copy') => {
     const h = handle.current;

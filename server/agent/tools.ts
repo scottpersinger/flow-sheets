@@ -301,6 +301,57 @@ export const schemas = {
     .describe(
       'Edit a stored picture with an image-generation model: change, add or remove things in it, restyle it, replace its background and so on. The result is a new file next to the original (which is not changed); it opens in the app and is attached after the tool results so you can check it. It takes up to a minute or two. The model redraws the picture, so small details can shift: look at the result, and call edit_image again on the original with a better prompt if it is wrong.',
     ),
+  transform_image: z
+    .object({
+      file_id: z.string().describe('The picture to edit (PNG, JPEG or WebP).'),
+      operations: z
+        .array(
+          z
+            .object({
+              op: z.enum(['crop', 'rotate', 'straighten', 'flip', 'resize', 'adjust', 'filter', 'text', 'shape', 'redact', 'remove_background']).describe(
+                'crop: keep the rectangle x, y, width, height. rotate: degrees 90, 180 or 270 clockwise (negative for counterclockwise). straighten: degrees between -45 and 45. flip: axis. resize: scale down to width (the height follows; never up). adjust: any of brightness, contrast, saturation, vibrance, hue, blur. filter: name. text: text at x, y (its top left corner), with size, color and so on. shape: kind, in the box x, y, width, height, or for a line or arrow from x1, y1 to x2, y2 (an arrow points at x2, y2). redact: hide the rectangle x, y, width, height. remove_background: make the background transparent (PNG and WebP keep it; a JPEG gets black).',
+              ),
+              x: z.number().optional().describe('Left edge, in pixels from the left of the picture (crop, redact, text, boxed shapes).'),
+              y: z.number().optional().describe('Top edge, in pixels from the top of the picture.'),
+              width: z.number().positive().optional().describe('Width in pixels (crop, redact, boxed shapes, resize). For text: where it wraps; defaults to the rest of the picture.'),
+              height: z.number().positive().optional().describe('Height in pixels (crop, redact, boxed shapes).'),
+              degrees: z.number().optional().describe('rotate and straighten.'),
+              axis: z.enum(['horizontal', 'vertical']).optional().describe('flip: horizontal mirrors left and right.'),
+              brightness: z.number().min(-100).max(100).optional(),
+              contrast: z.number().min(-100).max(100).optional(),
+              saturation: z.number().min(-100).max(100).optional(),
+              vibrance: z.number().min(-100).max(100).optional(),
+              hue: z.number().min(-180).max(180).optional().describe('Degrees.'),
+              blur: z.number().min(0).max(100).optional(),
+              name: z.enum(['grayscale', 'sepia', 'invert', 'sharpen', 'none']).optional().describe('filter: none removes the filters.'),
+              text: z.string().max(2000).optional(),
+              size: z.number().positive().optional().describe('text: font size in pixels of the picture. Default 48; a headline on a 3000 pixel wide photo wants 150 or more.'),
+              color: z.string().optional().describe('text and shapes: a CSS color such as #ff0000. Text defaults to black, shapes to red.'),
+              font: z.string().optional().describe('text: a font family.'),
+              bold: z.boolean().optional(),
+              italic: z.boolean().optional(),
+              align: z.enum(['left', 'center', 'right']).optional().describe('text: within its width.'),
+              background: z.string().optional().describe('text: a color behind it, to keep it readable over a busy picture.'),
+              kind: z.enum(['rect', 'ellipse', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star', 'line', 'arrow']).optional().describe('shape.'),
+              x1: z.number().optional().describe('line and arrow: where it starts.'),
+              y1: z.number().optional(),
+              x2: z.number().optional().describe('line and arrow: where it ends (the arrow head).'),
+              y2: z.number().optional(),
+              stroke_width: z.number().positive().optional().describe('shape: outline thickness in pixels of the picture. Default 6.'),
+              fill: z.string().optional().describe('shape: a color inside it. Default none (outline only).'),
+              corner_radius: z.number().min(0).optional().describe('rect.'),
+              mode: z.enum(['solid', 'blur', 'pixelate']).optional().describe('redact. Default solid, which cannot be seen through.'),
+            })
+            .describe('One operation; give the fields its op uses.'),
+        )
+        .min(1)
+        .max(30)
+        .describe('Applied in order. Positions are pixels of the picture as it is at that point: after a crop they count from the cropped picture’s corner.'),
+      save: z.enum(['copy', 'replace']).optional().describe('copy (default): a new file next to the original, which stays as it is. replace: save over the original (the user is asked; the version before is kept for one undo).'),
+    })
+    .describe(
+      'Edit a stored picture exactly, with the app’s image editor: crop, rotate, flip, resize, adjust colors, filters, add text, shapes and arrows, redact, remove the background. Every pixel you do not name stays as it was. Call view_image first: it reports the picture’s width and height, which positions are given in. The result is attached after the tool results; look at it, and if something landed in the wrong place call transform_image again on the original with better numbers. If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.',
+    ),
   delete_slides: z.object({ slides: z.array(slideNumber).min(1).max(100) }).describe('Delete slides by number. The user is asked to confirm.'),
   move_slide: z.object({ slide: slideNumber, to: slideNumber.describe('The slide number it should have afterwards.') }).describe('Move a slide to another position.'),
   set_deck_theme: z.object({ theme: z.enum(THEME_IDS) }).describe('Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.'),

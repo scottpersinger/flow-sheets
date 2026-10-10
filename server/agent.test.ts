@@ -430,7 +430,7 @@ describe('app context', () => {
     expect(page).toContain('Open file: "index.html" (id f1), text/html, 250000 bytes');
     expect(page).toContain('read_file with this id returns its text, and edit_file changes it.');
     expect(renderContext({ page: 'file', fileId: 'f2', filename: 'clip.mp4', type: 'video/mp4', size: 10 })).toContain('read_file and edit_file cannot work on it');
-    expect(renderContext({ page: 'file', fileId: 'f3', filename: 'logo.png', type: 'image/png', size: 10 })).toContain('view_image with this id shows it to you, and edit_image makes an edited copy');
+    expect(renderContext({ page: 'file', fileId: 'f3', filename: 'logo.png', type: 'image/png', size: 10 })).toContain('view_image with this id shows it to you, transform_image makes exact edits to it');
     const boxed = renderContext({ page: 'file', fileId: 'f3', filename: 'logo.png', type: 'image/png', size: 10, selectedRegion: { x: 500, y: 250, width: 1000, height: 500, imageWidth: 2000, imageHeight: 1000 } });
     expect(boxed).toContain('1000×500 pixels with its top left corner at x 500, y 250, in the 2000×1000 picture');
     expect(boxed).toContain('from 25% to 75% of the width and from 25% to 75% of the height');

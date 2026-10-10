@@ -42,6 +42,10 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;
   `ImageFileEditor` is a stored picture being edited on `FilePage` (Save rewrites the file through
   `PUT /api/files/:id`, which keeps the version before for one revert; Save a copy makes a new file).
+  The assistant's `transform_image` (`client/src/agent/imageTools.ts`) applies its operations
+  (`client/src/image/imageOps.ts`) with the same engine: in the open editor when the picture is open there
+  (`activeEditor.ts`), else in one off screen (`hiddenEngine.ts`). The engine needs a browser canvas, so tests
+  use `fakeEngine.ts`.
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

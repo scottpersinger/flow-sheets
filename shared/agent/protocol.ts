@@ -265,6 +265,8 @@ export const CLIENT_TOOLS = new Set([
   // Pictures among the stored files: look at one, or make an edited copy with an image-generation model.
   'view_image',
   'edit_image',
+  // Exact edits with the image editor's engine (client/src/agent/imageTools.ts).
+  'transform_image',
   // Text documents: act on the open document (client/src/agent/docTools.ts).
   'open_doc',
   'read_doc',

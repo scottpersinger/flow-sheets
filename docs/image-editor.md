@@ -1,7 +1,7 @@
 # Image editor
 
-Status: the fork and phase 1 (editing an image file in the app) are built; the plugin's viewer, background
-removal and phases 2 to 4 are not. Decisions still open are listed at the end.
+Status: the fork, phase 1 (editing an image file in the app, with background removal) and phase 2 (the
+assistant in the app) are built; the plugin's viewer and phases 3 and 4 are not. Decisions still open are listed at the end.
 
 A full image editor for pictures stored as files, built so the same editor later edits pictures inside
 documents, spreadsheets and presentations, and so the assistant (in the app and over the MCP plugin) edits
@@ -90,7 +90,11 @@ Two tools, both browser tools (`CLIENT_TOOLS`), following "How to add an assista
 
 - `view_image` exists. Its result gains the picture's pixel width and height, which the model needs for
   coordinates.
-- `transform_image` is new: `{ file_id, operations: [...], save: 'replace' | 'copy' }`.
+- `transform_image` is new: `{ file_id, operations: [...], save: 'copy' | 'replace' }` (copy is the default).
+  The operations are applied by `client/src/image/imageOps.ts`.
+  - Turning or flipping a picture that is already cropped or drawn on: the engine turns the photo alone,
+    under its crop and its layers. A hidden engine flattens the picture first; in the open editor, whose
+    layers must stay editable, the operation is refused with a message saying so.
   - Editor open on that file: the operations run on its engine as one undo step, the user sees them, and
     nothing is saved until the user saves (`save` is ignored and the result says so).
   - Otherwise: a hidden engine loads the file, applies the operations, exports, and saves as `save` says.
