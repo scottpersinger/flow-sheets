@@ -300,7 +300,7 @@ export function HomePage() {
       }}
       importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT},${HTML_ACCEPT},${IMAGE_ACCEPT},${VIDEO_ACCEPT}`}
       importLabel="Import Excel, PowerPoint, Word, PDF, Markdown, CSV, HTML or video"
-      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md), CSV (.csv), web page (.html), picture (.png, .jpg, .gif, .webp) or video (.mp4, .mov, .webm) file anywhere on this page."
+      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md), CSV (.csv), web page (.html), picture (.png, .jpg, .gif, .webp) or video (.mp4, .mov, .webm) file anywhere on this page, or paste a picture or text to make a file of it."
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => navigate(pathOf(s))}

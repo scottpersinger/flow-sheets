@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { videoTypeOf, type SheetMeta } from '../../../shared/types.ts';
 import { DeckIcon, DocIcon, Logo, MarkdownIcon } from './Logo.tsx';
+import { pastedFile } from '../pastedFile.ts';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
 
 /** What a row can be: a spreadsheet, presentation, document or Markdown document, or a stored file such as a PDF. */
@@ -326,6 +327,27 @@ export function FileLibrary(props: FileLibraryProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Pasting on the page imports what was copied, as dropping a file does: a picture becomes a picture file and
+  // text a Markdown document. Not while a field or a dialog has the keyboard: there a paste is typing.
+  const onImportRef = useRef(props.onImport);
+  onImportRef.current = props.onImport;
+  const importingRef = useRef(importing);
+  importingRef.current = importing;
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (e.defaultPrevented || importingRef.current) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (document.querySelector('.modal-backdrop')) return;
+      const file = pastedFile(e.clipboardData);
+      if (!file) return;
+      e.preventDefault();
+      onImportRef.current(file);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
   }, []);
 
   const q = filter.trim().toLowerCase();
