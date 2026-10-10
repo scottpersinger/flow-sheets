@@ -352,6 +352,16 @@ describe('stored files', () => {
     expect(await call('transform_image', replace.input)).toMatchObject({ file_id: 'p', saved: true, size: { width: 2000, height: 3000 }, note: expect.stringContaining('Saved over the file') });
     expect(saved.at(-1)).toBe('over p: rotate 90 (image/jpeg)');
 
+    // Removing a JPEG's background makes the copy a PNG, which can be transparent.
+    env.openImageEngine = async () => {
+      last = fakeEngine(3000, 2000, { backgroundRemoval: true });
+      const made = last;
+      return { engine: made.engine, bake: made.bake, export: async (type) => new Blob([made.log.join('; ')], { type }), close: async () => void closed++ };
+    };
+    expect(await call('transform_image', { file_id: 'p', operations: [{ op: 'remove_background' }] })).toMatchObject({ saved: true, note: expect.stringContaining('It is a PNG, so the removed background is transparent.') });
+    expect(saved.at(-1)).toBe('copy of p: remove background (image/png)');
+    saved.pop();
+    closed--;
     // A problem with an operation is one Claude can fix; nothing is saved, and the engine is let go.
     await expect(call('transform_image', { file_id: 'p', operations: [{ op: 'crop', x: 9000, y: 0, width: 10, height: 10 }] })).rejects.toThrow(/Operation 1 \(crop\): That rectangle is outside the picture/);
     await expect(call('transform_image', { file_id: 'p', operations: [{ op: 'crop', x: 9000, y: 0, width: 10, height: 10 }] })).rejects.toBeInstanceOf(ToolError);

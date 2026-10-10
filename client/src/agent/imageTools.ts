@@ -55,14 +55,18 @@ export async function runImageTool(call: ClientToolCall, env: ImageToolEnv, atta
   let result: Blob;
   let applied: string[];
   let size: { width: number; height: number } | null;
+  let transparentCopy = false;
+  const replace = i.save === 'replace';
   try {
     applied = await applyImageOps(hidden.engine, ops, hidden.bake).catch(fixable);
     size = hidden.engine.getOutputSize();
-    result = await hidden.export(file.type);
+    // A JPEG has no transparency: a copy whose background was removed is a PNG, so the background is gone
+    // instead of black. Saved over the file, the picture keeps its type.
+    transparentCopy = !replace && file.type === 'image/jpeg' && ops.some((op) => op.op === 'remove_background');
+    result = await hidden.export(transparentCopy ? 'image/png' : file.type);
   } finally {
     await hidden.close();
   }
-  const replace = i.save === 'replace';
   const saved = replace ? await env.saveImage(id, result) : await env.saveImageCopy(file, result);
   // Show the user the result, and Claude too; the edit stands even if either fails.
   let opened = false;
@@ -73,6 +77,9 @@ export async function runImageTool(call: ClientToolCall, env: ImageToolEnv, atta
   } catch {
     // Reported in the result.
   }
-  const note = replace ? 'Saved over the file; the version before it is kept (the user can put it back with Undo save on the file).' : `A new file${opened ? ', open now' : ''}; the original is unchanged.`;
+  const blackBackground = replace && file.type === 'image/jpeg' && ops.some((op) => op.op === 'remove_background');
+  const note =
+    (replace ? 'Saved over the file; the version before it is kept (the user can put it back with Undo save on the file).' : `A new file${opened ? ', open now' : ''}; the original is unchanged.`) +
+    (transparentCopy ? ' It is a PNG, so the removed background is transparent.' : blackBackground ? ' The file is a JPEG, which has no transparency, so the removed background is black; save a copy instead to get a transparent PNG.' : '');
   return JSON.stringify({ edited: true, file_id: saved.id, filename: saved.filename, ...(replace ? {} : { source_file_id: id }), applied, size, saved: true, note, image });
 }

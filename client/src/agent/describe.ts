@@ -170,7 +170,7 @@ export function toolLabel(name: string, i: Input): string {
     case 'web_search':
       return `Searched the web for “${i.query}”`;
     case 'import_file':
-      return 'Saved a file from the web';
+      return String(i.url ?? '').includes('/api/images/') ? 'Saved a picture to your files' : 'Saved a file from the web';
     case 'image_search':
       return `Searched for images of “${i.query}”`;
     default:

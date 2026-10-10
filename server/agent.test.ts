@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -403,7 +403,12 @@ describe('web and image search tools', () => {
     const csvs: { title: string; csv: string }[] = [];
     const files = { create: async (_owner: string, filename: string, type: string, data: Buffer) => (created.push({ filename, type, size: data.length }), { id: `f${created.length}`, filename, type, size: data.length, createdAt: '2026-01-01', url: '', downloadUrl: '' }) } as unknown as FileStore;
     const sheets = { createCsv: async (_owner: string, title: string, csv: string) => (csvs.push({ title, csv }), { id: 's1', kind: 'sheet', title, updatedAt: '', createdAt: '' }) } as unknown as SheetStore;
-    const env = { userId: 'import-user', sheets, images: {} as ImageStore, files, context: home };
+    // A picture pasted into the chat is stored for the user already; only its owner's lookup finds it.
+    const pasted = path.join(mkdtempSync(path.join(tmpdir(), 'pasted-')), 'img');
+    writeFileSync(pasted, png);
+    const pastedId = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const images = { get: (owner: string, id: string) => (owner === 'import-user' && id === pastedId ? { file: pasted, type: 'image/png' } : null) } as unknown as ImageStore;
+    const env = { userId: 'import-user', sheets, images, files, context: home };
     const realLookup = resolver.lookup;
     resolver.lookup = async (host) => (host === 'intranet.example.com' ? ['192.168.1.20'] : ['93.184.216.34']);
     vi.stubGlobal(
@@ -427,6 +432,13 @@ describe('web and image search tools', () => {
       expect(created.map((c) => c.type)).toEqual(['image/png', 'image/png']);
       expect(JSON.parse(await runServerTool('import_file', { url: 'https://data.example.com/sales.csv', title: 'Sales' }, env))).toMatchObject({ kind: 'spreadsheet', sheet_id: 's1', title: 'Sales', note: expect.stringContaining('open_sheet') });
       expect(csvs).toEqual([{ title: 'Sales', csv: 'a,b\n1,2\n' }]);
+      // A pasted picture is read from the user's stored images, not fetched, and named by its title.
+      const before = (fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+      expect(JSON.parse(await runServerTool('import_file', { url: `/api/images/${pastedId}`, title: 'Man holding a tabby cat' }, env))).toMatchObject({ imported: true, kind: 'file', filename: 'Man holding a tabby cat.png', type: 'image/png', size: 28 });
+      expect(JSON.parse(await runServerTool('import_file', { url: `http://localhost:5173/api/images/${pastedId}` }, env))).toMatchObject({ filename: 'image.png' });
+      expect((fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(before);
+      await expect(runServerTool('import_file', { url: `/api/images/${pastedId}` }, { ...env, userId: 'someone-else' })).rejects.toThrow(/no stored picture/);
+      await expect(runServerTool('import_file', { url: '/api/images/11111111-2222-3333-4444-555555555555' }, env)).rejects.toThrow(/no stored picture/);
       // Problems come back as something to tell the user.
       await expect(runServerTool('import_file', { url: 'https://cdn.example.com/notes.txt' }, env)).rejects.toThrow(/cannot be imported/);
       await expect(runServerTool('import_file', { url: 'https://cdn.example.com/missing.png' }, env)).rejects.toThrow(/\(404\)/);

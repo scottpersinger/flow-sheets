@@ -13,8 +13,14 @@ export function editSize(width: number, height: number): { width: number; height
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), reduced: true };
 }
 
-/** The name of an edited copy of a picture, of the same type: "logo.jpg" becomes "logo-edited.jpg". */
-export function editedCopyName(filename: string): string {
+const EXTENSIONS: Record<string, string> = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
+
+/**
+ * The name of an edited copy of a picture: "logo.jpg" becomes "logo-edited.jpg", or "logo-edited.png" when the
+ * copy is of another type (`type`) than the name says.
+ */
+export function editedCopyName(filename: string, type?: string): string {
   const ext = /\.[a-z0-9]+$/i.exec(filename)?.[0] ?? '';
-  return `${filename.slice(0, filename.length - ext.length).replace(/-edited$/, '')}-edited${ext}`;
+  const same = !type || !EXTENSIONS[type] || (type === 'image/jpeg' ? /^\.jpe?g$/i.test(ext) : ext.toLowerCase() === EXTENSIONS[type]);
+  return `${filename.slice(0, filename.length - ext.length).replace(/-edited$/, '')}-edited${same ? ext : EXTENSIONS[type!]}`;
 }

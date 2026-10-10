@@ -17,5 +17,9 @@ describe('image editor limits', () => {
     expect(editedCopyName('team photo.final.PNG')).toBe('team photo.final-edited.PNG');
     expect(editedCopyName('logo-edited.webp')).toBe('logo-edited.webp');
     expect(editedCopyName('scan')).toBe('scan-edited');
+    // A copy of another type takes that type's extension.
+    expect(editedCopyName('portrait.JPEG', 'image/jpeg')).toBe('portrait-edited.JPEG');
+    expect(editedCopyName('portrait.jpg', 'image/png')).toBe('portrait-edited.png');
+    expect(editedCopyName('scan', 'image/png')).toBe('scan-edited.png');
   });
 });

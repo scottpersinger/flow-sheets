@@ -536,7 +536,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
             return file;
           },
-          saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename), image, of.folder),
+          saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename, image.type), image, of.folder),
           openImageEngine: async (source) => (await import('../image/hiddenEngine.ts')).openHiddenEngine(source),
           toAgentImage: async (file, data) => {
             const { mediaType, data: base64 } = await prepareImage(new File([data], file.filename, { type: file.type }));
