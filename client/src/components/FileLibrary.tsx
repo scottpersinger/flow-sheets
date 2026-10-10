@@ -3,8 +3,8 @@
 // of the app (client/src/pages/HomePage.tsx) and the library inside ChatGPT (plugin/web/Library.tsx);
 // each passes its own data source, actions and header controls, so both look and behave the same.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { videoTypeOf, type SheetMeta } from '../../../shared/types.ts';
-import { DeckIcon, DocIcon, Logo, MarkdownIcon } from './Logo.tsx';
+import { isHtmlName, type SheetMeta } from '../../../shared/types.ts';
+import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon } from './Logo.tsx';
 import { pastedFile } from '../pastedFile.ts';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
 
@@ -131,7 +131,7 @@ export function kindIcon(item: Pick<LibraryItem, 'kind' | 'title'>, size = 18): 
   if (item.kind === 'deck') return <DeckIcon size={size} />;
   if (item.kind === 'doc') return <DocIcon size={size} />;
   if (item.kind === 'markdown') return <MarkdownIcon size={size} />;
-  if (item.kind === 'file') return <span className="file-chip-icon">{fileIcon(item.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : /\.(png|jpe?g|gif|webp)$/i.test(item.title) ? 'image/' : (videoTypeOf(item.title) ?? ''))}</span>;
+  if (item.kind === 'file') return <FileIcon kind={isHtmlName(item.title) ? 'page' : (typeGroup(item) as 'pdf' | 'image' | 'video' | 'other')} size={size} />;
   return <Logo size={size} />;
 }
 
@@ -734,7 +734,7 @@ export function FileLibrary(props: FileLibraryProps) {
                     {titleLink(
                       s,
                       <>
-                        <span style={{ width: depth * 22 }} className="tree-indent" />
+                        {depth > 0 && <span style={{ width: depth * 22 }} className="tree-indent" />}
                         {depth > 0 ? <span className="tree-elbow">└</span> : null}
                         {kindIcon(s)} {s.title}
                         {results && whereTag(s.folder ?? '')}
