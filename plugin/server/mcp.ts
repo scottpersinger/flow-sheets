@@ -416,7 +416,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'transform_image',
     {
       title: 'Edit a picture',
-      description: `${(schemas.transform_image.description ?? '').replace(' (a stored picture file by file_id, or a picture inside a presentation, document or spreadsheet by image)', '')} The editing is done by the app, so it must be showing: call open_file with the picture first. A background cannot be removed here (remove_background works in the full app).`.replace(' If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.', ' If the user has the picture open in the app’s image editor, the edits are made there instead, as one undo step, and are saved when the user saves.'),
+      description: `${(schemas.transform_image.description ?? '').replace(' (a stored picture file by file_id, or a picture inside a presentation, document or spreadsheet by image)', '')} The editing is done by the app, so it must be showing: call open_file with the picture first. remove_background is not available here: it fails with the address of the picture in the full app, where the user can remove the background; give them that link.`.replace(' If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.', ' If the user has the picture open in the app’s image editor, the edits are made there instead, as one undo step, and are saved when the user saves.'),
       // Stored picture files only: a picture inside a document is edited in the full app.
       inputSchema: { ...transformShape, file_id: fileId },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -425,6 +425,12 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       guard(async () => {
         const f = await service.editableImage(file_id);
         if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) throw new ToolError(`${f.meta.filename} cannot be edited: only PNG, JPEG and WebP pictures can.`);
+        // Removing a background takes a model the app here cannot load. Said at once, before anything is done,
+        // with where it can be done.
+        if (operations.some((op) => op.op === 'remove_background')) {
+          const where = opts.publicUrl ? ` Open ${f.meta.filename} there: ${opts.publicUrl}/f/${encodeURIComponent(f.meta.id)} , choose Edit, then Magic and Remove background (or ask the assistant there).` : '';
+          throw new ToolError(`Removing a background is only available in the full Universal Docs app, not here.${where} Nothing was changed. The other operations can be done here: call transform_image again without remove_background.`);
+        }
         const r = await service.runImageJob(file_id, operations, save === 'replace' ? 'replace' : 'copy');
         if (!r.ok) return fail(r.error ?? 'The picture could not be edited.');
         const resultId = r.file_id ?? file_id;

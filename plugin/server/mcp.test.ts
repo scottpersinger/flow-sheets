@@ -229,11 +229,16 @@ describe('MCP server', () => {
     await call('image_job_result', { job_id: failed![0].id, ok: false, error: 'Operation 1 (crop): That rectangle is outside the picture, which is 1 × 1 pixels at this point.' });
     expect(await failing).toMatchObject({ isError: true, text: expect.stringContaining('outside the picture') });
     expect((await call('transform_image', { file_id: 'nope', operations: [{ op: 'flip', axis: 'horizontal' }] })).text).toMatch(/no file nope/);
+    // Removing a background is for the full app: said at once, with nothing handed to the app and nothing changed.
+    const noRemoval = await call('transform_image', { file_id: imgId, operations: [{ op: 'rotate', degrees: 90 }, { op: 'remove_background' }] });
+    expect(noRemoval).toMatchObject({ isError: true, text: expect.stringMatching(/only available in the full Universal Docs app.*Nothing was changed/) });
+    expect((await call('app_state')).data?.jobs).toBeUndefined();
     expect((await call('transform_image', { file_id: imgId, operations: [] })).isError).toBe(true);
     // The app's own tools are not offered to the model.
     const offered = (await client.listTools()).tools;
     expect(offered.find((t) => t.name === 'image_job_result')?._meta).toMatchObject({ ui: { visibility: ['app'] } });
     expect(offered.find((t) => t.name === 'transform_image')?._meta?.ui).toBeUndefined();
+    expect(offered.find((t) => t.name === 'transform_image')?.description).toMatch(/remove_background is not available here/);
     // A web page is stored as it is, by its name or by how it starts.
     attachments.set('https://files.example/chart.html', Buffer.from('<h1>Chart</h1><script>document.title = 1</script>'));
     const html = await call('import_file', { file: { download_url: 'https://files.example/chart.html', file_name: 'chart.html' } });
