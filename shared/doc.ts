@@ -196,6 +196,18 @@ export const MAX_DOC_CHARS = 2_000_000;
 /** Widest an image can be, in CSS pixels, matching the page width in the editor. */
 export const DOC_PAGE_WIDTH = 760;
 /**
+ * The width to show a picture at after it was edited in the image editor. A picture with no width of its own
+ * keeps none (it is shown at its size, as wide as the page at most). One that kept its shape keeps its width.
+ * One that was cropped or turned is shown at the same scale as before: its width changes as its pixels did.
+ */
+export function editedImageWidth(width: number | null, before: { width: number; height: number } | null, after: { width: number; height: number } | null): number | null {
+  if (width === null || !before || !after || !(before.width > 0 && before.height > 0 && after.width > 0 && after.height > 0)) return width;
+  const [was, now] = [before.width / before.height, after.width / after.height];
+  if (Math.abs(was - now) / was < 0.01) return width;
+  return Math.max(40, Math.min(DOC_PAGE_WIDTH, Math.round((width * after.width) / before.width)));
+}
+
+/**
  * How a document looks when nothing says otherwise (the editor's stylesheet uses the same values). Text without
  * a font or size mark is drawn in the default family at the size of its block style; sizes are in points.
  */

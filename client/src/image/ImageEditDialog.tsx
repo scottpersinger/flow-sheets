@@ -1,7 +1,7 @@
 // The image editor over the page, for a picture that is inside something: a slide, a document, a cell. Such a
 // picture is never rewritten. Save hands the edited picture to the page, which stores it as a new image and
 // puts it where the old one was, so undo there brings the old one back.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EDITABLE_IMAGE_TYPES } from '../../../shared/types.ts';
 import { IMAGE_DIALOG_CLASS } from './dialogOpen.ts';
 import { ImageFileEditor, type PictureSizes } from './ImageFileEditor.tsx';
@@ -39,8 +39,16 @@ export function ImageEditDialog({ src, name, onSave, onClose }: { /** The pictur
     };
   }, [src]);
 
+  // The dialog takes the keyboard from the page: a Backspace meant for a layer of the picture must not reach
+  // a document's editor, which still has the picture's block selected.
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (document.activeElement instanceof HTMLElement && !root.current?.contains(document.activeElement)) document.activeElement.blur();
+    root.current?.focus();
+  }, []);
+
   return (
-    <div className={IMAGE_DIALOG_CLASS} role="dialog" aria-modal="true" aria-label="Edit image">
+    <div ref={root} tabIndex={-1} className={IMAGE_DIALOG_CLASS} role="dialog" aria-modal="true" aria-label="Edit image">
       <div className="image-edit-dialog-panel">
         {source ? (
           <ImageFileEditor

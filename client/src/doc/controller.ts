@@ -8,7 +8,7 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirr
 import { EditorState, NodeSelection, TextSelection, type Command, type Plugin, type Transaction } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { useSyncExternalStore } from 'react';
-import { docNode, docSchema, docStyleOf, pageSetupOf, type Alignment, type BlockType, type Doc, type DocStyle, type HeadingLevel, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
+import { editedImageWidth, docNode, docSchema, docStyleOf, pageSetupOf, type Alignment, type BlockType, type Doc, type DocStyle, type HeadingLevel, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
 import { AutoSaver } from '../state/store.ts';
 import { autoLinkOnEnter, autoLinkRule } from './autolink.ts';
 import { paginationOf, paginationPlugin, type Pagination } from './pagination.ts';
@@ -546,6 +546,29 @@ export class DocController {
   selectedImage(): { node: PMNode; pos: number } | null {
     const sel = this.state.selection;
     return sel instanceof NodeSelection && sel.node.type === n.image ? { node: sel.node, pos: sel.from } : null;
+  }
+
+  /**
+   * Put an edited picture in place of an image block's, as one step. The block is the one that was at `pos`
+   * with the picture `from`; if the document changed while the image editor was open, the first block with
+   * that picture. False when there is none any more.
+   */
+  replaceImage(pos: number, from: string, src: string, before: { width: number; height: number } | null, after: { width: number; height: number } | null): boolean {
+    const doc = this.state.doc;
+    const is = (node: PMNode | null | undefined) => !!node && node.type === n.image && node.attrs.src === from;
+    let at = pos >= 0 && pos < doc.content.size && is(doc.nodeAt(pos)) ? pos : -1;
+    if (at < 0) {
+      doc.descendants((node, p) => {
+        if (at < 0 && is(node)) at = p;
+        return at < 0;
+      });
+    }
+    if (at < 0) return false;
+    const node = doc.nodeAt(at)!;
+    return this.run((tr) => {
+      tr.setNodeMarkup(at, undefined, { ...node.attrs, src, width: editedImageWidth(node.attrs.width as number | null, before, after) });
+      tr.setSelection(NodeSelection.create(tr.doc, at));
+    });
   }
 
   setImageAttrs(attrs: Partial<{ alt: string; width: number | null; align: Alignment | null }>): boolean {

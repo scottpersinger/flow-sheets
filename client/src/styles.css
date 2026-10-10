@@ -3719,6 +3719,7 @@ button.agent-tool-label:hover {
 }
 /* The image editor over the page, for a picture inside a slide, a document or a cell. */
 .image-edit-dialog {
+  outline: none;
   position: fixed;
   inset: 0;
   z-index: 200;

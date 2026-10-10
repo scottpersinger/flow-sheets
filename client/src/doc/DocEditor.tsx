@@ -24,11 +24,13 @@ class ImageView implements NodeView {
   private view: EditorView;
   private getPos: () => number | undefined;
   private dragging = false;
+  private onEdit: (() => void) | undefined;
 
-  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, onEdit?: () => void) {
     this.node = node;
     this.view = view;
     this.getPos = getPos;
+    this.onEdit = onEdit;
     this.dom = document.createElement('figure');
     this.dom.className = 'doc-image';
     this.img = document.createElement('img');
@@ -37,6 +39,7 @@ class ImageView implements NodeView {
     this.handle.className = 'doc-image-handle';
     this.handle.title = 'Drag to resize';
     this.handle.addEventListener('mousedown', this.startResize);
+    this.img.addEventListener('dblclick', this.edit);
     this.dom.append(this.img, this.handle);
     this.render(node);
   }
@@ -75,7 +78,17 @@ class ImageView implements NodeView {
 
   destroy(): void {
     this.handle.removeEventListener('mousedown', this.startResize);
+    this.img.removeEventListener('dblclick', this.edit);
   }
+
+  /** A double-click selects the picture and opens the image editor on it. */
+  private edit = (e: MouseEvent): void => {
+    const pos = this.getPos();
+    if (!this.onEdit || pos === undefined) return;
+    e.preventDefault();
+    this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
+    this.onEdit();
+  };
 
   private startResize = (e: MouseEvent): void => {
     e.preventDefault();
@@ -207,11 +220,13 @@ function DocInlinePrompt({ ctl }: { ctl: DocController }) {
   );
 }
 
-export function DocEditor({ ctl, onImageFiles, onScale }: { ctl: DocController; onImageFiles(files: File[]): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
+export function DocEditor({ ctl, onImageFiles, onScale, onEditImage }: { ctl: DocController; onImageFiles(files: File[]): void; /** Open the image editor on the selected picture (a double-click on it). */ onEditImage?(): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const filesRef = useRef(onImageFiles);
   filesRef.current = onImageFiles;
+  const editRef = useRef(onEditImage);
+  editRef.current = onEditImage;
   const [available, setAvailable] = useState(0);
   const hasAgent = useHasAgent();
   useEffect(() => {
@@ -223,7 +238,7 @@ export function DocEditor({ ctl, onImageFiles, onScale }: { ctl: DocController; 
       state: ctl.state,
       dispatchTransaction: (tr) => ctl.dispatch(tr),
       plugins: [dropCursor({ color: '#1a73e8', width: 2 }), gapCursor()],
-      nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos) },
+      nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos, () => editRef.current?.()) },
       // While the prompt to the assistant has the focus the browser draws no cursor or selection here, so draw them.
       decorations: (state) => {
         const sel = state.selection;

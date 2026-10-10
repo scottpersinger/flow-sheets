@@ -313,7 +313,7 @@ export const schemas = {
       image: z
         .string()
         .optional()
-        .describe('Instead of file_id: the /api/images/... address of a picture inside a presentation, document or spreadsheet (an image element’s src in read_deck, for example). The edited picture is stored at a new address, which is returned: put it in place with edit_elements (src), insert_image or set_cell_image. The picture at the old address is not changed.'),
+        .describe('Instead of file_id: the /api/images/... address of a picture inside a presentation, document or spreadsheet (an image element’s src in read_deck, for example). The edited picture is stored at a new address, which is returned: put it in place with edit_elements (src) on a slide, replace_blocks (the picture’s block, as ![alt](address)) in a document, or set_cell_image in a cell. The picture at the old address is not changed.'),
       operations: z
         .array(
           z

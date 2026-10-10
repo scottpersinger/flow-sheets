@@ -131,7 +131,7 @@ async function editEmbedded(src: string, ops: ImageOp[], env: ImageToolEnv, atta
     applied,
     size,
     saved: true,
-    note: 'Stored as a new picture; nothing shows it yet. Put this address where the old one was: edit_elements (src) on a slide, set_cell_image in a cell, or insert_image in a document. If its shape changed (a crop or a turn), give the element a box of the new shape.',
+    note: 'Stored as a new picture; nothing shows it yet. Put this address where the old one was: edit_elements (src) on a slide, replace_blocks (the picture’s block, as ![alt](address)) in a document, or set_cell_image in a cell. If its shape changed (a crop or a turn), give the element a box of the new shape.',
     image,
   });
 }

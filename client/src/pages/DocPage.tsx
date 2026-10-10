@@ -11,6 +11,8 @@ import { useAgent, useRegisterDoc } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { Account } from '../components/Account.tsx';
 import { pickImageFile, uploadImageFile } from '../cellImage.ts';
+import { ImageEditDialog } from '../image/ImageEditDialog.tsx';
+import type { PictureSizes } from '../image/ImageFileEditor.tsx';
 import { MOD } from '../commands.ts';
 import { DocIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -188,6 +190,19 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
   useEffect(() => {
     if (externalChanges) notify('Updated with changes saved elsewhere (for example by the assistant in ChatGPT).');
   }, [externalChanges, notify]);
+
+  // The picture open in the image editor: where it was and what it was, to find it again when the edit is saved.
+  // Saving stores the edited picture as a new image and puts it in the block as one step, so undo brings the
+  // picture back as it was.
+  const [editingImage, setEditingImage] = useState<{ pos: number; src: string } | null>(null);
+  const editImage = useCallback(() => {
+    const img = ctl.selectedImage();
+    if (img) setEditingImage({ pos: img.pos, src: String(img.node.attrs.src) });
+  }, [ctl]);
+  const saveEditedImage = async (editing: { pos: number; src: string }, image: Blob, sizes: PictureSizes) => {
+    const url = await uploadImageFile(image);
+    if (!ctl.replaceImage(editing.pos, editing.src, url, sizes.before, sizes.after)) notify('The picture is no longer in the document, so the edit was not put in.');
+  };
 
   const addImageFiles = useCallback(
     async (files: File[]) => {
@@ -451,7 +466,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
           <Account before={() => ctl.saver.flush()} />
         </div>
       </header>
-      <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} />
+      <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} onEditImage={editImage} />
       {importWarnings.length > 0 && (
         <div className="import-banner" role="status">
           <div>
@@ -491,7 +506,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
             if (e.dataTransfer.types.includes('Files')) e.preventDefault();
           }}
         >
-          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} onScale={setPageScale} />
+          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} onScale={setPageScale} onEditImage={editImage} />
         </div>
         {/* Pages have a size to zoom; a pageless document always fills the window. */}
         {ctl.pageSetup().mode === 'pages' && (
@@ -507,6 +522,7 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
 
       {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'docStyle' && <DocStyleDialog ctl={ctl} onClose={() => setDialog(null)} />}
+      {editingImage && <ImageEditDialog src={editingImage.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'link' && (
         <PromptModal

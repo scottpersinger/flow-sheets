@@ -82,7 +82,7 @@ export const ICONS = {
   clear: 'M6 4h9l3 3-9 9H6zM4 20h16M9 16l-3-3',
 };
 
-export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController; onLink(): void; onInsertImage(): void }) {
+export function DocToolbar({ ctl, onLink, onInsertImage, onEditImage }: { ctl: DocController; onLink(): void; onInsertImage(): void; /** Open the image editor on the selected picture; without it the button is not shown. */ onEditImage?(): void }) {
   const block = ctl.currentBlock();
   const inList = block === 'bullet_list' || block === 'ordered_list';
   const isNode = block === 'image' || block === 'horizontal_rule';
@@ -187,6 +187,11 @@ export function DocToolbar({ ctl, onLink, onInsertImage }: { ctl: DocController;
       <Btn title="Insert image" onClick={onInsertImage}>
         {icon(ICONS.image)}
       </Btn>
+      {onEditImage && block === 'image' && (
+        <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={onEditImage} title="Crop, rotate, adjust and draw on the picture (or double-click it)">
+          Edit image
+        </button>
+      )}
       <Btn title="Insert horizontal rule" onClick={() => ctl.insertHorizontalRule()}>
         {icon(ICONS.rule)}
       </Btn>

@@ -48,7 +48,7 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   use `fakeEngine.ts`. In the plugin the model's `transform_image` is a job the plugin's app takes with its
   state and does in the browser (`FileService.runImageJob`, `plugin/web/imageJobs.ts`).
   A picture inside a file is edited in `ImageEditDialog` over the page and never rewritten: the page uploads
-  the result and puts it in place as an undoable step (on a slide, `DeckController.replacePicture`).
+  the result and puts it in place as an undoable step (on a slide, `DeckController.replacePicture`; in a document, `DocController.replaceImage`).
   A slide's own Crop (`client/src/deck/CropOverlay.tsx`, `shared/deckCrop.ts`) changes the image element's
   `crop` and box, not the picture.
 - Importing a file's bytes, whatever they are, is `server/importFile.ts` (`importBytes`: a Word, PowerPoint,

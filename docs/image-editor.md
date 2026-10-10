@@ -1,8 +1,8 @@
 # Image editor
 
 Status: the fork and phases 1 to 3 are built (editing an image file in the app and in the plugin, the
-assistant in the app, and the assistant over the MCP). Of phase 4, pictures on slides are built; those in
-documents and spreadsheet cells are not. Decisions still open are listed at the end.
+assistant in the app, and the assistant over the MCP). Of phase 4, pictures on slides and in
+documents are built; those in spreadsheet cells are not. Decisions still open are listed at the end.
 
 A full image editor for pictures stored as files, built so the same editor later edits pictures inside
 documents, spreadsheets and presentations, and so the assistant (in the app and over the MCP plugin) edits
@@ -134,13 +134,13 @@ Built. MCP tools run on the server with no browser, so the plugin's app does the
 
 ## Phase 4: pictures inside documents, spreadsheets and presentations
 
-Presentations are built; documents and spreadsheets are not. The editor and the tools do not change: each
+Presentations and documents are built; spreadsheets are not. The editor and the tools do not change: each
 surface adds an entry point and a save.
 
 | Surface | Entry | Save | Built |
 |---|---|---|---|
 | Presentation | Selected image element: "Edit image" in the toolbar, or a double-click | Upload, then `DeckController.replacePicture` | Yes |
-| Document | Selected image block: toolbar button, double-click | Upload, then swap `src` in one transaction (scale `width` after a crop) | No |
+| Document | Selected image block: "Edit image" in the toolbar, or a double-click | Upload, then `DocController.replaceImage` | Yes |
 | Spreadsheet | Cell with an image | Upload, then set `img` in a `Tx` | No |
 
 - `ImageEditDialog` (`client/src/image`) is the editor over the page for an embedded picture: it reads the
@@ -154,6 +154,9 @@ surface adds an entry point and a save.
 - Slides also have a crop of their own, for the commonest edit, without opening the editor: "Crop" in the
   toolbar puts a frame on the picture (`CropOverlay`, geometry in `shared/deckCrop.ts`). It changes the
   element's `crop` and box, not the picture, so the picture can be cropped wider again later.
+- In a document (`editedImageWidth` in `shared/doc.ts`): a picture with no width of its own keeps none; one
+  that kept its shape keeps its width; one that was cropped or turned is shown at the same scale as before.
+  The block is found again by its picture if the document changed while the editor was open.
 - The assistant: `transform_image` takes `image` (a stored `/api/images/...` address) in place of
   `file_id`, stores the result anew and returns its address, which the model puts in place with the tools it
   has (`edit_elements`, `set_cell_image`, `insert_image`). Not in the plugin, whose `transform_image` edits
