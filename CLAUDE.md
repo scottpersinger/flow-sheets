@@ -37,6 +37,11 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   override the on-disk hooks of `SheetStore` and `FileStore`: real `.md`/`.csv` files, `.ffsheet`/`.ffslides`/
   `.ffdoc` for the JSON formats, the tables synced with the folder on every list) and makes every request
   the one local user. The client learns it is local from `useAuth().local`.
+- The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
+  (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
+  `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;
+  `ImageFileEditor` is a stored picture being edited on `FilePage` (Save rewrites the file through
+  `PUT /api/files/:id`, which keeps the version before for one revert; Save a copy makes a new file).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

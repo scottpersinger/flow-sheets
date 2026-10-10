@@ -6,8 +6,7 @@ import OpenAI, { toFile } from 'openai';
 /** A problem to tell the user about (no key, the model refused the request, ...). */
 export class ImageEditError extends Error {}
 
-/** Pictures the image model takes. */
-export const EDITABLE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+export { EDITABLE_IMAGE_TYPES } from '../shared/types.ts';
 export const MAX_EDIT_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_EDIT_PROMPT_CHARS = 4000;
 

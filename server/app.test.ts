@@ -785,6 +785,24 @@ describe('stored files', () => {
     expect((await app.inject({ method: 'PUT', url: file.url, headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('x') })).statusCode).toBe(400);
     expect((await app.inject({ method: 'POST', url: `${file.url}/revert`, headers: { cookie } })).statusCode).toBe(404);
     expect((await app.inject({ method: 'PUT', url: page.url, headers: { 'content-type': 'application/octet-stream' }, payload: Buffer.from('x') })).statusCode).toBe(401);
+    // A picture can be saved over by the image editor, as the type it is; the version before comes back with a revert.
+    const png = (n: number) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(n, 7)]);
+    const pic = (await app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'image/png', 'x-filename': 'logo.png' }, payload: png(10) })).json().file;
+    res = await app.inject({ method: 'GET', url: pic.url, headers: { cookie } });
+    expect(res.headers['cache-control']).toBe('private, no-cache');
+    const etag = String(res.headers.etag);
+    expect((await app.inject({ method: 'GET', url: pic.url, headers: { cookie, 'if-none-match': etag } })).statusCode).toBe(304);
+    res = await app.inject({ method: 'PUT', url: pic.url, headers: { cookie, 'content-type': 'image/png' }, payload: png(40) });
+    expect(res.json().file).toMatchObject({ id: pic.id, type: 'image/png', size: 48 });
+    res = await app.inject({ method: 'GET', url: pic.url, headers: { cookie, 'if-none-match': etag } });
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.length).toBe(48);
+    // Not as another type, and not bytes that are not a picture of that type.
+    expect((await app.inject({ method: 'PUT', url: pic.url, headers: { cookie, 'content-type': 'image/jpeg' }, payload: Buffer.from([0xff, 0xd8, 0xff, 0]) })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PUT', url: pic.url, headers: { cookie, 'content-type': 'image/png' }, payload: Buffer.from('not a picture') })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'GET', url: pic.url, headers: { cookie } })).rawPayload.length).toBe(48);
+    expect((await app.inject({ method: 'POST', url: `${pic.url}/revert`, headers: { cookie } })).json().file).toMatchObject({ size: 18 });
+    await app.inject({ method: 'DELETE', url: pic.url, headers: { cookie } });
     await app.inject({ method: 'DELETE', url: page.url, headers: { cookie } });
 
     res = await app.inject({ method: 'GET', url: '/api/files', headers: { cookie } });

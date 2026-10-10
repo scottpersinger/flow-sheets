@@ -3671,6 +3671,25 @@ button.agent-tool-label:hover {
 .html-editor-space {
   flex: 1;
 }
+/* A stored picture in the image editor, which fills the room under its bar. */
+.image-editor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.image-editor-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.image-editor-stage > :not(.muted) {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+}
 .file-page .btn.active {
   background: #eceff1;
   border-color: #455a64;

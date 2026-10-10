@@ -109,6 +109,13 @@ export const api = {
     if (!res.ok || !data.file) throw new ApiError(res.status, res.status === 413 ? 'This file is too large to save.' : (data.error ?? `Saving the file failed (${res.status})`));
     return data.file;
   },
+  /** Save an edited picture over a stored one (same type); the version before is kept for one revert. */
+  updateImageFile: async (id: string, image: Blob): Promise<StoredFile> => {
+    const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': image.type }, body: image });
+    const data = (await res.json().catch(() => ({}))) as { file?: StoredFile; error?: string };
+    if (!res.ok || !data.file) throw new ApiError(res.status, res.status === 413 ? 'This picture is too large to save.' : (data.error ?? `Saving the picture failed (${res.status})`));
+    return data.file;
+  },
   /** Make an edited copy of a stored picture with the image model; resolves with the new file. */
   editImage: (id: string, prompt: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/edit-image`, { prompt }),
   revertFile: (id: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/revert`),

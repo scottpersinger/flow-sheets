@@ -189,6 +189,9 @@ export interface StoredFile {
   downloadUrl: string;
 }
 
+/** Pictures the image editor and the image model can change (an animated GIF would lose its frames). */
+export const EDITABLE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
 /** Types the app can preview in a tab; everything else gets an info page with a Download button. */
 export const PREVIEW_FILE_TYPES = ['application/pdf', ...['image/png', 'image/jpeg', 'image/gif', 'image/webp'], ...['video/mp4', 'video/webm', 'video/quicktime', 'video/ogg']];
 

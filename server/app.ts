@@ -12,7 +12,7 @@ import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownD
 import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { isPdf } from './pdfImport.ts';
-import { FileStore } from './files.ts';
+import { FileStore, isImageOfType } from './files.ts';
 import { checkImageEditRate, editedImageName, EDITABLE_IMAGE_TYPES, ImageEditError, MAX_EDIT_IMAGE_BYTES, MAX_EDIT_PROMPT_CHARS, openaiImageEditor, type ImageEditor } from './imageEdit.ts';
 import { CELL_IMAGE_TYPES, HTML_TYPE, isHtmlName, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
@@ -857,11 +857,18 @@ export async function buildApp(opts: AppOptions) {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
       if (!PREVIEW_FILE_TYPES.includes(f.meta.type)) return attachment(reply, f.meta.filename, 'application/octet-stream').send(createReadStream(f.file));
-      // A stored file never changes; one in a mounted folder can.
+      // A stored file never changes, except a picture the image editor saved over (asked for again each time,
+      // and sent only if it changed); one in a mounted folder can.
       // Browsers that play QuickTime files (H.264) only do so when they are served as MP4.
       const type = f.meta.type === 'video/quicktime' ? 'video/mp4' : f.meta.type;
-      reply.header('Content-Type', type).header('Content-Disposition', 'inline').header('Cache-Control', opts.local ? 'no-cache' : 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff').header('Accept-Ranges', 'bytes');
-      const size = statSync(f.file).size;
+      const rewritable = EDITABLE_IMAGE_TYPES.includes(f.meta.type);
+      reply.header('Content-Type', type).header('Content-Disposition', 'inline').header('Cache-Control', opts.local ? 'no-cache' : rewritable ? 'private, no-cache' : 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff').header('Accept-Ranges', 'bytes');
+      const { size, mtimeMs } = statSync(f.file);
+      if (rewritable) {
+        const etag = `"${Math.round(mtimeMs).toString(36)}-${size.toString(36)}"`;
+        reply.header('ETag', etag);
+        if (req.headers['if-none-match'] === etag) return reply.code(304).send();
+      }
       const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
       if (!range || (!range[1] && !range[2])) return reply.header('Content-Length', size).send(createReadStream(f.file));
       // "a-b", "a-" (to the end) or "-n" (the last n bytes).
@@ -881,11 +888,17 @@ export async function buildApp(opts: AppOptions) {
       return attachment(reply, f.meta.filename, f.meta.type || 'application/octet-stream').send(createReadStream(f.file));
     });
 
-    // Rewrite a text file (the assistant's edit_file). PDFs, pictures and videos are never rewritten: they are
-    // served as files that do not change.
+    // Rewrite a text file (the assistant's edit_file) or a picture (the image editor), keeping the version
+    // before for one revert. PDFs, videos and animated pictures are never rewritten.
     r.put('/api/files/:id', async (req, reply) => {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
+      if (EDITABLE_IMAGE_TYPES.includes(f.meta.type)) {
+        // A picture stays the type it is: its name and everything that shows it depend on that.
+        const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+        if (type !== f.meta.type || !Buffer.isBuffer(req.body) || !isImageOfType(req.body, type)) return reply.code(400).send({ error: `Send the edited picture as the request body, as ${f.meta.type}.` });
+        return { file: await storedFiles.update(req.user!.id, f.meta.id, req.body) };
+      }
       if (!isTextFileType(f.meta.type) || PREVIEW_FILE_TYPES.includes(f.meta.type)) return reply.code(400).send({ error: 'Only text files can be edited.' });
       if (!Buffer.isBuffer(req.body) || req.body.includes(0)) return reply.code(400).send({ error: 'Send the new text as the request body.' });
       return { file: await storedFiles.update(req.user!.id, f.meta.id, req.body) };

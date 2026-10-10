@@ -28,6 +28,14 @@ export const toFileMeta = (r: StoredFileRow): StoredFile => ({
   downloadUrl: `/api/files/${r.id}/download`,
 });
 
+/** True if the bytes start as a picture of this type does (PNG, JPEG or WebP). */
+export function isImageOfType(data: Buffer, type: string): boolean {
+  if (type === 'image/png') return data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (type === 'image/jpeg') return data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (type === 'image/webp') return data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP';
+  return false;
+}
+
 export class FileStore {
   protected db: DB;
   protected dir: string;
@@ -96,7 +104,7 @@ export class FileStore {
     return `${file}.prev`;
   }
 
-  /** Replace a file's bytes (a text file the assistant edited). The version it replaces is kept, for one step of undo. */
+  /** Replace a file's bytes (a text file the assistant edited, a picture from the image editor). The version it replaces is kept, for one step of undo. */
   async update(ownerId: string, id: string, data: Buffer): Promise<StoredFile | null> {
     const f = this.get(ownerId, id);
     if (!f) return null;

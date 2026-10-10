@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
+import { EDITABLE_IMAGE_TYPES, HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
 import { HtmlEditor } from '../components/HtmlEditor.tsx';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
+import { ImageFileEditor } from '../image/ImageFileEditor.tsx';
 import { ImageSelector } from '../components/ImageSelector.tsx';
 import type { ImageRegion } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
@@ -60,8 +61,10 @@ export function FilePage() {
   // Counts the assistant's changes to this file, so the preview shows each new version.
   const [version, setVersion] = useState(0);
   // A web page opens as a working page; Edit makes it editable in place instead (the element selected in it is
-  // told to the assistant), with its scripts and links off.
+  // told to the assistant), with its scripts and links off. On a picture, Edit opens the image editor.
   const [editing, setEditing] = useState(false);
+  /** The picture was just saved over in the image editor, so the version before it can be put back. */
+  const [canRevert, setCanRevert] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   // On a picture the user can drag a box, which is told to the assistant too.
   const [region, setRegion] = useState<ImageRegion | null>(null);
@@ -69,6 +72,7 @@ export function FilePage() {
     setFile(null);
     setError(null);
     setEditing(false);
+    setCanRevert(false);
     setRegion(null);
     api.getFile(id).then((r) => setFile(r.file), (e: Error) => setError(e.message));
   }, [id]);
@@ -89,6 +93,16 @@ export function FilePage() {
   useRegisterFile(file, editing ? selected : null, region);
 
   const previewable = !!file && PREVIEW_FILE_TYPES.includes(file.type);
+  const editableImage = !!file && EDITABLE_IMAGE_TYPES.includes(file.type);
+  const revert = () =>
+    api.revertFile(id).then(
+      (r) => {
+        setFile(r.file);
+        setCanRevert(false);
+        setVersion((v) => v + 1);
+      },
+      (e: Error) => setError(e.message),
+    );
   return (
     <div className="file-page">
       <header className="home-header">
@@ -104,6 +118,16 @@ export function FilePage() {
           {file?.type === HTML_TYPE && (
             <button className={`btn${editing ? ' active' : ''}`} onClick={() => setEditing(!editing)} title={editing ? 'Run the page as a browser would, with its scripts and links working' : "Select, edit, delete and recolor the page's elements"}>
               {editing ? 'Preview' : 'Edit'}
+            </button>
+          )}
+          {editableImage && !editing && canRevert && (
+            <button className="btn" onClick={() => void revert()} title="Put back the picture as it was before the last save">
+              Undo save
+            </button>
+          )}
+          {editableImage && !editing && (
+            <button className="btn" onClick={() => setEditing(true)} title="Crop, rotate, adjust and draw on the picture">
+              Edit
             </button>
           )}
           {file && (
@@ -128,8 +152,22 @@ export function FilePage() {
         ) : file.type.startsWith('video/') ? (
           // The browser's own player; it asks the server for the parts of the file it needs.
           <video className="file-preview-video" src={file.url} controls autoPlay playsInline />
+        ) : editableImage && editing ? (
+          <ImageFileEditor
+            key={`${file.id}:${version}`}
+            file={file}
+            onSaved={(saved) => {
+              setFile(saved);
+              setVersion((v) => v + 1);
+              setCanRevert(true);
+              setEditing(false);
+            }}
+            onCopied={(copy) => navigate(`/f/${copy.id}`)}
+            onClose={() => setEditing(false)}
+          />
         ) : previewable ? (
-          <ImageSelector key={file.id} url={file.url} alt={file.filename} region={region} onChange={setRegion} />
+          // A picture that was saved over is asked for by a new address, so no earlier copy of it is shown.
+          <ImageSelector key={`${file.id}:${version}`} url={version ? `${file.url}?v=${version}` : file.url} alt={file.filename} region={region} onChange={setRegion} />
         ) : (
           <div className="file-info">
             <div className="file-chip-icon" aria-hidden="true">
