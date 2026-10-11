@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
+import { LEGAL_PATHS, legalPage } from './legal.ts';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, statSync } from 'node:fs';
@@ -410,6 +411,9 @@ export async function buildApp(opts: AppOptions) {
       return fail('Google sign-in failed. Try again.');
     }
   });
+
+  // The privacy policy, terms of service and support page: public, and plain HTML for readers without scripts.
+  for (const p of LEGAL_PATHS) app.get(p, async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'public, max-age=300').send(legalPage(p)));
 
   // Liveness/readiness for the hosting platform: verifies the database is reachable.
   app.get('/api/health', async (_req, reply) => {

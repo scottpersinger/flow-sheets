@@ -37,6 +37,23 @@ function cookieFrom(res: { headers: Record<string, unknown> }): string {
   return first.split(';')[0];
 }
 
+describe('public pages', () => {
+  it('serves the privacy policy, terms and support as plain HTML to anyone', async () => {
+    const a = await buildApp({ dataDir: mkdtempSync(path.join(tmpdir(), 'legal-')) });
+    try {
+      for (const [p, heading] of [['/privacy', 'Privacy Policy'], ['/terms', 'Terms of Service'], ['/support', 'Support']]) {
+        const res = await a.inject({ method: 'GET', url: p });
+        expect(res.statusCode).toBe(200);
+        expect(res.headers['content-type']).toContain('text/html');
+        expect(res.body).toContain(`<h1>${heading}</h1>`);
+        expect(res.body).toContain('mailto:');
+      }
+    } finally {
+      await a.close();
+    }
+  });
+});
+
 describe('password reset', () => {
   it('emails a one-time link that sets a new password and signs the user in', async () => {
     await signUp(app, box, 'reset@x.com', 'oldpassword1');

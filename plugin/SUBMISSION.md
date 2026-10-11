@@ -27,6 +27,7 @@ tools wait for approval, and the server must keep working with the approved tool
 - [x] Every tool has `readOnlyHint`, `destructiveHint` and `openWorldHint`; the tools that fetch from the web
       (`import_file`, `insert_image`, `set_cell_image`) say so
 - [x] The app declares its content security policy (our origin and Google Fonts)
+- [x] Privacy policy, terms of service and support pages, public and readable without scripts
 
 ## To do before submitting
 
@@ -34,10 +35,12 @@ Only the account owner can do these.
 
 - [ ] **Identity verification** of the publisher ("Freeflow", individual or business) in the OpenAI Platform
       organization settings, in a project without EU data residency
-- [ ] **Privacy policy, terms of service and support pages**, public, on a Freeflow address, then
-      `privacyPolicyURL`, `termsOfServiceURL` and `supportURL` in `plugin.json` (all are required; the package
-      is not accepted for MCP review without them). The privacy policy must name every kind of personal data
-      the tools return: the account's email (`get_profile`), file titles and contents, and pictures.
+- [ ] **Read the privacy policy, terms of service and support page** (`server/legal.ts`, served at `/privacy`,
+      `/terms` and `/support`; their addresses are in `plugin.json`). They were drafted from what the app does
+      and have not been read by a lawyer. The terms name no governing law. They must be deployed before the
+      portal can reach them.
+- [ ] **The publisher's name**: the listing says Supercog.ai, which must be the name the identity
+      verification is in
 - [ ] **Reviewer account**: a password account made for review, with sample files (below), that signs in with
       no email code, MFA or Google step. Entered in the portal's Review details, never in the ZIP.
 - [ ] **Demo recording** at an address reviewers can open
