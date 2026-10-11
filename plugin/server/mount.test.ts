@@ -22,6 +22,19 @@ afterAll(async () => {
 });
 
 describe('plugin mounted in the app', () => {
+  it('proves the domain to OpenAI with the token it issued, as plain text', async () => {
+    expect((await app.inject({ method: 'GET', url: '/.well-known/openai-apps-challenge' })).statusCode).toBe(404);
+    process.env.OPENAI_APPS_CHALLENGE = ' challenge-token-123 ';
+    try {
+      const r = await app.inject({ method: 'GET', url: '/.well-known/openai-apps-challenge' });
+      expect(r.statusCode).toBe(200);
+      expect(r.headers['content-type']).toContain('text/plain');
+      expect(r.body).toBe('challenge-token-123');
+    } finally {
+      delete process.env.OPENAI_APPS_CHALLENGE;
+    }
+  });
+
   it('serves the OAuth discovery documents and challenges the MCP endpoint', async () => {
     const prm = await app.inject({ method: 'GET', url: '/.well-known/oauth-protected-resource/mcp' });
     expect(prm.statusCode).toBe(200);

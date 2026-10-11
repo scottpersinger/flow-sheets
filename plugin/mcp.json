@@ -3,7 +3,17 @@
   "mcpServers": {
     "docs": {
       "type": "streamable-http",
-      "url": "https://docs.freeflow.im/mcp"
+      "url": "https://docs.freeflow.im/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "client": {
+              "mode": "dcr"
+            }
+          }
+        }
+      }
     }
   }
 }

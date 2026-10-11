@@ -495,6 +495,8 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       file: attachedFile.optional().describe('An image the user attached in the chat (ChatGPT fills in its download address). Use this instead of an address for attachments.'),
     };
   };
+  /** The image tools fetch a picture from the web address they are given, which a reviewer counts as the open world. */
+  const fetchesFromWeb = (name: EditTool) => !!IMAGE_TOOLS[name];
   const imageMeta = (name: EditTool) => (IMAGE_TOOLS[name] ? { _meta: { 'openai/fileParams': ['file'] } } : {});
   const resolveImage = async (name: EditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const field = IMAGE_TOOLS[name];
@@ -519,7 +521,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   for (const name of DOC_EDIT_TOOLS) {
     server.registerTool(
       name,
-      { description: describe(name), inputSchema: { ...inputShape(name), doc_id: optionalDocId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false }, ...imageMeta(name) },
+      { description: describe(name), inputSchema: { ...inputShape(name), doc_id: optionalDocId }, annotations: { ...ANNOTATIONS[name], openWorldHint: fetchesFromWeb(name) }, ...imageMeta(name) },
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { doc_id, ...input } = args as Record<string, unknown> & { doc_id?: string };
@@ -548,7 +550,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   for (const name of SHEET_EDIT_TOOLS) {
     server.registerTool(
       name,
-      { description: describe(name), inputSchema: { ...inputShape(name), sheet_id: optionalSheetId }, annotations: { ...ANNOTATIONS[name], openWorldHint: false }, ...imageMeta(name) },
+      { description: describe(name), inputSchema: { ...inputShape(name), sheet_id: optionalSheetId }, annotations: { ...ANNOTATIONS[name], openWorldHint: fetchesFromWeb(name) }, ...imageMeta(name) },
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { sheet_id, ...input } = args as Record<string, unknown> & { sheet_id?: string };

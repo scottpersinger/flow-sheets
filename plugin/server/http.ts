@@ -36,7 +36,7 @@ export interface PluginHandler {
 }
 
 /** Paths the plugin serves; anything else belongs to whoever hosts it. */
-export const PLUGIN_PATH = /^(\/mcp(\/|$)|\/oauth\/|\/plugin\/|\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration)(\/|$))/;
+export const PLUGIN_PATH = /^(\/mcp(\/|$)|\/oauth\/|\/plugin\/|\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration|openai-apps-challenge)(\/|$))/;
 
 /** A standalone server for the plugin (development, or a host of its own). */
 export function createPluginServer(opts: PluginServerOptions): http.Server {
@@ -89,6 +89,12 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
       }
     }
     try {
+      // OpenAI's proof that we own this domain, for the plugin's submission: the token it issued, as plain text.
+      if (req.method === 'GET' && p === '/.well-known/openai-apps-challenge') {
+        const token = process.env.OPENAI_APPS_CHALLENGE?.trim();
+        res.writeHead(token ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end(token || 'Not found');
+        return;
+      }
       // --- OAuth discovery (the paths ChatGPT probes: plain, with the /mcp suffix, and under /mcp) ---
       if (oauth && req.method === 'GET') {
         if (/^(\/mcp)?\/\.well-known\/oauth-protected-resource(\/mcp)?$/.test(p)) return json(res, 200, oauth.protectedResourceMetadata(), { 'access-control-allow-origin': '*' });

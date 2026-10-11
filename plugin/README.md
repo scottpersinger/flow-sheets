@@ -21,7 +21,9 @@ plugin/
                     editor (DeckWorkbench.tsx), the spreadsheet (SheetWorkbench.tsx) and the Markdown
                     editor (MarkdownWorkbench.tsx), all built from the app's components and saving via tools
   web/harness.*     a stand-in for ChatGPT's host, to run the app locally without a tunnel
-  skills/docs/      SKILL.md: how the model should edit documents
+  skills/universal-docs/  SKILL.md: the one skill, an overview of what the plugin edits and how to work
+  assets/           the logo for the listing
+  SUBMISSION.md     what a submission to ChatGPT needs, and the test cases for review
   plugin.json, mcp.json   package manifests for submission / Codex
 ```
 

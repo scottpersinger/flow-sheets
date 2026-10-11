@@ -72,6 +72,9 @@ ChatGPT renders apps on phones and in dark mode.
 
 ## 9. Store metadata and policy
 
+The submission itself (the package, what is ready, what is not, and the review's test cases) is in
+[SUBMISSION.md](SUBMISSION.md).
+
 - [ ] Privacy policy, terms of service, support contact
 - [ ] Icon assets, screenshots, a short demo; the name is "Universal Docs"
 - [x] Fix descriptions that still say "documents and presentations" (`list_files`, `delete_file`, `plugin.json`)
