@@ -320,7 +320,7 @@ export function HomePage() {
         { label: 'Move to…', onClick: () => setMoving(s) },
       ]}
       onRename={async (s, title) => {
-        await (s.kind === 'deck' ? api.renameDeck(s.id, title) : s.kind === 'doc' ? api.renameDoc(s.id, title) : s.kind === 'markdown' ? api.renameMarkdown(s.id, title) : api.renameSheet(s.id, title));
+        await (s.kind === 'file' ? api.renameFile(s.id, title) : s.kind === 'deck' ? api.renameDeck(s.id, title) : s.kind === 'doc' ? api.renameDoc(s.id, title) : s.kind === 'markdown' ? api.renameMarkdown(s.id, title) : api.renameSheet(s.id, title));
         await load();
       }}
       onDelete={async (s) => {

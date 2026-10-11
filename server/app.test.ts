@@ -757,6 +757,13 @@ describe('stored files', () => {
     res = await app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'application/octet-stream', 'x-filename': 'a.bin' }, payload: Buffer.from('xyz') });
     const second = res.json().file;
 
+    // A rename keeps the extension, whether or not the new name has it, and is the owner's alone.
+    const rename = (who: string, name: unknown) => app.inject({ method: 'PATCH', url: `/api/files/${file.id}`, headers: { cookie: who }, payload: { name } });
+    expect((await rename(cookie, 'Q3/review')).json().file.filename).toBe('Q3_review.pdf');
+    expect((await rename(cookie, 'BizTrip Review.PDF')).json().file.filename).toBe('BizTrip Review.pdf');
+    expect((await rename(cookie, '  ')).statusCode).toBe(400);
+    expect((await rename(other, 'mine')).statusCode).toBe(404);
+
     res = await app.inject({ method: 'GET', url: file.url, headers: { cookie } });
     expect(res.headers['content-type']).toBe('application/pdf');
     expect(res.headers['content-disposition']).toBe('inline');

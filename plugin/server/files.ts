@@ -376,7 +376,12 @@ export class FileService {
   }
 
   rename(kind: LibraryKind, id: string, title: string): FileSummary {
-    if (kind === 'file') throw new ToolError('A PDF or video keeps the name it was uploaded with.');
+    // A stored file is renamed by its file name, and keeps its extension.
+    if (kind === 'file') {
+      const file = this.hub.files.rename(this.userId, id, title);
+      if (!file) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+      return fileSummary(file);
+    }
     const meta = this.sheets.rename(this.userId, id, title.trim(), kind);
     if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return summary(meta);

@@ -13,7 +13,7 @@ import { newMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
 import { joinFolder, parentFolder } from '../shared/folders.ts';
 import { VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile } from '../shared/types.ts';
 import type { DB } from './db.ts';
-import { FileStore, toFileMeta, type StoredFileRow } from './files.ts';
+import { FileStore, renamed, splitName, toFileMeta, type StoredFileRow } from './files.ts';
 import { byName, SEARCH_LIMIT, type Folders } from './folders.ts';
 import { SheetStore, writeAtomic, type SheetRow, type Stored } from './sheets.ts';
 
@@ -549,6 +549,20 @@ export class LocalFileStore extends FileStore {
     const filename = path.posix.basename(to);
     this.db.prepare('UPDATE stored_files SET filename = ?, folder = ? WHERE id = ?').run(filename, folder, id);
     return { ...f.meta, filename, folder: folder || undefined };
+  }
+
+  /** Renaming a file renames it on disk (numbered if the name is taken). */
+  override rename(ownerId: string, id: string, name: string): StoredFile | null {
+    const f = this.get(ownerId, id);
+    if (!f) return null;
+    const wanted = renamed(f.meta.filename, name);
+    if (wanted === f.meta.filename) return f.meta;
+    const [base, ext] = splitName(wanted);
+    const to = this.folder.freePath(f.meta.folder ?? '', base, ext);
+    renameSync(f.file, this.folder.abs(to));
+    const filename = path.posix.basename(to);
+    this.db.prepare('UPDATE stored_files SET filename = ? WHERE id = ?').run(filename, id);
+    return { ...f.meta, filename };
   }
 
   override async delete(ownerId: string, id: string): Promise<boolean> {

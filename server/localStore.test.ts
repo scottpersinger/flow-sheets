@@ -209,6 +209,19 @@ describe('a mounted folder', () => {
     expect((up.json() as { file: StoredFile }).file.filename).toBe('scan 2.pdf');
     expect(readFileSync(at('scan 2.pdf'), 'utf8')).toBe('%PDF-1.4 other');
   });
+
+  it('renames a stored file on disk, keeping its extension and never taking a name in use', async () => {
+    writeFileSync(at('photo.png'), 'png');
+    writeFileSync(at('taken.png'), 'other');
+    const photo = (await library()).files.find((f) => f.filename === 'photo.png')!;
+    const rename = async (name: string) => (await call<{ file: StoredFile }>('PATCH', `/api/files/${photo.id}`, { name })).body.file.filename;
+    expect(await rename('Team offsite')).toBe('Team offsite.png');
+    expect(existsSync(at('photo.png'))).toBe(false);
+    expect(readFileSync(at('Team offsite.png'), 'utf8')).toBe('png');
+    expect(await rename('taken.PNG')).toBe('taken 2.png');
+    expect(readFileSync(at('taken.png'), 'utf8')).toBe('other');
+    expect((await library()).files.filter((f) => f.id === photo.id).map((f) => f.filename)).toEqual(['taken 2.png']);
+  });
 });
 
 describe('the desktop token', () => {

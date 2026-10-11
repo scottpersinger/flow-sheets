@@ -111,7 +111,6 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${CSV_ACCEPT},${MARKDOWN_ACCEPT},${PDF_ACCEPT},${HTML_ACCEPT},${VIDEO_ACCEPT},.png,.jpg,.jpeg,.gif,.webp`}
         importLabel="Import a file"
         importHint="Excel, PowerPoint, Word, CSV, Markdown, PDF, HTML, video or image. You can also attach a file in the chat and ask ChatGPT to import it, or ask it to make something new."
-        canRename={(item) => item.kind !== 'file'}
         importing={importing}
         onImport={(file) => void importFile(file)}
         onOpen={(item) => onOpen(asFile(item))}

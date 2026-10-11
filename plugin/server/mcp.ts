@@ -450,7 +450,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'rename_file',
     {
       title: 'Rename file',
-      description: 'Change the title of a document, presentation or spreadsheet. Defaults to the open file. A stored PDF, video or image keeps its name.',
+      description: 'Change the title of a document, presentation or spreadsheet, or the name of a stored file (a PDF, video or image), which keeps its extension. Defaults to the open file.',
       inputSchema: { kind: anyKind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },

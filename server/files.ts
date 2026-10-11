@@ -36,6 +36,21 @@ export function isImageOfType(data: Buffer, type: string): boolean {
   return false;
 }
 
+/** A file name without its extension, and the extension ('.pdf', or '' when it has none). */
+export function splitName(filename: string): [string, string] {
+  const ext = path.extname(filename);
+  return [filename.slice(0, filename.length - ext.length), ext];
+}
+
+/** The name a file gets when the user renames it: what they typed, cleaned, with the extension it had. */
+export function renamed(filename: string, name: string): string {
+  const [, ext] = splitName(filename);
+  let base = name.replace(/[\\/\u0000-\u001f]/g, '_').trim();
+  if (ext && base.toLowerCase().endsWith(ext.toLowerCase())) base = base.slice(0, base.length - ext.length).trim();
+  base = base.replace(/^\.+/, '').slice(0, 200 - ext.length);
+  return base ? `${base}${ext}` : filename;
+}
+
 export class FileStore {
   protected db: DB;
   protected dir: string;
@@ -92,6 +107,19 @@ export class FileStore {
     if (!f) return null;
     this.db.prepare('UPDATE stored_files SET folder = ? WHERE id = ?').run(folder, id);
     return { ...f.meta, folder: folder || undefined };
+  }
+
+  /**
+   * Give a file another name. Its extension stays, since that is what says what kind of file it is: the new
+   * name may be given with or without it. Null when there is no such file.
+   */
+  rename(ownerId: string, id: string, name: string): StoredFile | null {
+    const f = this.get(ownerId, id);
+    if (!f) return null;
+    const filename = renamed(f.meta.filename, name);
+    if (filename === f.meta.filename) return f.meta;
+    this.db.prepare('UPDATE stored_files SET filename = ? WHERE id = ?').run(filename, id);
+    return { ...f.meta, filename };
   }
 
   get(ownerId: string, id: string): { meta: StoredFile; file: string } | null {

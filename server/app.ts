@@ -932,6 +932,15 @@ export async function buildApp(opts: AppOptions) {
       }
     });
 
+    // Rename: the extension stays as it is.
+    r.patch('/api/files/:id', async (req, reply) => {
+      const name = (req.body as { name?: unknown } | null)?.name;
+      if (typeof name !== 'string' || !name.trim()) return reply.code(400).send({ error: 'Give the file a name.' });
+      const f = storedFile(req);
+      const file = f && storedFiles.rename(req.user!.id, f.meta.id, name);
+      return file ? { file } : reply.code(404).send({ error: 'File not found' });
+    });
+
     r.delete('/api/files/:id', async (req, reply) => {
       const f = storedFile(req);
       if (!f || !(await storedFiles.delete(req.user!.id, f.meta.id))) return reply.code(404).send({ error: 'File not found' });

@@ -181,7 +181,7 @@ describe('MCP server', () => {
     expect(((await call('list_files', { kind: 'file' })).data?.files as { title: string }[]).map((f) => f.title)).toEqual(['report.pdf']);
     expect((await call('open_file', { kind: 'file', id: pdfId })).data?.file).toMatchObject({ title: 'report.pdf' });
     expect((await call('file_link', { id: pdfId })).data?.url).toMatch(new RegExp(`/plugin/file/${pdfId}\\?t=`));
-    expect((await call('rename_file', { title: 'New name' })).text).toMatch(/keeps the name/);
+    expect((await call('rename_file', { title: 'New name' })).data?.file).toMatchObject({ kind: 'file', id: pdfId, title: 'New name.pdf' });
     expect((await call('read_doc')).isError).toBe(true);
     expect((await call('delete_file', { kind: 'file', id: pdfId })).isError).toBe(false);
     expect((await call('list_files', { kind: 'file' })).data?.files).toEqual([]);

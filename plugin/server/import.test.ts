@@ -120,8 +120,8 @@ describe('import from the app', () => {
     await svc.delete('file', chart.id);
     svc.setOpen({ kind: 'file', id: report.id });
 
-    // Stored files are deleted like anything else, and keep the name they came with.
-    expect(() => svc.rename('file', file.id, 'x')).toThrow(/keeps the name/);
+    // Stored files are renamed and deleted like anything else; a rename keeps the extension.
+    expect(svc.rename('file', file.id, 'x').title).toBe(`x${path.extname(file.title)}`);
     await svc.delete('file', file.id);
     expect(svc.open).toEqual({ kind: 'file', id: report.id });
     await svc.delete('file', report.id);

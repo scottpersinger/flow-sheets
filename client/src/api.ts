@@ -101,6 +101,8 @@ export const api = {
   moveToFolder: (kind: SheetMeta['kind'] | 'file', id: string, folder: string) => request<{ ok: true }>('POST', '/api/library/move', { kind, id, folder }),
   uploadImage,
   uploadFile,
+  /** Rename a stored file; it keeps its extension. */
+  renameFile: (id: string, name: string) => request<{ file: StoredFile }>('PATCH', `/api/files/${encodeURIComponent(id)}`, { name }),
   listFiles: () => request<{ files: StoredFile[] }>('GET', '/api/files'),
   /** Replace a stored text file's contents. */
   updateFile: async (id: string, text: string): Promise<StoredFile> => {

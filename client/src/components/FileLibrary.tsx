@@ -192,7 +192,7 @@ export interface FileLibraryProps {
   onOpenInNewTab?(item: LibraryItem): void;
   /** Wraps a row's title so the page can make it a real link (middle-click, right-click). Defaults to a span. */
   titleLink?(item: LibraryItem, children: ReactNode): ReactNode;
-  /** Whether a row can be renamed; stored files cannot. */
+  /** Whether a row can be renamed; every row can unless this says otherwise. */
   canRename?(item: LibraryItem): boolean;
   onRename(item: LibraryItem, title: string): Promise<void>;
   onDelete(item: LibraryItem): Promise<void>;
@@ -470,7 +470,7 @@ export function FileLibrary(props: FileLibraryProps) {
   );
 
   const titleLink = props.titleLink ?? ((_item: LibraryItem, children: ReactNode) => <span className="sheet-title">{children}</span>);
-  const canRename = props.canRename ?? ((item: LibraryItem) => item.kind !== 'file');
+  const canRename = props.canRename ?? (() => true);
 
   return (
     <div
@@ -788,7 +788,8 @@ export function FileLibrary(props: FileLibraryProps) {
         <PromptModal
           title={`Rename ${KIND_NAMES[renaming.kind]}`}
           label="Name"
-          initial={renaming.title}
+          // A stored file keeps its extension, so only the name before it is offered for editing.
+          initial={renaming.kind === 'file' ? renaming.title.replace(/\.[a-z0-9]+$/i, '') || renaming.title : renaming.title}
           confirmText="Rename"
           onConfirm={(title) => props.onRename(renaming, title)}
           onClose={() => setRenaming(null)}
