@@ -18,8 +18,8 @@ plugin/
   server/files.ts   documents, presentations and spreadsheets from the app's SQLite + JSON files; headless
                     edits via the app's own doc, deck and sheet tools
   web/              the app shown in ChatGPT: library, the document editor (Editor.tsx), the presentation
-                    editor (DeckWorkbench.tsx) and the spreadsheet (SheetWorkbench.tsx), all built from the
-                    app's components and saving via tools
+                    editor (DeckWorkbench.tsx), the spreadsheet (SheetWorkbench.tsx) and the Markdown
+                    editor (MarkdownWorkbench.tsx), all built from the app's components and saving via tools
   web/harness.*     a stand-in for ChatGPT's host, to run the app locally without a tunnel
   skills/docs/      SKILL.md: how the model should edit documents
   plugin.json, mcp.json   package manifests for submission / Codex
@@ -38,6 +38,11 @@ plugin/
   the app unless an id is given. Edits run the app's `runDocTool` / `runDeckTool` / `runClientTool` against a
   headless controller on the server, then save. Annotations mark reads read-only and deletions destructive, which drives ChatGPT's
   "ask before changes" setting.
+- **Markdown documents** (kind `markdown`) are plain Markdown files, kept exactly as written: `create_doc`
+  with `kind: "markdown"` makes one and `import_file` keeps a `.md` file as one. The document tools that
+  change content (`read_doc`, `insert_content`, `replace_blocks`, `delete_blocks`, `replace_text`) act on
+  the text through the app's `runMarkdownTool`; the formatting, page and picture tools are refused with
+  what to write instead.
 - **Tools for the app only** (`_meta.ui.visibility: ["app"]`, hidden from the model): `app_state`, `get_file`,
   `save_file`, `set_open_file`, `upload_image`, `upload_ticket`. The app never calls the REST API; the iframe
   has no cookies. The library's Import tile posts the file's bytes to `/plugin/import` with a one-time ticket

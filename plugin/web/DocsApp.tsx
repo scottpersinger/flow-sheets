@@ -1,5 +1,5 @@
-// The app as shown in ChatGPT: the library of files, or one document, presentation or spreadsheet open in
-// its editor, or a stored PDF or video in the viewer.
+// The app as shown in ChatGPT: the library of files, or one document, Markdown document, presentation or
+// spreadsheet open in its editor, or a stored PDF or video in the viewer.
 // Which file is open is shared with the server, so the model's tools act on it and "open my plan" in the
 // composer switches the editor to it.
 import { useEffect, useRef, useState } from 'react';
@@ -8,6 +8,7 @@ import { Editor } from './Editor.tsx';
 import { FileViewer, PICTURE_CHANGED_EVENT } from './FileViewer.tsx';
 import { runImageJob } from './imageJobs.ts';
 import { Library } from './Library.tsx';
+import { MarkdownWorkbench } from './MarkdownWorkbench.tsx';
 import { SheetWorkbench } from './SheetWorkbench.tsx';
 import type { AppState, Host, LibraryKind, OpenFile } from './host.ts';
 
@@ -76,5 +77,6 @@ export function DocsApp({ host }: { host: Host }) {
   if (shown.kind === 'file') return <FileViewer key={shown.id} host={host} id={shown.id} onBack={() => void open(null)} />;
   if (shown.kind === 'deck') return <DeckWorkbench key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} />;
   if (shown.kind === 'sheet') return <SheetWorkbench key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} onOpen={(f) => void open(f)} />;
+  if (shown.kind === 'markdown') return <MarkdownWorkbench key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} />;
   return <Editor key={shown.id} host={host} id={shown.id} remote={remote} onBack={() => void open(null)} />;
 }

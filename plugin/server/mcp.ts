@@ -61,7 +61,7 @@ export interface McpOptions {
 
 
 export const INSTRUCTIONS = `Universal Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
-Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. After editing, the open file updates in the app by itself; do not call open_file again.`;
+Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. A Markdown document (kind markdown) is a plain Markdown file, kept exactly as written: read_doc, insert_content, replace_blocks, delete_blocks and replace_text work on it, and its formatting is its text. After editing, the open file updates in the app by itself; do not call open_file again.`;
 
 const DOC_ICON = {
   src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
@@ -69,11 +69,11 @@ const DOC_ICON = {
   sizes: ['20x20'],
 };
 
-const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document), deck (slide presentation) or sheet (spreadsheet).');
+const kind = z.enum(FILE_KINDS as [FileKind, ...FileKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or markdown (Markdown document).');
 /** For the tools that work on anything in the library, stored files included. */
-const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet) or file (a PDF, web page, video or image, which is shown but not edited).');
+const anyKind = z.enum(LIBRARY_KINDS as [LibraryKind, ...LibraryKind[]]).describe('doc (text document), deck (slide presentation), sheet (spreadsheet), markdown (Markdown document: a plain Markdown file) or file (a PDF, web page, video or image, which is shown but not edited).');
 const fileId = z.string().describe('The file id (from list_files or the app).');
-const optionalDocId = z.string().optional().describe('The document to act on. Defaults to the document open in the app.');
+const optionalDocId = z.string().optional().describe('The document or Markdown document to act on. Defaults to the one open in the app.');
 const optionalDeckId = z.string().optional().describe('The presentation to act on. Defaults to the presentation open in the app.');
 const optionalSheetId = z.string().optional().describe('The spreadsheet to act on. Defaults to the spreadsheet open in the app.');
 type EditTool = DocEditTool | DeckEditTool | SheetEditTool;
@@ -217,7 +217,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const appTools = level === 'app' || level === 'full';
   const entrypoint = level === 'full';
 
-  const listFiles = { title: 'List files', description: "The user's documents, presentations, spreadsheets and stored files (PDFs, web pages, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
+  const listFiles = { title: 'List files', description: "The user's documents, Markdown documents, presentations, spreadsheets and stored files (PDFs, web pages, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
   server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
   if (level === 'minimal') return server;
 
@@ -286,14 +286,18 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'create_doc',
     {
       title: 'Create document',
-      description: 'Create a new text document, optionally with content written as Markdown, and open it in the app.',
-      inputSchema: { title: z.string().min(1).max(200), markdown: z.string().max(200_000).optional().describe('Initial content as Markdown. Supports headings, lists, quotes, code blocks, images, links, bold and italics.') },
+      description: 'Create a new text document, or a Markdown document (kind "markdown"), optionally with content written as Markdown, and open it in the app. Make a Markdown document when the user asks for a Markdown or .md file (a README, a SKILL.md, notes kept as Markdown).',
+      inputSchema: {
+        title: z.string().min(1).max(200),
+        markdown: z.string().max(200_000).optional().describe('Initial content as Markdown. Supports headings, lists, quotes, code blocks, images, links, bold and italics.'),
+        kind: z.enum(['doc', 'markdown']).optional().describe('"doc" (the default) is a rich text document built from the Markdown; "markdown" is a plain Markdown file holding it exactly as written, front matter included.'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ title, markdown }) =>
+    async ({ title, markdown, kind: k }) =>
       guard(async () => {
-        const file = await service.createDoc(title, markdown);
-        service.setOpen({ kind: 'doc', id: file.id });
+        const file = await service.createDoc(title, markdown, k ?? 'doc');
+        service.setOpen({ kind: k ?? 'doc', id: file.id });
         return ok({ file, ...service.state() });
       }),
   );
@@ -336,7 +340,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     {
       title: 'Import a file',
       description:
-        'Import a file the user attached, or a file at a web address (url), and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files, including a picture or document found on the web: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) or Markdown file (.md) a new document; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, web page (.html, such as a page or chart you generated), video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer (a web page is rendered, with its scripts running in a sandbox), which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
+        'Import a file the user attached, or a file at a web address (url), and open it in the app. Always try this first when the user wants a file uploaded, saved or added to their files, including a picture or document found on the web: pass the attachment whatever its type, and if the type is not one the app can take, the tool returns an error that says so (tell the user; do not work around it by putting the file inside a new document). What each type becomes: a Word document (.docx) a new document; a Markdown file (.md) a new Markdown document, kept as its text; a PowerPoint presentation (.pptx) a new presentation; an Excel workbook (.xlsx) or CSV file (.csv) a new spreadsheet; a PDF, web page (.html, such as a page or chart you generated), video (.mp4, .mov, .webm) or image (PNG, JPEG, GIF, WebP) a stored file, kept as it is and shown in the app\'s viewer (a web page is rendered, with its scripts running in a sandbox), which the other tools cannot read or edit. insert_image and set_cell_image are only for putting a picture inside a document or a spreadsheet cell.',
       inputSchema: {
         file: attachedFile.optional().describe('The attached file. Give this or url.'),
         url: z.string().max(2000).optional().describe('The https address of a file on the web to import instead of an attachment: the file itself (an image, a PDF, a .docx), not a page that shows it.'),
@@ -361,7 +365,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'open_file',
     {
       title: 'Open file',
-      description: `Open a document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default. A stored file (a PDF, video or image) is shown in the app's viewer; only its name, type and size come back.`,
+      description: `Open a document, Markdown document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first ${MAX_OUTLINE_BLOCKS} blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default. A stored file (a PDF, video or image) is shown in the app's viewer; only its name, type and size come back.`,
       inputSchema: { kind: anyKind, id: fileId },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       ...(ui ? { _meta: rendersApp() } : {}),
@@ -370,7 +374,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       guard(async () => {
         service.setOpen({ kind: k, id });
         if (k === 'file') return ok({ file: service.storedFile(id), ...service.state() });
-        const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : k === 'deck' ? await service.editDeck(id, 'read_deck', {}) : await service.editSheet(id, 'get_sheet_overview', {});
+        const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : k === 'markdown' ? await service.editMarkdown(id, 'read_doc', {}) : k === 'deck' ? await service.editDeck(id, 'read_deck', {}) : await service.editSheet(id, 'get_sheet_overview', {});
         return ok({ ...outline, ...service.state() });
       }),
   );
@@ -450,7 +454,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'rename_file',
     {
       title: 'Rename file',
-      description: 'Change the title of a document, presentation or spreadsheet, or the name of a stored file (a PDF, video or image), which keeps its extension. Defaults to the open file.',
+      description: 'Change the title of a document, Markdown document, presentation or spreadsheet, or the name of a stored file (a PDF, video or image), which keeps its extension. Defaults to the open file.',
       inputSchema: { kind: anyKind.optional(), id: z.string().optional(), title: z.string().min(1).max(200) },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -466,7 +470,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'delete_file',
     {
       title: 'Delete file',
-      description: 'Delete a document, presentation, spreadsheet or stored file permanently. Only when the user clearly asks for it.',
+      description: 'Delete a document, Markdown document, presentation, spreadsheet or stored file permanently. Only when the user clearly asks for it.',
       inputSchema: { kind: anyKind, id: fileId },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
@@ -519,9 +523,10 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { doc_id, ...input } = args as Record<string, unknown> & { doc_id?: string };
-          const id = service.target('doc', doc_id);
-          if (!id) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');
-          return ok(await service.editDoc(id, name, await resolveImage(name, input)));
+          const target = service.docTarget(doc_id);
+          if (!target) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');
+          if (target.kind === 'markdown') return ok(await service.editMarkdown(target.id, name, input));
+          return ok(await service.editDoc(target.id, name, await resolveImage(name, input)));
         }),
     );
   }

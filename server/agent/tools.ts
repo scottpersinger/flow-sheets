@@ -578,7 +578,7 @@ export const schemas = {
       title: z.string().trim().max(200).optional().describe('A title or name for what is imported, e.g. "Golden retriever". Defaults to the name in the address. Always give one for a pasted or attached picture, which has no name: say what is in it.'),
     })
     .describe(
-      'Save a file from the web, or a picture the user pasted or attached in the chat, into the user’s files. Use it when the user asks to save, download, keep or import something: a picture (PNG, JPEG, GIF, WebP), PDF, video (.mp4, .mov, .webm) or web page is stored as it is; a Word document (.docx) becomes a document, a PowerPoint file (.pptx) a presentation, and an Excel workbook (.xlsx) or CSV file a spreadsheet. Returns the id of what was made. It does not put a picture inside a document or cell: set_cell_image and insert_image do that.',
+      'Save a file from the web, or a picture the user pasted or attached in the chat, into the user’s files. Use it when the user asks to save, download, keep or import something: a picture (PNG, JPEG, GIF, WebP), PDF, video (.mp4, .mov, .webm) or web page is stored as it is; a Word document (.docx) becomes a document, a Markdown file (.md) a Markdown document holding its text, a PowerPoint file (.pptx) a presentation, and an Excel workbook (.xlsx) or CSV file a spreadsheet. Returns the id of what was made. It does not put a picture inside a document or cell: set_cell_image and insert_image do that.',
     ),
   image_search: z
     .object({
@@ -776,9 +776,10 @@ export async function runServerTool(name: string, input: Record<string, unknown>
           const picture = made.file.type.startsWith('image/');
           return JSON.stringify({ imported: true, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, size: made.file.size, note: `Saved in the user's files. open_file shows it to the user${picture ? '; view_image shows it to you' : ''}.` });
         }
-        const kind = made.sheet.kind === 'deck' ? 'presentation' : made.sheet.kind === 'doc' ? 'document' : 'spreadsheet';
-        const idField = made.sheet.kind === 'deck' ? 'deck_id' : made.sheet.kind === 'doc' ? 'doc_id' : 'sheet_id';
-        const opener = made.sheet.kind === 'deck' ? 'open_deck' : made.sheet.kind === 'doc' ? 'open_doc' : 'open_sheet';
+        const k = made.sheet.kind;
+        const kind = k === 'deck' ? 'presentation' : k === 'doc' ? 'document' : k === 'markdown' ? 'Markdown document' : 'spreadsheet';
+        const idField = k === 'deck' ? 'deck_id' : k === 'doc' || k === 'markdown' ? 'doc_id' : 'sheet_id';
+        const opener = k === 'deck' ? 'open_deck' : k === 'doc' || k === 'markdown' ? 'open_doc' : 'open_sheet';
         return JSON.stringify({ imported: true, kind, [idField]: made.sheet.id, title: made.sheet.title, ...(made.warnings.length ? { warnings: made.warnings.slice(0, 20) } : {}), note: `A new ${kind} in the user's files. ${opener} opens it.` });
       } catch (e) {
         if (e instanceof WebFetchError || e instanceof ImportFileError) throw new ToolFailure(e.message);

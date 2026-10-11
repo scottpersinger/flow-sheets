@@ -52,7 +52,7 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   A slide's own Crop (`client/src/deck/CropOverlay.tsx`, `shared/deckCrop.ts`) changes the image element's
   `crop` and box, not the picture.
 - Importing a file's bytes, whatever they are, is `server/importFile.ts` (`importBytes`: a Word, PowerPoint,
-  Excel, CSV or Markdown file becomes a file the app edits; a PDF, video, picture or web page is stored as
+  Excel, CSV or Markdown file becomes a file the app edits, a Markdown file staying Markdown; a PDF, video, picture or web page is stored as
   it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
   with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files

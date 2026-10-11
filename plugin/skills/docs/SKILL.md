@@ -10,6 +10,7 @@ Documents:
 1. Call `read_doc` first. It returns numbered blocks as Markdown plus `cursor_block` and `selected_text`. "This" or "here" means the selected text or the block the cursor is in.
 2. Edit by block number. Use `replace_text` for wording changes, `replace_blocks` to rewrite a paragraph or section, `insert_content` to add content after a block (0 for the top), `format_text` and `format_blocks` for formatting. Write content as Markdown.
 3. Block numbers change after inserts and deletes: call `read_doc` again before further edits.
+4. A Markdown document (kind `markdown`, made with `create_doc` and `kind: "markdown"` or by importing a .md file) is a plain Markdown file. `read_doc`, `insert_content`, `replace_blocks`, `delete_blocks` and `replace_text` work on it; its formatting is its text, so write the Markdown syntax instead of calling the formatting tools.
 
 Presentations:
 1. Call `read_deck` first. It returns every slide with its layout, elements (id, type, position, text) and notes, and `current_slide`, the slide the user is looking at. "This slide" means that one.
@@ -23,7 +24,7 @@ Spreadsheets:
 
 Files the user attaches: pass any attachment to `import_file`, whatever its type; it returns an error if the
 type is not one the app takes (say so, rather than working around it). A Word document (.docx), PowerPoint presentation (.pptx), Excel workbook (.xlsx),
-CSV file (.csv) or Markdown file (.md, which becomes a document) is imported with `import_file` (pass the
+CSV file (.csv) or Markdown file (.md, which stays a Markdown document) is imported with `import_file` (pass the
 attachment as `file`), which creates and opens the new file. A PDF, web page (.html), video or image goes the same way, but is
 stored as it is and only shown in the app's viewer (kind `file`: no tool reads or edits it). So "upload
 this picture" is `import_file`; an attached image only goes into a document with `insert_image` or into a

@@ -116,6 +116,46 @@ describe('MCP server', () => {
     expect((state.data?.open as { rev: string }).rev).toBe(read.data?.rev);
   });
 
+  it('creates a Markdown document and edits its text with the document tools', async () => {
+    const text = '---\nname: universal-docs\ndescription: An overview.\n---\n\n# Universal Docs\n\nEdit **office** files.\n';
+    const created = await call('create_doc', { title: 'SKILL.md', markdown: text, kind: 'markdown' });
+    expect(created.data?.file).toMatchObject({ kind: 'markdown', title: 'SKILL.md' });
+    expect(created.data?.open).toMatchObject({ kind: 'markdown' });
+    const id = (created.data?.file as { id: string }).id;
+    expect(((await call('list_files', { kind: 'markdown' })).data?.files as { id: string }[]).map((f) => f.id)).toEqual([id]);
+    // Kept exactly as written, front matter included.
+    const loaded = await call('get_file', { kind: 'markdown', id });
+    expect((loaded.data?.data as { text: string }).text).toBe(text);
+
+    // The cursor the app reported comes back with the outline, as for a document.
+    await call('set_open_file', { kind: 'markdown', id, cursor_block: 2 });
+    const read = await call('read_doc');
+    expect(read.data).toMatchObject({ format: 'markdown', doc_id: id, cursor_block: 2 });
+    expect((read.data?.blocks as { markdown: string }[]).map((b) => b.markdown)).toEqual(['---\nname: universal-docs\ndescription: An overview.\n---', '# Universal Docs', 'Edit **office** files.']);
+    expect((await call('open_file', { kind: 'markdown', id })).data).toMatchObject({ format: 'markdown', block_count: 3 });
+
+    expect((await call('replace_text', { find: 'office', replace: 'office and image' })).data?.replaced).toBe(1);
+    expect((await call('insert_content', { doc_id: id, markdown: '- one\n- two' })).data?.block_count).toBe(4);
+    const after = await call('get_file', { kind: 'markdown', id });
+    expect((after.data?.data as { text: string }).text).toBe(`${text.replace('office', 'office and image')}\n- one\n- two\n`);
+    expect((await call('app_state')).data?.open).toMatchObject({ kind: 'markdown', rev: after.data?.rev });
+
+    // Formatting is the text: the tools for rich documents say so instead of acting.
+    const refused = await call('format_text', { find: 'office', bold: true });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/Markdown document, whose formatting is its text/);
+
+    // The app's editor saves the whole text, and a stale save is refused.
+    const saved = await call('save_file', { kind: 'markdown', id, rev: after.data?.rev, data: { version: 1, text: '# Rewritten\n' } });
+    expect(saved.isError).toBe(false);
+    expect((await call('save_file', { kind: 'markdown', id, rev: after.data?.rev, data: { version: 1, text: 'stale' } })).data?.conflict).toBe(true);
+    expect(((await call('read_doc')).data?.blocks as { markdown: string }[]).map((b) => b.markdown)).toEqual(['# Rewritten']);
+
+    expect((await call('rename_file', { title: 'README.md' })).data?.file).toMatchObject({ kind: 'markdown', title: 'README.md' });
+    expect((await call('delete_file', { kind: 'markdown', id })).isError).toBe(false);
+    expect((await call('app_state')).data?.open).toBeNull();
+  });
+
   it('creates and edits a presentation, and keeps the kinds apart', async () => {
     const created = await call('create_deck', { title: 'Pitch', slides: [{ title: 'Pitch' }, { title: 'Problem', body: ['Slow'] }] });
     expect(created.isError).toBe(false);
@@ -168,8 +208,12 @@ describe('MCP server', () => {
     expect((await call('read_range', { range: 'A1:B3' })).data?.values).toEqual([['region', 'total'], ['EMEA', '12'], ['APAC, south', '7']]);
     attachments.set('https://files.example/notes.md', Buffer.from('# Notes\n\n- one\n- two\n'));
     const md = await call('import_file', { file: { download_url: 'https://files.example/notes.md', file_name: 'notes.md' } });
-    expect(md.data?.file).toMatchObject({ kind: 'doc', title: 'notes' });
-    expect(((await call('read_doc')).data?.blocks as { markdown: string }[])[0].markdown).toMatch(/^# .*Notes/);
+    // A Markdown file stays one, with its text as it was; the document tools read and change that text.
+    expect(md.data?.file).toMatchObject({ kind: 'markdown', title: 'Notes' });
+    expect(md.data?.open).toMatchObject({ kind: 'markdown' });
+    const mdId = (md.data?.file as { id: string }).id;
+    expect(((await call('get_file', { kind: 'markdown', id: mdId })).data?.data as { text: string }).text).toBe('# Notes\n\n- one\n- two\n');
+    expect(((await call('read_doc')).data?.blocks as { markdown: string }[])[0].markdown).toBe('# Notes');
     attachments.set('https://files.example/binary.csv', Buffer.from([0x50, 0x00, 0x01, 0x02]));
     expect((await call('import_file', { file: { download_url: 'https://files.example/binary.csv', file_name: 'binary.csv' } })).text).toMatch(/not a text file/);
     // A PDF or a video is stored as it is: listed and opened as a file, with a link for the app's viewer.
@@ -200,7 +244,8 @@ describe('MCP server', () => {
     expect((await call('import_file', { url: 'http://dogs.example/pics/golden-retriever.png' })).text).toMatch(/public https/);
     expect((await call('import_file', {})).text).toMatch(/either file .* or url/);
     expect((await call('import_file', { url: 'https://dogs.example/x.png', file: { download_url: 'https://files.example/photo' } })).text).toMatch(/either file .* or url/);
-    expect(((await call('list_files', { kind: 'doc' })).data?.files as unknown[]).length).toBe(2);
+    expect(((await call('list_files', { kind: 'doc' })).data?.files as unknown[]).length).toBe(1);
+    expect(((await call('list_files', { kind: 'markdown' })).data?.files as unknown[]).length).toBe(1);
     // The model can look at a picture: its size in pixels, and the picture itself.
     const imgId = (img.data!.file as { id: string }).id;
     const seen = await client.callTool({ name: 'view_image', arguments: { file_id: imgId } });

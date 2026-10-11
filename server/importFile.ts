@@ -5,7 +5,7 @@
 import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { validateDeck } from '../shared/deck.ts';
 import { validateDoc } from '../shared/doc.ts';
-import { markdownToDoc } from '../shared/docMarkdown.ts';
+import { markdownTitle, MAX_MARKDOWN_CHARS, newMarkdownDoc } from '../shared/markdown.ts';
 import { HTML_TYPE, isHtmlName, MAX_VIDEO_BYTES, videoTypeOf, type SheetMeta, type StoredFile } from '../shared/types.ts';
 import { importDocx, isDocx } from './docxImport.ts';
 import type { FileStore } from './files.ts';
@@ -59,7 +59,7 @@ export interface ImportStores {
   files: FileStore;
 }
 
-/** What an import made: a document, presentation or spreadsheet (`sheet`), or a stored file (`file`). */
+/** What an import made: a document, Markdown file, presentation or spreadsheet (`sheet`), or a stored file (`file`). */
 export type Imported = { sheet: SheetMeta; file?: undefined; warnings: string[] } | { file: StoredFile; sheet?: undefined; warnings: string[] };
 
 /**
@@ -102,17 +102,16 @@ export async function importBytes(stores: ImportStores, userId: string, bytes: B
       if (problem) throw new ImportFileError(problem);
       return { sheet: await stores.sheets.createDeck(userId, baseTitle || 'Imported presentation', deck), warnings };
     }
-    // Text formats are told by their name: a CSV file stays a CSV file, and Markdown becomes a document.
+    // Text formats are told by their name: a CSV file stays a CSV file and a Markdown file a Markdown file.
     if (/\.csv$/i.test(name ?? '')) {
       const csv = textOf(bytes);
       if (csv.length > MAX_CSV_CHARS) throw new ImportFileError('This file is too large to import (10 MB maximum).');
       return { sheet: await stores.sheets.createCsv(userId, baseTitle || 'Imported CSV', csv), warnings: [] };
     }
     if (/\.(md|markdown)$/i.test(name ?? '')) {
-      const doc = markdownToDoc(textOf(bytes));
-      const problem = validateDoc(doc);
-      if (problem) throw new ImportFileError(problem);
-      return { sheet: await stores.sheets.createDoc(userId, baseTitle || 'Imported document', doc), warnings: [] };
+      const text = textOf(bytes);
+      if (text.length > MAX_MARKDOWN_CHARS) throw new ImportFileError('This file is too large to import (5 MB maximum).');
+      return { sheet: await stores.sheets.createMarkdown(userId, title?.trim().slice(0, 200) || markdownTitle(text, fileName), newMarkdownDoc(text)), warnings: [] };
     }
     if (/\.xlsx?$/i.test(name ?? '') || bytes.subarray(0, 2).toString('latin1') === 'PK' || bytes[0] === 0xd0) {
       const { workbook, warnings } = await importExcel(bytes);

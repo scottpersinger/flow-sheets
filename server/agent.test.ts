@@ -402,7 +402,11 @@ describe('web and image search tools', () => {
     const created: { filename: string; type: string; size: number }[] = [];
     const csvs: { title: string; csv: string }[] = [];
     const files = { create: async (_owner: string, filename: string, type: string, data: Buffer) => (created.push({ filename, type, size: data.length }), { id: `f${created.length}`, filename, type, size: data.length, createdAt: '2026-01-01', url: '', downloadUrl: '' }) } as unknown as FileStore;
-    const sheets = { createCsv: async (_owner: string, title: string, csv: string) => (csvs.push({ title, csv }), { id: 's1', kind: 'sheet', title, updatedAt: '', createdAt: '' }) } as unknown as SheetStore;
+    const markdowns: { title: string; text: string }[] = [];
+    const sheets = {
+      createCsv: async (_owner: string, title: string, csv: string) => (csvs.push({ title, csv }), { id: 's1', kind: 'sheet', title, updatedAt: '', createdAt: '' }),
+      createMarkdown: async (_owner: string, title: string, doc: { text: string }) => (markdowns.push({ title, text: doc.text }), { id: 'm1', kind: 'markdown', title, updatedAt: '', createdAt: '' }),
+    } as unknown as SheetStore;
     // A picture pasted into the chat is stored for the user already; only its owner's lookup finds it.
     const pasted = path.join(mkdtempSync(path.join(tmpdir(), 'pasted-')), 'img');
     writeFileSync(pasted, png);
@@ -418,6 +422,7 @@ describe('web and image search tools', () => {
         if (url === 'https://cdn.example.com/dogs/golden.png') return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } });
         if (url === 'https://cdn.example.com/photo?id=3') return new Response(new Uint8Array(png));
         if (url === 'https://data.example.com/sales.csv') return new Response('a,b\n1,2\n');
+        if (url === 'https://docs.example.com/README.md') return new Response('---\nname: x\n---\n\n# Read me\n');
         if (url === 'https://cdn.example.com/notes.txt') return new Response('just some words');
         return new Response('gone', { status: 404 });
       }),
@@ -432,6 +437,9 @@ describe('web and image search tools', () => {
       expect(created.map((c) => c.type)).toEqual(['image/png', 'image/png']);
       expect(JSON.parse(await runServerTool('import_file', { url: 'https://data.example.com/sales.csv', title: 'Sales' }, env))).toMatchObject({ kind: 'spreadsheet', sheet_id: 's1', title: 'Sales', note: expect.stringContaining('open_sheet') });
       expect(csvs).toEqual([{ title: 'Sales', csv: 'a,b\n1,2\n' }]);
+      // A Markdown file stays Markdown, text as it was, titled by its first heading.
+      expect(JSON.parse(await runServerTool('import_file', { url: 'https://docs.example.com/README.md' }, env))).toMatchObject({ kind: 'Markdown document', doc_id: 'm1', title: 'Read me', note: expect.stringContaining('open_doc') });
+      expect(markdowns).toEqual([{ title: 'Read me', text: '---\nname: x\n---\n\n# Read me\n' }]);
       // A pasted picture is read from the user's stored images, not fetched, and named by its title.
       const before = (fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
       expect(JSON.parse(await runServerTool('import_file', { url: `/api/images/${pastedId}`, title: 'Man holding a tabby cat' }, env))).toMatchObject({ imported: true, kind: 'file', filename: 'Man holding a tabby cat.png', type: 'image/png', size: 28 });

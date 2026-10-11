@@ -101,11 +101,10 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         }
         items={items}
         error={error}
-        createKinds={['sheet', 'deck', 'doc']}
+        createKinds={['sheet', 'deck', 'doc', 'markdown']}
         onGettingStarted={() => void openGuide()}
         onCreate={async (kind, title) => {
-          if (kind === 'markdown') return;
-          const r = await host.call<{ file: FileSummary }>(CREATE_TOOLS[kind], { title });
+          const r = await host.call<{ file: FileSummary }>(kind === 'markdown' ? 'create_doc' : CREATE_TOOLS[kind], { title, ...(kind === 'markdown' ? { kind } : {}) });
           onOpen({ kind, id: r.file.id });
         }}
         importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${CSV_ACCEPT},${MARKDOWN_ACCEPT},${PDF_ACCEPT},${HTML_ACCEPT},${VIDEO_ACCEPT},.png,.jpg,.jpeg,.gif,.webp`}

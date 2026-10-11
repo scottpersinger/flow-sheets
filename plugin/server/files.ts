@@ -9,6 +9,8 @@ import { runClientTool, type ClientToolEnv } from '../../client/src/agent/client
 import { runDeckTool } from '../../client/src/agent/deckTools.ts';
 import { importExcel, ImportError } from '../../server/xlsxImport.ts';
 import { runDocTool } from '../../client/src/agent/docTools.ts';
+import { markdownToolProblem, runMarkdownTool } from '../../client/src/agent/markdownTools.ts';
+import { MarkdownController } from '../../client/src/markdown/controller.ts';
 import { ToolError } from '../../client/src/agent/toolError.ts';
 import { DeckController } from '../../client/src/deck/controller.ts';
 import { DocController } from '../../client/src/doc/controller.ts';
@@ -19,6 +21,7 @@ import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
+import { newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../../shared/markdown.ts';
 import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import { FileStore, isImageOfType } from '../../server/files.ts';
 import { imageSize } from '../../server/imageSize.ts';
@@ -27,10 +30,11 @@ import { importBytes, ImportFileError } from '../../server/importFile.ts';
 
 export { ToolError };
 
-export type FileKind = 'doc' | 'deck' | 'sheet';
-export const FILE_KINDS: readonly FileKind[] = ['doc', 'deck', 'sheet'];
-export type FileData = Doc | Deck | Workbook;
-/** Everything the library lists: the three editable kinds, and stored files (PDFs and videos) that are only shown. */
+/** A Markdown document (`markdown`) is a plain Markdown file: the document tools that change content work on its text. */
+export type FileKind = 'doc' | 'deck' | 'sheet' | 'markdown';
+export const FILE_KINDS: readonly FileKind[] = ['doc', 'deck', 'sheet', 'markdown'];
+export type FileData = Doc | Deck | Workbook | MarkdownDoc;
+/** Everything the library lists: the editable kinds, and stored files (PDFs and videos) that are only shown. */
 export type LibraryKind = FileKind | 'file';
 export const LIBRARY_KINDS: readonly LibraryKind[] = [...FILE_KINDS, 'file'];
 
@@ -165,7 +169,7 @@ const summary = (m: SheetMeta): FileSummary => ({ kind: m.kind as FileKind, id: 
 
 const fileSummary = (f: StoredFile): FileSummary => ({ kind: 'file', id: f.id, title: f.filename, updated_at: f.createdAt, created_at: f.createdAt, type: f.type, size: f.size });
 
-const noun = (kind: LibraryKind) => (kind === 'doc' ? 'document' : kind === 'deck' ? 'presentation' : kind === 'sheet' ? 'spreadsheet' : 'file');
+const noun = (kind: LibraryKind) => (kind === 'doc' ? 'document' : kind === 'deck' ? 'presentation' : kind === 'sheet' ? 'spreadsheet' : kind === 'markdown' ? 'Markdown document' : 'file');
 
 /** Apply fn to every image address in a document (the content is plain JSON). */
 function mapDocImages(doc: Doc, fn: (src: string) => string): Doc {
@@ -195,6 +199,8 @@ function mapWorkbookImages(wb: Workbook, fn: (src: string) => string): Workbook 
 function mapImages<T extends FileData>(kind: FileKind, data: T, fn: (src: string) => string): T {
   if (kind === 'doc') return mapDocImages(data as Doc, fn) as T;
   if (kind === 'deck') return mapDeckImages(data as Deck, fn) as T;
+  // Markdown is kept exactly as typed, picture addresses included.
+  if (kind === 'markdown') return data;
   return mapWorkbookImages(data as Workbook, fn) as T;
 }
 
@@ -334,7 +340,9 @@ export class FileService {
       .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
   }
 
-  async createDoc(title: string, markdown?: string): Promise<FileSummary> {
+  /** A text document built from the Markdown, or (kind markdown) a Markdown file holding it as it is. */
+  async createDoc(title: string, markdown?: string, kind: 'doc' | 'markdown' = 'doc'): Promise<FileSummary> {
+    if (kind === 'markdown') return summary(await this.sheets.createMarkdown(this.userId, title.trim() || 'Untitled Markdown', newMarkdownDoc(markdown ?? '')));
     const doc = markdown ? markdownToDoc(markdown) : newDoc();
     const problem = validateDoc(doc);
     if (problem) throw new ToolError(problem);
@@ -498,6 +506,12 @@ export class FileService {
     return this.open?.kind === kind ? this.open.id : null;
   }
 
+  /** The same for the document tools, which also work on Markdown documents: the file and which of the two it is. */
+  docTarget(id: string | undefined): { kind: 'doc' | 'markdown'; id: string } | null {
+    if (id) return { kind: this.sheets.get(this.userId, id, 'markdown') ? 'markdown' : 'doc', id };
+    return this.open && (this.open.kind === 'doc' || this.open.kind === 'markdown') ? { kind: this.open.kind, id: this.open.id } : null;
+  }
+
   state(): AppState {
     if (this.open?.kind === 'file') {
       const f = this.hub.files.get(this.userId, this.open.id)?.meta;
@@ -535,6 +549,10 @@ export class FileService {
       const r = await this.sheets.loadDeck(this.userId, id);
       return r && { meta: r.meta, data: r.deck };
     }
+    if (kind === 'markdown') {
+      const r = await this.sheets.loadMarkdown(this.userId, id);
+      return r && { meta: r.meta, data: r.doc };
+    }
     const r = await this.sheets.load(this.userId, id);
     return r && r.meta.kind === 'sheet' ? { meta: r.meta, data: r.workbook } : null;
   }
@@ -549,13 +567,19 @@ export class FileService {
   /** Save a whole file. With ifRev, the save only happens when nobody else saved first. */
   async save(kind: FileKind, id: string, data: FileData, ifRev?: string): Promise<{ rev: string }> {
     const stored = this.toStored(kind, data);
-    const problem = kind === 'doc' ? validateDoc(stored) : kind === 'deck' ? validateDeck(stored) : validateWorkbook(stored);
+    const problem = kind === 'doc' ? validateDoc(stored) : kind === 'deck' ? validateDeck(stored) : kind === 'markdown' ? validateMarkdownDoc(stored) : validateWorkbook(stored);
     if (problem) throw new ToolError(problem);
     const meta = this.sheets.get(this.userId, id, kind);
     if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     if (ifRev && meta.updatedAt !== ifRev) throw new ConflictError(meta.updatedAt);
     const saved =
-      kind === 'doc' ? await this.sheets.saveDoc(this.userId, id, stored as Doc) : kind === 'deck' ? await this.sheets.saveDeck(this.userId, id, stored as Deck) : await this.sheets.save(this.userId, id, stored as Workbook);
+      kind === 'doc'
+        ? await this.sheets.saveDoc(this.userId, id, stored as Doc)
+        : kind === 'deck'
+          ? await this.sheets.saveDeck(this.userId, id, stored as Deck)
+          : kind === 'markdown'
+            ? await this.sheets.saveMarkdown(this.userId, id, stored as MarkdownDoc)
+            : await this.sheets.save(this.userId, id, stored as Workbook);
     if (!saved) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return { rev: saved.updatedAt };
   }
@@ -581,6 +605,34 @@ export class FileService {
         if (this.cursor.cursor_block) result.cursor_block = this.cursor.cursor_block;
         if (this.cursor.selected_text) result.selected_text = this.cursor.selected_text;
         else delete result.selected_text;
+      }
+      return { doc_id: id, title: loaded.meta.title, rev, ...result };
+    } finally {
+      ctl.dispose();
+    }
+  }
+
+  /**
+   * The same for a Markdown document: the document tools that change content act on its text, and the others
+   * (formatting, page setup, pictures) are refused with what to do instead.
+   */
+  async editMarkdown(id: string, tool: DocEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const problem = markdownToolProblem(tool);
+    if (problem) throw new ToolError(problem.replace('The open file', 'This file'));
+    const loaded = await this.sheets.loadMarkdown(this.userId, id);
+    if (!loaded) throw new ToolError(`There is no Markdown document ${id}.`);
+    const ctl = new MarkdownController(loaded.doc, async () => {});
+    try {
+      const result = JSON.parse(runMarkdownTool({ id: 'mcp', name: tool, input }, ctl)) as Record<string, unknown>;
+      let rev = loaded.meta.updatedAt;
+      if (ctl.text !== loaded.doc.text) rev = (await this.save('markdown', id, ctl.document, loaded.meta.updatedAt)).rev;
+      if (tool === 'read_doc') {
+        // The headless controller has no cursor; report the one the app's editor told us about.
+        delete result.cursor_block;
+        if (this.open?.id === id) {
+          if (this.cursor.cursor_block) result.cursor_block = this.cursor.cursor_block;
+          if (this.cursor.selected_text) result.selected_text = this.cursor.selected_text;
+        }
       }
       return { doc_id: id, title: loaded.meta.title, rev, ...result };
     } finally {
