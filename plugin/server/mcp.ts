@@ -78,23 +78,27 @@ const optionalDeckId = z.string().optional().describe('The presentation to act o
 const optionalSheetId = z.string().optional().describe('The spreadsheet to act on. Defaults to the spreadsheet open in the app.');
 type EditTool = DocEditTool | DeckEditTool | SheetEditTool;
 
-/** Which of the app's tools change the file, for ChatGPT's "ask before changes" setting. */
+/**
+ * Which of the app's tools change the file, for ChatGPT's "ask before changes" setting. A tool that writes over
+ * or removes what was there (text, a slide's content, elements, the page setup) is destructive, as OpenAI's
+ * review reads it, even though the app's editor can undo it.
+ */
 const ANNOTATIONS: Record<EditTool, { readOnlyHint: boolean; destructiveHint: boolean }> = {
   read_doc: { readOnlyHint: true, destructiveHint: false },
   get_doc_info: { readOnlyHint: true, destructiveHint: false },
   insert_content: { readOnlyHint: false, destructiveHint: false },
   replace_blocks: { readOnlyHint: false, destructiveHint: true },
   delete_blocks: { readOnlyHint: false, destructiveHint: true },
-  replace_text: { readOnlyHint: false, destructiveHint: false },
+  replace_text: { readOnlyHint: false, destructiveHint: true },
   format_text: { readOnlyHint: false, destructiveHint: false },
   format_blocks: { readOnlyHint: false, destructiveHint: false },
   insert_image: { readOnlyHint: false, destructiveHint: false },
   set_doc_style: { readOnlyHint: false, destructiveHint: false },
-  set_page_setup: { readOnlyHint: false, destructiveHint: false },
+  set_page_setup: { readOnlyHint: false, destructiveHint: true },
   read_deck: { readOnlyHint: true, destructiveHint: false },
   add_slides: { readOnlyHint: false, destructiveHint: false },
-  update_slide: { readOnlyHint: false, destructiveHint: false },
-  edit_elements: { readOnlyHint: false, destructiveHint: false },
+  update_slide: { readOnlyHint: false, destructiveHint: true },
+  edit_elements: { readOnlyHint: false, destructiveHint: true },
   delete_slides: { readOnlyHint: false, destructiveHint: true },
   move_slide: { readOnlyHint: false, destructiveHint: false },
   set_deck_theme: { readOnlyHint: false, destructiveHint: false },
