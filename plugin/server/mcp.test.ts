@@ -197,17 +197,17 @@ describe('MCP server', () => {
     expect((read.data?.blocks as { markdown: string }[])[0].markdown).toMatch(/^# .*From Word/);
     const { pres } = await buildPptx({ version: 1, theme: 'light', slides: [buildSlide('title-body', { title: 'From PowerPoint', body: ['One', 'Two'] }, newId)] }, 'x', async () => null);
     attachments.set('https://files.example/deck.pptx', Buffer.from((await pres.write({ outputType: 'nodebuffer' })) as Buffer));
-    const deck = await call('import_file', { file: { download_url: 'https://files.example/deck.pptx' }, title: 'Pitch' });
+    const deck = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/deck.pptx' }, title: 'Pitch' });
     expect(deck.data?.file).toMatchObject({ kind: 'deck', title: 'Pitch' });
     expect((deck.data?.open as { kind: string }).kind).toBe('deck');
     // A CSV file stays a CSV file (a spreadsheet), and a Markdown file becomes a document; both go by their name.
     attachments.set('https://files.example/sales.csv', Buffer.from('\uFEFFregion,total\nEMEA,12\n"APAC, south",7\n'));
-    const csv = await call('import_file', { file: { download_url: 'https://files.example/sales.csv', file_name: 'sales.csv' } });
+    const csv = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/sales.csv', file_name: 'sales.csv' } });
     expect(csv.isError).toBe(false);
     expect(csv.data?.file).toMatchObject({ kind: 'sheet', title: 'sales' });
     expect((await call('read_range', { range: 'A1:B3' })).data?.values).toEqual([['region', 'total'], ['EMEA', '12'], ['APAC, south', '7']]);
     attachments.set('https://files.example/notes.md', Buffer.from('# Notes\n\n- one\n- two\n'));
-    const md = await call('import_file', { file: { download_url: 'https://files.example/notes.md', file_name: 'notes.md' } });
+    const md = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/notes.md', file_name: 'notes.md' } });
     // A Markdown file stays one, with its text as it was; the document tools read and change that text.
     expect(md.data?.file).toMatchObject({ kind: 'markdown', title: 'Notes' });
     expect(md.data?.open).toMatchObject({ kind: 'markdown' });
@@ -215,10 +215,10 @@ describe('MCP server', () => {
     expect(((await call('get_file', { kind: 'markdown', id: mdId })).data?.data as { text: string }).text).toBe('# Notes\n\n- one\n- two\n');
     expect(((await call('read_doc')).data?.blocks as { markdown: string }[])[0].markdown).toBe('# Notes');
     attachments.set('https://files.example/binary.csv', Buffer.from([0x50, 0x00, 0x01, 0x02]));
-    expect((await call('import_file', { file: { download_url: 'https://files.example/binary.csv', file_name: 'binary.csv' } })).text).toMatch(/not a text file/);
+    expect((await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/binary.csv', file_name: 'binary.csv' } })).text).toMatch(/not a text file/);
     // A PDF or a video is stored as it is: listed and opened as a file, with a link for the app's viewer.
     attachments.set('https://files.example/report.pdf', Buffer.from('%PDF-1.7\n%%EOF'));
-    const pdf = await call('import_file', { file: { download_url: 'https://files.example/report.pdf', file_name: 'report.pdf' } });
+    const pdf = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/report.pdf', file_name: 'report.pdf' } });
     expect(pdf.data?.file).toMatchObject({ kind: 'file', title: 'report.pdf', type: 'application/pdf' });
     expect((pdf.data?.open as { kind: string }).kind).toBe('file');
     const pdfId = (pdf.data?.file as { id: string }).id;
@@ -231,7 +231,7 @@ describe('MCP server', () => {
     expect((await call('list_files', { kind: 'file' })).data?.files).toEqual([]);
     // An image is a file of its own too (told by its bytes), not a document with a picture in it.
     attachments.set('https://files.example/photo', Buffer.from(PNG_BASE64, 'base64'));
-    const img = await call('import_file', { file: { download_url: 'https://files.example/photo', file_name: 'photo' } });
+    const img = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/photo', file_name: 'photo' } });
     expect(img.data?.file).toMatchObject({ kind: 'file', title: 'photo.png', type: 'image/png' });
     // A file at a web address is imported the same way, named by its address, and opened.
     attachments.set('https://dogs.example/pics/golden-retriever.png', Buffer.from(PNG_BASE64, 'base64'));
@@ -243,7 +243,7 @@ describe('MCP server', () => {
     expect((await call('import_file', { url: 'https://intranet.example/a.png' })).text).toMatch(/public https/);
     expect((await call('import_file', { url: 'http://dogs.example/pics/golden-retriever.png' })).text).toMatch(/public https/);
     expect((await call('import_file', {})).text).toMatch(/either file .* or url/);
-    expect((await call('import_file', { url: 'https://dogs.example/x.png', file: { download_url: 'https://files.example/photo' } })).text).toMatch(/either file .* or url/);
+    expect((await call('import_file', { url: 'https://dogs.example/x.png', file: { file_id: 'file_1', download_url: 'https://files.example/photo' } })).text).toMatch(/either file .* or url/);
     expect(((await call('list_files', { kind: 'doc' })).data?.files as unknown[]).length).toBe(1);
     expect(((await call('list_files', { kind: 'markdown' })).data?.files as unknown[]).length).toBe(1);
     // The model can look at a picture: its size in pixels, and the picture itself.
@@ -286,17 +286,17 @@ describe('MCP server', () => {
     expect(offered.find((t) => t.name === 'transform_image')?.inputSchema.properties).not.toHaveProperty('operations');
     // A web page is stored as it is, by its name or by how it starts.
     attachments.set('https://files.example/chart.html', Buffer.from('<h1>Chart</h1><script>document.title = 1</script>'));
-    const html = await call('import_file', { file: { download_url: 'https://files.example/chart.html', file_name: 'chart.html' } });
+    const html = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/chart.html', file_name: 'chart.html' } });
     expect(html.data?.file).toMatchObject({ kind: 'file', title: 'chart.html', type: 'text/html' });
     attachments.set('https://files.example/page', Buffer.from('\n<!DOCTYPE html><html><body>Hi</body></html>'));
-    expect((await call('import_file', { file: { download_url: 'https://files.example/page' }, title: 'Report' })).data?.file).toMatchObject({ kind: 'file', title: 'Report.html', type: 'text/html' });
+    expect((await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/page' }, title: 'Report' })).data?.file).toMatchObject({ kind: 'file', title: 'Report.html', type: 'text/html' });
     attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
-    const txt = await call('import_file', { file: { download_url: 'https://files.example/notes.txt' } });
+    const txt = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/notes.txt' } });
     expect(txt.isError).toBe(true);
     expect(txt.text).toMatch(/Only Word documents/);
-    const local = await call('import_file', { file: { download_url: 'http://127.0.0.1/secret' } });
+    const local = await call('import_file', { file: { file_id: 'file_1', download_url: 'http://127.0.0.1/secret' } });
     expect(local.text).toMatch(/public https/);
-    const missing = await call('import_file', { file: { download_url: 'https://files.example/gone.docx' } });
+    const missing = await call('import_file', { file: { file_id: 'file_1', download_url: 'https://files.example/gone.docx' } });
     expect(missing.text).toMatch(/404/);
   });
 
@@ -307,7 +307,7 @@ describe('MCP server', () => {
     expect(cell.inputSchema.required ?? []).not.toContain('url');
     attachments.set('https://files.example/cat.png', Buffer.from(PNG_1X1, 'base64'));
     await call('create_sheet', { title: 'Pics' });
-    const put = await call('set_cell_image', { range: 'B2', file: { download_url: 'https://files.example/cat.png', mime_type: 'application/octet-stream' } });
+    const put = await call('set_cell_image', { range: 'B2', file: { file_id: 'file_1', download_url: 'https://files.example/cat.png', mime_type: 'application/octet-stream' } });
     expect(put.isError, put.text).toBe(false);
     expect(put.data?.image_in).toBe('Sheet1!B2');
     const read = await call('read_range', { range: 'B2' });
@@ -325,11 +325,11 @@ describe('MCP server', () => {
     expect(neither.isError).toBe(true);
     expect(neither.text).toMatch(/attach the image/);
     attachments.set('https://files.example/notes.txt', Buffer.from('plain text'));
-    const notImage = await call('set_cell_image', { range: 'B3', file: { download_url: 'https://files.example/notes.txt' } });
+    const notImage = await call('set_cell_image', { range: 'B3', file: { file_id: 'file_1', download_url: 'https://files.example/notes.txt' } });
     expect(notImage.text).toMatch(/PNG, JPEG, GIF or WebP/);
 
     await call('create_doc', { title: 'Album', markdown: 'Cats.\n' });
-    const inserted = await call('insert_image', { after: 1, file: { download_url: 'https://files.example/cat.png' } });
+    const inserted = await call('insert_image', { after: 1, file: { file_id: 'file_1', download_url: 'https://files.example/cat.png' } });
     expect(inserted.isError, inserted.text).toBe(false);
     const doc = await call('read_doc');
     expect((doc.data?.blocks as { markdown: string }[])[1].markdown).toMatch(/^!\[.*\]\(\/api\/images\//);

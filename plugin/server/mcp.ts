@@ -141,9 +141,10 @@ const DESCRIPTIONS: Partial<Record<EditTool, string>> = {
 /** Tools that take an image, and the field it goes in: the user's attachment can stand in for the address. */
 const IMAGE_TOOLS: Partial<Record<EditTool, string>> = { set_cell_image: 'url', insert_image: 'src' };
 
+// The shape ChatGPT documents for a file parameter: download_url and file_id are required.
 const attachedFile = z.object({
   download_url: z.string().describe('Where to download the file (filled in by ChatGPT).'),
-  file_id: z.string().optional(),
+  file_id: z.string().describe('The id ChatGPT gives the attached file.'),
   mime_type: z.string().optional(),
   file_name: z.string().optional(),
 });
