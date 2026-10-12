@@ -27,6 +27,8 @@ import { FileStore, isImageOfType } from '../../server/files.ts';
 import { imageSize } from '../../server/imageSize.ts';
 import { open } from 'node:fs/promises';
 import { importBytes, ImportFileError } from '../../server/importFile.ts';
+import { NoTextError, storedFileText, textOutline } from '../../server/storedText.ts';
+import { readFile } from 'node:fs/promises';
 
 export { ToolError };
 
@@ -405,6 +407,28 @@ export class FileService {
     const f = this.hub.files.get(this.userId, id);
     if (!f) throw new ToolError(`There is no file ${id}.`);
     return fileSummary(f.meta);
+  }
+
+  /**
+   * The stored file read_doc reads: the one named, or the open one when none is named. Null when the target
+   * is not a stored file (a document, or nothing).
+   */
+  storedTarget(id: string | undefined): string | null {
+    if (id) return this.hub.files.get(this.userId, id) ? id : null;
+    return this.open?.kind === 'file' ? this.open.id : null;
+  }
+
+  /** A stored file's text as numbered blocks, read like a document (a PDF's text, a web page's, a text file). */
+  async readStored(id: string, from?: number, to?: number): Promise<Record<string, unknown>> {
+    const f = this.hub.files.get(this.userId, id);
+    if (!f) throw new ToolError(`There is no file ${id}.`);
+    try {
+      const text = storedFileText(f.meta, await readFile(f.file));
+      return { file_id: id, filename: f.meta.filename, type: f.meta.type, read_only: true, ...textOutline(text, from, to) };
+    } catch (e) {
+      if (e instanceof NoTextError) throw new ToolError(e.message);
+      throw e;
+    }
   }
 
   // --- Pictures: the image editor runs in the app (a browser), so the model's edits are jobs the app takes ---

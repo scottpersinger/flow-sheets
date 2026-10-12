@@ -181,13 +181,18 @@ export function linesToMarkdown(lines: Line[]): string {
   return blocks.join('\n\n');
 }
 
-export function importPdf(buf: Buffer): { doc: Doc; warnings: string[] } {
+/** The text of a PDF as Markdown, for reading. Empty when it has none that can be extracted (a scan). */
+export function pdfText(buf: Buffer, verb = 'read'): string {
   if (!isPdf(buf)) throw new ImportError('This file is not a valid PDF.');
-  if (buf.length > MAX_PDF_BYTES) throw new ImportError(`This PDF is too large to import (${MAX_PDF_BYTES / 1024 / 1024} MB maximum).`);
-  if (/\/Encrypt\b/.test(buf.toString('latin1'))) throw new ImportError('This PDF is password-protected and cannot be imported.');
+  if (buf.length > MAX_PDF_BYTES) throw new ImportError(`This PDF is too large to ${verb} (${MAX_PDF_BYTES / 1024 / 1024} MB maximum).`);
+  if (/\/Encrypt\b/.test(buf.toString('latin1'))) throw new ImportError(`This PDF is password-protected and cannot be ${verb === 'read' ? 'read' : 'imported'}.`);
   const lines: Line[] = [];
   for (const s of contentStreams(buf)) readContent(s, lines);
-  const md = linesToMarkdown(lines);
+  return linesToMarkdown(lines);
+}
+
+export function importPdf(buf: Buffer): { doc: Doc; warnings: string[] } {
+  const md = pdfText(buf, 'import');
   if (!md.trim()) throw new ImportError('No text could be extracted from this PDF. It may be a scanned image.');
   return { doc: markdownToDoc(md), warnings: [] };
 }

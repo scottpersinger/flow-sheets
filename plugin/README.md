@@ -106,6 +106,12 @@ plugin/
    "OAuth" (ChatGPT discovers the settings), *Create as a plugin*, then Connect and sign in. `@<plugin name> open my resume` in a chat renders
    the editor under the tool call. After changing the server, use *Refresh tools* on the plugin's Manage page.
 
+Versions: `/mcp` serves version 1 of the tools, the one submitted to ChatGPT, and must not change
+(`server/mcp-v1.json` is its tool list, and a test compares the two). New tools and changed descriptions or results
+go into the next version, served at `/mcp/v2` (`MCP_VERSIONS` and the `version` checks in `server/mcp.ts`); a client
+connects to that path to use it, with the same OAuth accounts. Version 2 adds `read_file` (a stored file as it is)
+and reading stored files' text through `open_file` and `read_doc`.
+
 Debug switches (environment): `PLUGIN_LEVEL=minimal|tools|render|app|full` registers progressively more
 (bisecting what ChatGPT accepts), `PLUGIN_HELLO=1` serves a static page instead of the editor,
 `PLUGIN_HOSTED_ASSETS=1` references the script and stylesheet from the public origin instead of inlining,

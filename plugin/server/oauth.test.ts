@@ -46,14 +46,14 @@ afterEach(async () => {
 });
 
 const form = (body: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body).toString(), redirect: 'manual' as const });
-const mcp = (token: string | null, body: unknown) =>
-  fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+const mcp = (token: string | null, body: unknown, endpoint = '/mcp') =>
+  fetch(`${base}${endpoint}`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
 
 /** The whole browser side of the code flow with PKCE, as ChatGPT would drive it. */
-async function obtainCode(opts: { clientId?: string; verifier: string; signIn?: (pendingId: string) => Promise<void> } = { verifier: 'v' }) {
+async function obtainCode(opts: { clientId?: string; verifier: string; signIn?: (pendingId: string) => Promise<void>; resource?: string } = { verifier: 'v' }) {
   const clientId = opts.clientId ?? CLIENT_DOC_URL;
   const challenge = createHash('sha256').update(opts.verifier).digest('base64url');
-  const q = new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', scope: 'files:read files:write', state: 'st8', resource: 'https://plugin.example/mcp' });
+  const q = new URLSearchParams({ response_type: 'code', client_id: clientId, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', scope: 'files:read files:write', state: 'st8', resource: opts.resource ?? 'https://plugin.example/mcp' });
   const page = await fetch(`${base}/oauth/authorize?${q}`);
   expect(page.status).toBe(200);
   const htmlText = await page.text();
@@ -93,6 +93,27 @@ describe('OAuth', () => {
     expect(r.headers.get('www-authenticate')).toContain('resource_metadata="https://plugin.example/.well-known/oauth-protected-resource/mcp"');
     const bad = await mcp('nope', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
     expect(bad.headers.get('www-authenticate')).toContain('error="invalid_token"');
+  });
+
+  it('serves a newer version of the tools at /mcp/v2 as a resource of its own, with the same accounts', async () => {
+    for (const p of ['/.well-known/oauth-protected-resource/mcp/v2', '/mcp/v2/.well-known/oauth-protected-resource']) {
+      expect(await fetch(base + p).then((r) => r.json())).toMatchObject({ resource: 'https://plugin.example/mcp/v2', authorization_servers: ['https://plugin.example'] });
+    }
+    expect((await fetch(`${base}/.well-known/oauth-protected-resource/mcp/v9`)).status).toBe(404);
+    const refused = await mcp(null, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, '/mcp/v2');
+    expect(refused.status).toBe(401);
+    expect(refused.headers.get('www-authenticate')).toContain('resource_metadata="https://plugin.example/.well-known/oauth-protected-resource/mcp/v2"');
+
+    const { code } = await obtainCode({ verifier: 'versioned-verifier-1234567890', resource: 'https://plugin.example/mcp/v2' });
+    const tokens = await fetch(`${base}/oauth/token`, form({ grant_type: 'authorization_code', code, code_verifier: 'versioned-verifier-1234567890', redirect_uri: REDIRECT, client_id: CLIENT_DOC_URL, resource: 'https://plugin.example/mcp/v2' })).then((r) => r.json());
+    const names = async (endpoint: string) => ((await mcp(tokens.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, endpoint).then((r) => r.json())).result.tools as { name: string }[]).map((t) => t.name);
+    expect(await names('/mcp/v2')).toContain('read_file');
+    expect(await names('/mcp')).not.toContain('read_file');
+    expect((await mcp(tokens.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, '/mcp/v9')).status).toBe(404);
+    // A resource that is not one of the endpoints is refused.
+    const challenge = createHash('sha256').update('x').digest('base64url');
+    const other = await fetch(`${base}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: CLIENT_DOC_URL, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', resource: 'https://plugin.example/mcp/other' })}`, { redirect: 'manual' });
+    expect(new URL(other.headers.get('location')!).searchParams.get('error')).toBe('invalid_target');
   });
 
   it('runs the code flow with a client metadata document and PKCE, then serves that account', async () => {

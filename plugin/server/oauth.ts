@@ -102,12 +102,25 @@ export class OAuthServer {
     return !!this.google;
   }
 
+  /**
+   * The resource for an MCP path. Every version of the endpoint (/mcp, /mcp/v2) is the same server with the same
+   * accounts, so a token for one is good for all of them.
+   */
+  private resourceAt(endpoint: string): string {
+    return endpoint === '/mcp' ? this.resource : `${this.resource}${endpoint.slice('/mcp'.length)}`;
+  }
+
+  /** Whether tokens are issued for this resource: the MCP endpoint, or a version of it. */
+  private isResource(resource: string): boolean {
+    return resource === this.resource || (resource.startsWith(`${this.resource}/v`) && /^\/v\d+$/.test(resource.slice(this.resource.length)));
+  }
+
   // --- Discovery ----------------------------------------------------------------------
 
   /** RFC 9728: where the resource server's tokens come from. */
-  protectedResourceMetadata() {
+  protectedResourceMetadata(endpoint = '/mcp') {
     return {
-      resource: this.resource,
+      resource: this.resourceAt(endpoint),
       authorization_servers: [this.issuer],
       scopes_supported: [...SCOPES],
       bearer_methods_supported: ['header'],
@@ -136,8 +149,8 @@ export class OAuthServer {
   }
 
   /** The challenge for a 401 on the MCP endpoint, which makes ChatGPT start (or redo) the OAuth flow. */
-  wwwAuthenticate(error?: string): string {
-    const parts = [`Bearer resource_metadata="${this.issuer}/.well-known/oauth-protected-resource/mcp"`];
+  wwwAuthenticate(error?: string, endpoint = '/mcp'): string {
+    const parts = [`Bearer resource_metadata="${this.issuer}/.well-known/oauth-protected-resource${endpoint}"`];
     if (error) parts.push(`error="${error}"`);
     return parts.join(', ');
   }
@@ -215,7 +228,7 @@ export class OAuthServer {
     if (q.response_type !== 'code') return back('unsupported_response_type', 'Only response_type=code is supported.');
     if (!q.code_challenge) return back('invalid_request', 'code_challenge is required (PKCE).');
     if ((q.code_challenge_method ?? 'plain') !== 'S256') return back('invalid_request', 'code_challenge_method must be S256.');
-    if (q.resource && q.resource !== this.resource) return back('invalid_target', `Unknown resource; this server issues tokens for ${this.resource}.`);
+    if (q.resource && !this.isResource(q.resource)) return back('invalid_target', `Unknown resource; this server issues tokens for ${this.resource}.`);
     const scope = this.cleanScope(q.scope);
     if (!scope) return back('invalid_scope', `Supported scopes: ${SCOPES.join(' ')}.`);
     this.purge();
@@ -321,7 +334,7 @@ export class OAuthServer {
     if (client_id && client_id !== row.client_id) throw new OAuthError('invalid_grant', 'client_id does not match the code.');
     if (redirect_uri && redirect_uri !== row.redirect_uri) throw new OAuthError('invalid_grant', 'redirect_uri does not match the code.');
     if (sha(code_verifier) !== row.code_challenge) throw new OAuthError('invalid_grant', 'code_verifier does not match the code challenge.');
-    if (resource && resource !== this.resource) throw new OAuthError('invalid_target', `Unknown resource; this server issues tokens for ${this.resource}.`);
+    if (resource && !this.isResource(resource)) throw new OAuthError('invalid_target', `Unknown resource; this server issues tokens for ${this.resource}.`);
     this.db.prepare('UPDATE oauth_codes SET used_at = ? WHERE hash = ?').run(iso(now()), row.hash);
     return this.issue(row.client_id, row.user_id, row.scope, row.hash);
   }

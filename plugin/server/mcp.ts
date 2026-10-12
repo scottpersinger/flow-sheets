@@ -7,7 +7,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
-import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType } from '../../shared/types.ts';
 import { schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
@@ -21,7 +21,17 @@ import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService
  * the URI carries the bundle's content hash: a rebuilt app is a new URI, never a stale copy under the old one.
  */
 export const appUri = (hash: string): string => `ui://freeflow-docs/app-${hash}.html`;
-export const SERVER_INFO = { name: 'freeflow-docs', version: '0.2.0' };
+/**
+ * Versions of the MCP surface (its tools, their descriptions and what they return). Version 1, at /mcp, is the
+ * one submitted to ChatGPT and stays as it is (mcp-v1.json holds its tool list, checked by the tests); a newer
+ * version is served at /mcp/v<n> until it is submitted in turn.
+ */
+export const MCP_VERSIONS = [1, 2] as const;
+export type McpVersion = (typeof MCP_VERSIONS)[number];
+const SERVER_VERSIONS: Record<McpVersion, string> = { 1: '0.2.0', 2: '0.3.0' };
+export const serverInfo = (version: McpVersion = 1) => ({ name: 'freeflow-docs', version: SERVER_VERSIONS[version] });
+/** Version 1's server info. */
+export const SERVER_INFO = serverInfo(1);
 /** What the server advertises: tools, resources, and MCP Apps UI resources. */
 export const SERVER_CAPABILITIES = {
   tools: { listChanged: true },
@@ -55,6 +65,8 @@ export interface McpOptions {
    *  rendering it, 'app' adds the app-only tools and the docs_app tool, 'full' (default) adds the sidebar
    *  entrypoint. */
   level?: 'minimal' | 'tools' | 'render' | 'app' | 'full';
+  /** Which version of the tools to serve (MCP_VERSIONS); 1 when not given. */
+  version?: McpVersion;
   /** Fetches files ChatGPT hands to import_file (tests pass a fake). */
   fetchFn?: typeof fetch;
 }
@@ -62,6 +74,12 @@ export interface McpOptions {
 
 export const INSTRUCTIONS = `Universal Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
 Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. A Markdown document (kind markdown) is a plain Markdown file, kept exactly as written: read_doc, insert_content, replace_blocks, delete_blocks and replace_text work on it, and its formatting is its text. After editing, the open file updates in the app by itself; do not call open_file again.`;
+
+/** The instructions a version of the server gives; version 2 adds how to read stored files. */
+export const instructionsFor = (version: McpVersion = 1): string =>
+  version === 1
+    ? INSTRUCTIONS
+    : `${INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks.`;
 
 const DOC_ICON = {
   src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
@@ -225,7 +243,8 @@ export function appHtml(bundle: Bundle, assetOrigin: string | null, appUrl: stri
 const HELLO = '<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px system-ui;padding:16px}</style></head><body><h1>Docs</h1><p>Hello from the Docs plugin. If you can read this, ChatGPT can show our pages.</p></body></html>';
 
 export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
-  const server = new McpServer({ ...SERVER_INFO, icons: [DOC_ICON] }, { instructions: INSTRUCTIONS });
+  const version = opts.version ?? 1;
+  const server = new McpServer({ ...serverInfo(version), icons: [DOC_ICON] }, { instructions: instructionsFor(version) });
   // What a tool returns to the model holds only what a request needs: revisions and dates are for the app's
   // own tools, which keep them.
   const register = server.registerTool.bind(server) as (name: string, config: { _meta?: Record<string, unknown> }, handler: (...args: unknown[]) => Promise<CallToolResult> | CallToolResult) => unknown;
@@ -405,7 +424,16 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     async ({ kind: k, id }) =>
       guard(async () => {
         service.setOpen({ kind: k, id });
-        if (k === 'file') return ok({ file: service.storedFile(id), ...service.state() });
+        if (k === 'file' && version === 1) return ok({ file: service.storedFile(id), ...service.state() });
+        if (k === 'file') {
+          // Its text comes back too, when it has any (a PDF, a web page, a text file), and a picture is shown.
+          const file = service.storedFile(id);
+          const read = await service.readStored(id).catch((e: unknown) => (e instanceof ToolError ? null : Promise.reject(e)));
+          const f = service.hub.files.get(service.userId, id);
+          const picture = f && f.meta.type.startsWith('image/') ? await shownImage(f.file, f.meta.type, f.meta.size) : [];
+          const result = ok({ file, ...(read ? { text_content: read, note: 'Read more of it with read_doc and this id as doc_id (from, to).' } : {}), ...service.state() });
+          return picture.length ? { ...result, content: [...result.content, ...picture] } : result;
+        }
         const outline = k === 'doc' ? await service.editDoc(id, 'read_doc', {}) : k === 'markdown' ? await service.editMarkdown(id, 'read_doc', {}) : k === 'deck' ? await service.editDeck(id, 'read_deck', {}) : await service.editSheet(id, 'get_sheet_overview', {});
         return ok({ ...outline, ...service.state() });
       }),
@@ -443,6 +471,48 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           ...(picture.length ? (f.meta.size > MAX_SHOWN_IMAGE_BYTES ? { note: 'Shown reduced; positions are in the full picture’s pixels (width and height above).' } : {}) : { note: 'Too large to attach, and the app is not showing to reduce it: call open_file with this picture, then view_image again. Its width and height are given.' }),
         };
         return { content: [{ type: 'text', text: JSON.stringify(data) }, ...picture], structuredContent: data };
+      }),
+  );
+
+  /** The largest file read_file returns whole; a larger one gets a download link instead. */
+  const MAX_READ_FILE_BYTES = 10 * 1024 * 1024;
+
+  if (version >= 2)
+  server.registerTool(
+    'read_file',
+    {
+      title: 'Read a stored file',
+      description:
+        "Return a stored file (anything list_files lists as kind file: a PDF, web page, picture, video or other upload) exactly as it is. A text file (.html, .txt, .json, .svg, .xml, .csv, ...) comes back as its text, in parts for a long one (read on with offset). A picture comes back as an image for you to see; a PDF or any other file comes back as an embedded resource with its bytes. A file over 10 MB comes back as a download link instead. It does not change the file. Documents, presentations and spreadsheets are read with read_doc, read_deck and read_range instead.",
+      inputSchema: {
+        file_id: fileId,
+        offset: z.number().int().min(0).optional().describe('For a text file: the character to start from, for reading a long file in parts. Defaults to 0.'),
+        max_chars: z.number().int().min(1).max(100_000).optional().describe('For a text file: how many characters to return. Defaults to 50000.'),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ file_id, offset, max_chars }) =>
+      guard(async () => {
+        const f = service.hub.files.get(service.userId, file_id);
+        if (!f) return fail(`There is no file ${file_id}. Use list_files to find ids (kind file).`);
+        const about = { file_id, filename: f.meta.filename, type: f.meta.type, size: f.meta.size };
+        if (f.meta.size > MAX_READ_FILE_BYTES) {
+          const data = { ...about, download_url: service.fileLink(file_id).url, note: `Larger than ${MAX_READ_FILE_BYTES / 1024 / 1024} MB, so it is not returned here. The link downloads it for the next few hours.` };
+          return ok(data);
+        }
+        const bytes = await readFile(f.file);
+        if (isTextFileType(f.meta.type) && !bytes.subarray(0, 8000).includes(0)) {
+          const text = new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
+          const from = Math.min(offset ?? 0, text.length);
+          const end = Math.min(text.length, from + (max_chars ?? 50_000));
+          return ok({ ...about, total_chars: text.length, offset: from, text: text.slice(from, end), ...(end < text.length ? { more: true, next_offset: end } : {}) });
+        }
+        const data = { ...about, ...(f.meta.size > MAX_SHOWN_IMAGE_BYTES && f.meta.type.startsWith('image/') ? { note: 'Too large to show as an image; its bytes are attached. view_image shows a reduced copy.' } : {}) };
+        const picture = await shownImage(f.file, f.meta.type, f.meta.size);
+        const raw: CallToolResult['content'] = picture.length
+          ? picture
+          : [{ type: 'resource', resource: { uri: service.fileLink(file_id).url, mimeType: f.meta.type || 'application/octet-stream', blob: bytes.toString('base64') } }];
+        return { content: [{ type: 'text', text: JSON.stringify(data) }, ...raw], structuredContent: data };
       }),
   );
 
@@ -645,6 +715,12 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       async (args: Record<string, unknown>) =>
         guard(async () => {
           const { doc_id, ...input } = args as Record<string, unknown> & { doc_id?: string };
+          // A stored file (a PDF, a web page, a text file) is read like a document, and is not changed.
+          const stored = version >= 2 ? service.storedTarget(doc_id) : null;
+          if (stored) {
+            if (name !== 'read_doc') return fail('This is a stored file (a PDF, web page, picture or other upload), not a document: read_doc reads its text, but it cannot be changed. To edit its content, import it as a document with import_file.');
+            return ok(await service.readStored(stored, typeof input.from === 'number' ? input.from : undefined, typeof input.to === 'number' ? input.to : undefined));
+          }
           const target = service.docTarget(doc_id);
           if (!target) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');
           if (target.kind === 'markdown') return ok(await service.editMarkdown(target.id, name, input));

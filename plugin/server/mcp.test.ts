@@ -9,7 +9,8 @@ import { FileHub, type FileService } from './files.ts';
 import { buildSlide, newId } from '../../shared/deck.ts';
 import { buildPptx } from '../../shared/pptxExport.ts';
 import { buildDocx } from '../../server/testing.ts';
-import { appHtml, appUri, createMcpServer } from './mcp.ts';
+import { appHtml, appUri, createMcpServer, type McpVersion } from './mcp.ts';
+import { readFileSync } from 'node:fs';
 import { resolver } from '../../server/webFetch.ts';
 
 const APP_URI = appUri('abc');
@@ -39,12 +40,18 @@ beforeEach(async () => {
   const hub = new FileHub({ db, dataDir: dir, publicUrl: null });
   await hub.init();
   svc = hub.forUser('u1');
-  const server = createMcpServer(svc, { bundle: () => ({ js: 'console.log(1)', css: '', hash: 'abc' }), publicUrl: null, fetchFn: fakeFetch });
+  client = await connect(1);
+});
+
+/** A client of the given version of the tools, on the same account. */
+async function connect(version: McpVersion): Promise<Client> {
+  const server = createMcpServer(svc, { bundle: () => ({ js: 'console.log(1)', css: '', hash: 'abc' }), publicUrl: null, fetchFn: fakeFetch, version });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
-  client = new Client({ name: 'test', version: '0' });
-  await client.connect(b);
-});
+  const c = new Client({ name: 'test', version: '0' });
+  await c.connect(b);
+  return c;
+}
 
 afterEach(async () => {
   resolver.lookup = realLookup;
@@ -52,14 +59,28 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const call = async (name: string, args: Record<string, unknown> = {}) => {
-  const r = await client.callTool({ name, arguments: args });
+const call = async (name: string, args: Record<string, unknown> = {}, on: Client = client) => {
+  const r = await on.callTool({ name, arguments: args });
   return { isError: r.isError === true, data: r.structuredContent as Record<string, unknown> | undefined, text: (r.content as { text?: string }[]).map((c) => c.text ?? '').join('') };
 };
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
 
 describe('MCP server', () => {
+  it('keeps version 1 exactly as submitted, and version 2 adds to it', async () => {
+    // mcp-v1.json is version 1 as ChatGPT reviewed it. A change here needs a new version, not an edit to version 1.
+    const submitted = JSON.parse(readFileSync(new URL('./mcp-v1.json', import.meta.url), 'utf8'));
+    const { tools } = await client.listTools();
+    expect({ server: client.getServerVersion(), instructions: client.getInstructions(), tools: JSON.parse(JSON.stringify(tools)) }).toEqual(submitted);
+    const v2 = await connect(2);
+    const newer = (await v2.listTools()).tools;
+    expect(v2.getServerVersion()?.version).toBe('0.3.0');
+    expect(v2.getInstructions()).toContain('read_file');
+    expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(['read_file']);
+    expect(newer.filter((t) => t.name !== 'read_file')).toEqual(tools);
+    await v2.close();
+  });
+
   it('lists tools with the app entrypoint and hides app-only tools from the model', async () => {
     const { tools } = await client.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -165,6 +186,45 @@ describe('MCP server', () => {
     expect((await call('app_state')).data?.open).toBeNull();
   });
 
+  it('reads stored files from version 2 on, and leaves version 1 as it was', async () => {
+    const v2 = await connect(2);
+    attachments.set('https://files.example/plan.html', Buffer.from('<html><head><title>Plan</title></head><body><p>Ship it.</p><script>x()</script></body></html>'));
+    const imported = await call('import_file', { file: { download_url: 'https://files.example/plan.html', file_name: 'plan.html', file_id: 'f-plan' } });
+    const id = (imported.data?.file as { id: string }).id;
+    const opened = await call('open_file', { kind: 'file', id }, v2);
+    expect(opened.data?.text_content).toMatchObject({ filename: 'plan.html', read_only: true, block_count: 2, blocks: [{ n: 1, markdown: '# Plan' }, { n: 2, markdown: 'Ship it.' }] });
+    // The open file, or one named by id.
+    expect(((await call('read_doc', { from: 2 }, v2)).data?.blocks as { markdown: string }[]).map((b) => b.markdown)).toEqual(['Ship it.']);
+    expect((await call('read_doc', { doc_id: id }, v2)).data?.block_count).toBe(2);
+    expect((await call('insert_content', { markdown: 'More' }, v2)).text).toMatch(/cannot be changed/);
+    // read_file returns the file as it is: a web page's source, in parts when asked.
+    const raw = await call('read_file', { file_id: id }, v2);
+    const source = '<html><head><title>Plan</title></head><body><p>Ship it.</p><script>x()</script></body></html>';
+    expect(raw.data).toMatchObject({ filename: 'plan.html', type: 'text/html', total_chars: source.length, offset: 0, text: source });
+    expect((await call('read_file', { file_id: id, offset: 7, max_chars: 4 }, v2)).data).toMatchObject({ text: 'head', more: true, next_offset: 11 });
+    expect((await call('read_file', { file_id: 'nope' }, v2)).isError).toBe(true);
+    // A file with no text says why, and open_file still opens it.
+    attachments.set('https://files.example/scan.pdf', Buffer.from('%PDF-1.7\n%%EOF'));
+    const scan = (((await call('import_file', { file: { download_url: 'https://files.example/scan.pdf', file_name: 'scan.pdf', file_id: 'f-scan' } })).data?.file) as { id: string }).id;
+    expect((await call('read_doc', { doc_id: scan }, v2)).text).toMatch(/scanned image/);
+    // A PDF comes back whole, as an embedded resource with its bytes.
+    const pdf = await v2.callTool({ name: 'read_file', arguments: { file_id: scan } });
+    const parts = pdf.content as { type: string; resource?: { mimeType: string; blob: string; uri: string } }[];
+    expect(parts.map((c) => c.type)).toEqual(['text', 'resource']);
+    expect(parts[1].resource).toMatchObject({ mimeType: 'application/pdf', uri: expect.stringContaining(`/plugin/file/${scan}?t=`) });
+    expect(Buffer.from(parts[1].resource!.blob, 'base64').toString()).toBe('%PDF-1.7\n%%EOF');
+    const shown = await call('open_file', { kind: 'file', id: scan }, v2);
+    expect(shown.isError).toBe(false);
+    expect(shown.data?.text_content).toBeUndefined();
+    // Version 1 (what ChatGPT reviewed): no read_file, and stored files are shown, not read.
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('read_file');
+    expect((await call('open_file', { kind: 'file', id })).data?.text_content).toBeUndefined();
+    expect((await call('read_doc', { doc_id: id })).isError).toBe(true);
+    await v2.close();
+    await call('delete_file', { kind: 'file', id });
+    await call('delete_file', { kind: 'file', id: scan });
+  });
+
   it('creates and edits a presentation, and keeps the kinds apart', async () => {
     const created = await call('create_deck', { title: 'Pitch', slides: [{ title: 'Pitch' }, { title: 'Problem', body: ['Slow'] }] });
     expect(created.isError).toBe(false);
@@ -260,6 +320,10 @@ describe('MCP server', () => {
     const seen = await client.callTool({ name: 'view_image', arguments: { file_id: imgId } });
     expect(seen.structuredContent).toMatchObject({ file_id: imgId, filename: 'photo.png', type: 'image/png', width: 1, height: 1 });
     expect((seen.content as { type: string; mimeType?: string }[]).map((c) => `${c.type}${c.mimeType ? `:${c.mimeType}` : ''}`)).toEqual(['text', 'image:image/png']);
+    const v2 = await connect(2);
+    const rawImage = await v2.callTool({ name: 'read_file', arguments: { file_id: imgId } });
+    await v2.close();
+    expect((rawImage.content as { type: string; mimeType?: string }[]).map((c) => `${c.type}${c.mimeType ? `:${c.mimeType}` : ''}`)).toEqual(['text', 'image:image/png']);
     // An exact edit is done by the app: it takes the job with its state, edits, saves, and answers.
     const editing = call('transform_image', { file_id: imgId, rotate: 90 });
     let jobs: { id: string; file_id: string; operations: unknown[]; save: string }[] | undefined;

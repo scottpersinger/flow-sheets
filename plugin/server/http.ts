@@ -8,7 +8,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { PREVIEW_FILE_TYPES } from '../../shared/types.ts';
 import type { FileHub } from './files.ts';
-import { createMcpServer, INSTRUCTIONS, SERVER_CAPABILITIES, SERVER_INFO, type Bundle, type McpOptions } from './mcp.ts';
+import { createMcpServer, instructionsFor, MCP_VERSIONS, SERVER_CAPABILITIES, serverInfo, type Bundle, type McpOptions, type McpVersion } from './mcp.ts';
 import { importLimit, ToolError } from './files.ts';
 import { OAuthError, type OAuthServer } from './oauth.ts';
 import { adaptTransport, discoverResult, isDiscover, isStateless, presentAsSdkVersion, readJson } from './stateless.ts';
@@ -36,6 +36,13 @@ export interface PluginHandler {
 }
 
 /** Paths the plugin serves; anything else belongs to whoever hosts it. */
+/** The version of the tools an MCP path serves: /mcp is version 1 (what ChatGPT reviewed), /mcp/v<n> version n. */
+export function mcpVersion(p: string): McpVersion | null {
+  if (p === '/mcp') return 1;
+  const n = Number(/^\/mcp\/v(\d+)$/.exec(p)?.[1]);
+  return (MCP_VERSIONS as readonly number[]).includes(n) ? (n as McpVersion) : null;
+}
+
 export const PLUGIN_PATH = /^(\/mcp(\/|$)|\/oauth\/|\/plugin\/|\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration|openai-apps-challenge)(\/|$))/;
 
 /** A standalone server for the plugin (development, or a host of its own). */
@@ -77,7 +84,7 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const p = url.pathname;
-    if (p !== '/mcp') logRequest(req, res, undefined);
+    if (!mcpVersion(p)) logRequest(req, res, undefined);
     // The local harness calls /mcp from the browser; ChatGPT calls it from its servers.
     if (!production) {
       res.setHeader('access-control-allow-origin', '*');
@@ -97,8 +104,13 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
       }
       // --- OAuth discovery (the paths ChatGPT probes: plain, with the /mcp suffix, and under /mcp) ---
       if (oauth && req.method === 'GET') {
-        if (/^(\/mcp)?\/\.well-known\/oauth-protected-resource(\/mcp)?$/.test(p)) return json(res, 200, oauth.protectedResourceMetadata(), { 'access-control-allow-origin': '*' });
-        if (/^(\/mcp)?\/\.well-known\/(oauth-authorization-server|openid-configuration)(\/mcp)?$/.test(p)) return json(res, 200, oauth.authorizationServerMetadata(), { 'access-control-allow-origin': '*' });
+        // A versioned endpoint (/mcp/v2) is a resource of its own, found the same ways.
+        const prm = /^(\/mcp(?:\/v\d+)?)?\/\.well-known\/oauth-protected-resource(\/mcp(?:\/v\d+)?)?$/.exec(p);
+        if (prm) {
+          const endpoint = prm[2] ?? prm[1] ?? '/mcp';
+          if (mcpVersion(endpoint)) return json(res, 200, oauth.protectedResourceMetadata(endpoint), { 'access-control-allow-origin': '*' });
+        }
+        if (/^(\/mcp(?:\/v\d+)?)?\/\.well-known\/(oauth-authorization-server|openid-configuration)(\/mcp(?:\/v\d+)?)?$/.test(p)) return json(res, 200, oauth.authorizationServerMetadata(), { 'access-control-allow-origin': '*' });
       }
 
       // --- OAuth endpoints ---
@@ -174,12 +186,13 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
       }
 
       // --- MCP ---
-      if (p === '/mcp') {
+      const version = mcpVersion(p);
+      if (version) {
         let userId = opts.devUserId ?? null;
         if (oauth) {
           const who = oauth.authenticate(req.headers.authorization);
           if (!who) {
-            res.writeHead(401, { 'www-authenticate': oauth.wwwAuthenticate(req.headers.authorization ? 'invalid_token' : undefined), 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
+            res.writeHead(401, { 'www-authenticate': oauth.wwwAuthenticate(req.headers.authorization ? 'invalid_token' : undefined, p), 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
             return;
           }
           userId = who.userId;
@@ -192,13 +205,13 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
         if (isDiscover(body)) {
           const level = opts.mcp?.level;
           const caps = level === 'minimal' || level === 'tools' ? { tools: { listChanged: true } } : SERVER_CAPABILITIES;
-          return json(res, 200, discoverResult(body, SERVER_INFO, caps, INSTRUCTIONS));
+          return json(res, 200, discoverResult(body, serverInfo(version), caps, instructionsFor(version)));
         }
         // A client on the newer version must get `resultType` on every result (Claude Code refuses a tool result without it).
         const stateless = isStateless(req, body);
         presentAsSdkVersion(req);
-        const mcp = createMcpServer(hub.forUser(userId), { bundle, publicUrl, ...opts.mcp });
-        const transport = adaptTransport(new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !process.env.PLUGIN_SSE }), SERVER_INFO, stateless || !!process.env.PLUGIN_RESULT_TYPE_ALL);
+        const mcp = createMcpServer(hub.forUser(userId), { bundle, publicUrl, ...opts.mcp, version });
+        const transport = adaptTransport(new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !process.env.PLUGIN_SSE }), serverInfo(version), stateless || !!process.env.PLUGIN_RESULT_TYPE_ALL);
         res.on('close', () => {
           void transport.close();
           void mcp.close();
