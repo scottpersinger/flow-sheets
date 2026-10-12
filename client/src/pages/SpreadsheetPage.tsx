@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
 import { cellKey } from '../../../shared/cellref.ts';
-import type { SheetMeta } from '../../../shared/types.ts';
+import type { SheetMeta, Workbook } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterSheet } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
+import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
 import {
   cellContextItems,
@@ -63,23 +64,33 @@ function toCSV(ctl: SheetController): string {
 
 export function SpreadsheetPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: SheetController } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; ctl: SheetController; sync: RevisionSync<Workbook> } | { error: string } | null>(null);
   const { sheetFailed } = useAgent();
 
   useEffect(() => {
     let ctl: SheetController | null = null;
+    let stopSync = () => {};
     let cancelled = false;
     setState(null);
     api
       .getSheet(id!)
       .then(({ sheet, workbook }) => {
         if (cancelled) return;
-        ctl = new SheetController(workbook, async (wb) => {
-          await api.saveSheet(sheet.id, wb);
+        // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
+        const sync = new RevisionSync<Workbook>(sheet.id, sheet.updatedAt, {
+          save: async (wb, rev) => ({ meta: (await api.saveSheet(sheet.id, wb, rev)).sheet }),
+          load: async () => {
+            const latest = await api.getSheet(sheet.id);
+            // Converted to a spreadsheet elsewhere: the newer version may hold what CSV cannot.
+            if (ctl) ctl.store.guard = latest.sheet.format === 'csv' ? csvGuard : null;
+            return { meta: latest.sheet, doc: latest.workbook };
+          },
         });
+        ctl = new SheetController(workbook, sync.save);
+        stopSync = sync.attach(ctl);
         // A CSV file only takes changes CSV can store; the rest asks to convert it first (see Workbench).
         if (sheet.format === 'csv') ctl.store.guard = csvGuard;
-        setState({ meta: sheet, ctl });
+        setState({ meta: sheet, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -89,6 +100,7 @@ export function SpreadsheetPage() {
       });
     return () => {
       cancelled = true;
+      stopSync();
       if (ctl) {
         void ctl.saver.flush();
         ctl.dispose();
@@ -107,7 +119,7 @@ export function SpreadsheetPage() {
       </div>
     );
   }
-  return <Workbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
+  return <Workbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
 }
 
 type Dialog =
@@ -120,7 +132,7 @@ type Dialog =
   | { kind: 'convert'; reason?: string; retry?: () => void }
   | null;
 
-function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetController }) {
+function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: SheetController; sync: RevisionSync<Workbook> }) {
   useController(ctl);
   const navigate = useNavigate();
   const location = useLocation();
@@ -156,6 +168,8 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
     if (ctl.edit) ctl.commitEdit();
     await ctl.saver.flush();
     const { sheet } = await api.convertSheet(meta.id);
+    // Converting is a new revision with the same content: the edit that asked for it saves on top of it.
+    sync.rev = sheet.updatedAt;
     ctl.store.guard = null;
     setMeta(sheet);
   };
@@ -195,6 +209,15 @@ function Workbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: SheetCon
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  // The file was saved somewhere else (another tab, the ChatGPT plugin) and the editor took that version.
+  useEffect(
+    () =>
+      sync.onTaken((t) => {
+        setMeta(t.meta);
+        if (t.changed) notify(takenMessage(t));
+      }),
+    [sync, notify],
+  );
 
   const renameSheet = async (t: string) => {
     const { sheet } = await api.renameSheet(meta.id, t);

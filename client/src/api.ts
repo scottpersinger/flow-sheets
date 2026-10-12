@@ -140,8 +140,9 @@ export const api = {
   /** Turn a CSV file into a native spreadsheet. */
   convertSheet: (id: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/convert`, {}),
   getSheet: (id: string) => request<{ sheet: SheetMeta; workbook: Workbook }>('GET', `/api/sheets/${encodeURIComponent(id)}`),
-  saveSheet: (id: string, workbook: Workbook, keepalive = false) =>
-    request<{ sheet: SheetMeta }>('PUT', `/api/sheets/${encodeURIComponent(id)}`, { workbook }, keepalive ? { keepalive: true } : undefined),
+  /** rev is the updatedAt the editor loaded; the server refuses (409) when the spreadsheet changed since. */
+  saveSheet: (id: string, workbook: Workbook, rev?: string, keepalive = false) =>
+    request<{ sheet: SheetMeta }>('PUT', `/api/sheets/${encodeURIComponent(id)}`, { workbook, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import an Excel file (.xlsx or .xls) as a new spreadsheet. */
   importXlsx: (file: File, title: string, folder?: string) =>
     uploadExcel<{ sheet: SheetMeta; warnings: string[] }>(`/api/sheets/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),

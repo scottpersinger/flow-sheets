@@ -2,13 +2,14 @@ import { DOMSerializer } from 'prosemirror-model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
-import { docNode, docSchema, docStyleCss, docStyleOf, PAGE_SIZES, type BlockType } from '../../../shared/doc.ts';
+import { docNode, docSchema, docStyleCss, docStyleOf, PAGE_SIZES, type BlockType, type Doc } from '../../../shared/doc.ts';
 import { docToMarkdown } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterDoc } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
+import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
 import { pickImageFile, uploadImageFile } from '../cellImage.ts';
 import { ImageEditDialog } from '../image/ImageEditDialog.tsx';
@@ -54,31 +55,29 @@ function docToHtml(ctl: DocController, title: string): string {
 
 export function DocPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: DocController } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; ctl: DocController; sync: RevisionSync<Doc> } | { error: string } | null>(null);
   const { docFailed } = useAgent();
 
   useEffect(() => {
     let ctl: DocController | null = null;
+    let stopSync = () => {};
     let cancelled = false;
     setState(null);
     api
       .getDoc(id!)
       .then(({ meta, doc }) => {
         if (cancelled) return;
-        // Saves name the revision loaded; when something else (another tab, the ChatGPT plugin) saved first,
-        // the server refuses and the editor takes that version instead of overwriting it.
-        let rev = meta.updatedAt;
-        ctl = new DocController(doc, async (d) => {
-          try {
-            rev = (await api.saveDoc(meta.id, d, rev)).meta.updatedAt;
-          } catch (e) {
-            if (!(e instanceof ApiError && e.status === 409)) throw e;
+        // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
+        const sync = new RevisionSync<Doc>(meta.id, meta.updatedAt, {
+          save: (d, rev) => api.saveDoc(meta.id, d, rev),
+          load: async () => {
             const latest = await api.getDoc(meta.id);
-            rev = latest.meta.updatedAt;
-            ctl?.replaceWith(latest.doc);
-          }
+            return { meta: latest.meta, doc: latest.doc };
+          },
         });
-        setState({ meta, ctl });
+        ctl = new DocController(doc, sync.save);
+        stopSync = sync.attach(ctl);
+        setState({ meta, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -88,6 +87,7 @@ export function DocPage() {
       });
     return () => {
       cancelled = true;
+      stopSync();
       if (ctl) {
         void ctl.saver.flush();
         ctl.dispose();
@@ -106,7 +106,7 @@ export function DocPage() {
       </div>
     );
   }
-  return <DocWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
+  return <DocWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
 }
 
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial: string } | { kind: 'pageSetup' } | { kind: 'docStyle' } | null;
@@ -124,7 +124,7 @@ function loadShowThumbs(): boolean {
   }
 }
 
-function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocController }) {
+function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: DocController; sync: RevisionSync<Doc> }) {
   useDocController(ctl);
   useDocFonts(ctl.doc);
   useFavicon('doc');
@@ -188,11 +188,15 @@ function DocWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DocCo
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
-  // A save was refused because the document changed elsewhere; the editor now shows that version.
-  const externalChanges = ctl.externalChanges;
-  useEffect(() => {
-    if (externalChanges) notify('Updated with changes saved elsewhere (for example by the assistant in ChatGPT).');
-  }, [externalChanges, notify]);
+  // The file was saved somewhere else (another tab, the ChatGPT plugin) and the editor took that version.
+  useEffect(
+    () =>
+      sync.onTaken((t) => {
+        setMeta(t.meta);
+        if (t.changed) notify(takenMessage(t));
+      }),
+    [sync, notify],
+  );
 
   // The picture open in the image editor: where it was and what it was, to find it again when the edit is saved.
   // Saving stores the edited picture as a new image and puts it in the block as one step, so undo brings the

@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ServerResponse } from 'node:http';
 import type { AgentEvent, AgentTurnRequest, AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
@@ -39,6 +40,7 @@ import { LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore } from './lo
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mountPlugin } from '../plugin/server/mount.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
+import { RevisionFeed } from './revisionFeed.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
@@ -520,9 +522,12 @@ export async function buildApp(opts: AppOptions) {
 
     r.put('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const workbook = (req.body as { workbook?: Workbook } | undefined)?.workbook;
+      const body = req.body as { workbook?: Workbook; rev?: unknown } | undefined;
+      const workbook = body?.workbook;
       const problem = validateWorkbook(workbook);
       if (problem) return reply.code(400).send({ error: problem });
+      const stale = staleRev(req.user!.id, id, 'sheet', body?.rev);
+      if (stale) return reply.code(409).send({ error: 'The spreadsheet was changed elsewhere since you loaded it.', meta: stale });
       const meta = await sheets.save(req.user!.id, id, workbook!);
       if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
       return { sheet: meta };
@@ -549,6 +554,39 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       if (!(await sheets.delete(req.user!.id, id, 'sheet'))) return reply.code(404).send({ error: 'Sheet not found' });
       return { ok: true };
+    });
+  });
+
+  // --- Revisions: an open editor hears when its file is saved elsewhere (revisionFeed.ts) ---
+  const revisions = new RevisionFeed();
+  sheets.onRevision = (id, rev) => revisions.publish(id, rev);
+  const revisionStreams = new Set<ServerResponse>();
+  app.addHook('onClose', async () => {
+    for (const res of revisionStreams) res.end();
+  });
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    // Server-sent events, each `{ rev }`: the current revision on connecting (EventSource reconnects by itself,
+    // so this also covers saves missed while disconnected), then every new one.
+    r.get('/api/revisions/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const meta = sheets.get(req.user!.id, id);
+      if (!meta) return reply.code(404).send({ error: 'File not found' });
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      const send = (rev: string) => res.write(`data: ${JSON.stringify({ rev })}\n\n`);
+      send(meta.updatedAt);
+      const stop = revisions.watch(id, send);
+      // A comment now and then keeps proxies from closing a quiet connection.
+      const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+      revisionStreams.add(res);
+      res.on('close', () => {
+        stop();
+        clearInterval(ping);
+        revisionStreams.delete(res);
+      });
     });
   });
 

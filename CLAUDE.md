@@ -55,6 +55,11 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   Excel, CSV or Markdown file becomes a file the app edits, a Markdown file staying Markdown; a PDF, video, picture or web page is stored as
   it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
   with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
+- Open editors (spreadsheets, documents, Markdown, presentations) keep to the latest revision of their file: saves name the
+  revision loaded and the server answers 409 when it changed, and `GET /api/revisions/:id` (server-sent events,
+  `server/revisionFeed.ts`, fed by `SheetStore.onRevision`) announces each new one so an editor with nothing
+  unsaved reloads (`client/src/state/revisionSync.ts`). The feed is per process; more than one server node
+  would need shared pub/sub for it.
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
-import { markdownTitle } from '../../../shared/markdown.ts';
+import { markdownTitle, type MarkdownDoc } from '../../../shared/markdown.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterMarkdown } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
+import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
 import { MOD } from '../commands.ts';
 import { MarkdownIcon } from '../components/Logo.tsx';
@@ -42,31 +43,29 @@ function pickMarkdownFile(): Promise<File | null> {
 /** A Markdown document: the text in a plain editor on the left, rendered GitHub-style on the right. */
 export function MarkdownPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: MarkdownController } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; ctl: MarkdownController; sync: RevisionSync<MarkdownDoc> } | { error: string } | null>(null);
   const { docFailed } = useAgent();
 
   useEffect(() => {
     let ctl: MarkdownController | null = null;
+    let stopSync = () => {};
     let cancelled = false;
     setState(null);
     api
       .getMarkdown(id!)
       .then(({ meta, doc }) => {
         if (cancelled) return;
-        // Saves name the revision loaded; when another tab saved first, the server refuses and the editor
-        // takes that version instead of overwriting it.
-        let rev = meta.updatedAt;
-        ctl = new MarkdownController(doc, async (d) => {
-          try {
-            rev = (await api.saveMarkdown(meta.id, d, rev)).meta.updatedAt;
-          } catch (e) {
-            if (!(e instanceof ApiError && e.status === 409)) throw e;
+        // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
+        const sync = new RevisionSync<MarkdownDoc>(meta.id, meta.updatedAt, {
+          save: (d, rev) => api.saveMarkdown(meta.id, d, rev),
+          load: async () => {
             const latest = await api.getMarkdown(meta.id);
-            rev = latest.meta.updatedAt;
-            ctl?.replaceWith(latest.doc);
-          }
+            return { meta: latest.meta, doc: latest.doc };
+          },
         });
-        setState({ meta, ctl });
+        ctl = new MarkdownController(doc, sync.save);
+        stopSync = sync.attach(ctl);
+        setState({ meta, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -76,6 +75,7 @@ export function MarkdownPage() {
       });
     return () => {
       cancelled = true;
+      stopSync();
       if (ctl) {
         void ctl.saver.flush();
         ctl.dispose();
@@ -94,7 +94,7 @@ export function MarkdownPage() {
       </div>
     );
   }
-  return <MarkdownWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
+  return <MarkdownWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
 }
 
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'replace'; file: File; text: string } | null;
@@ -109,7 +109,7 @@ function loadShowPreview(): boolean {
   }
 }
 
-function MarkdownWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: MarkdownController }) {
+function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: MarkdownController; sync: RevisionSync<MarkdownDoc> }) {
   useMarkdownController(ctl);
   useFavicon('markdown');
   const navigate = useNavigate();
@@ -168,10 +168,15 @@ function MarkdownWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: 
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
-  const externalChanges = ctl.externalChanges;
-  useEffect(() => {
-    if (externalChanges) notify('Updated with changes saved elsewhere.');
-  }, [externalChanges, notify]);
+  // The file was saved somewhere else (another tab, the ChatGPT plugin) and the editor took that version.
+  useEffect(
+    () =>
+      sync.onTaken((t) => {
+        setMeta(t.meta);
+        if (t.changed) notify(takenMessage(t));
+      }),
+    [sync, notify],
+  );
 
   // Close menus on outside click.
   useEffect(() => {

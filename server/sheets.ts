@@ -106,6 +106,8 @@ export class SheetStore {
   private writeChains = new Map<string, Promise<void>>();
   /** The off-box copy (backup.ts): every write, base and delete is reported to it when set. */
   backup: Backup | null = null;
+  /** Told each document's new revision after it is written or renamed (revisionFeed.ts). */
+  onRevision: ((id: string, rev: string) => void) | null = null;
 
   constructor(db: DB, dir: string) {
     this.db = db;
@@ -281,6 +283,7 @@ export class SheetStore {
     const now = this.stamp(r.file);
     this.db.prepare('UPDATE sheets SET updated_at = ? WHERE id = ?').run(now, r.id);
     this.backup?.putFile(r.owner_id, r.kind, r.id, now, json);
+    this.onRevision?.(r.id, now);
     return { ...toMeta(r), updatedAt: now };
   }
 
@@ -373,6 +376,7 @@ export class SheetStore {
     if (!r) return null;
     const now = new Date().toISOString();
     this.db.prepare('UPDATE sheets SET title = ?, updated_at = ? WHERE id = ?').run(title, now, id);
+    this.onRevision?.(id, now);
     return { ...toMeta(r), title, updatedAt: now };
   }
 

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
-import { LAYOUT_IDS, THEME_IDS, THEMES } from '../../../shared/deck.ts';
+import { LAYOUT_IDS, THEME_IDS, THEMES, type Deck } from '../../../shared/deck.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterDeck } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
+import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
 import { uploadImageFile, pickImageFile } from '../cellImage.ts';
 import { imageDialogOpen } from '../image/dialogOpen.ts';
@@ -54,31 +55,29 @@ const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagNa
 
 export function DeckPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: DeckController } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> } | { error: string } | null>(null);
   const { deckFailed } = useAgent();
 
   useEffect(() => {
     let ctl: DeckController | null = null;
+    let stopSync = () => {};
     let cancelled = false;
     setState(null);
     api
       .getDeck(id!)
       .then(({ meta, deck }) => {
         if (cancelled) return;
-        // Saves name the revision loaded; when something else (another tab, the ChatGPT plugin) saved first,
-        // the server refuses and the editor takes that version instead of overwriting it.
-        let rev = meta.updatedAt;
-        ctl = new DeckController(deck, async (d) => {
-          try {
-            rev = (await api.saveDeck(meta.id, d, rev)).meta.updatedAt;
-          } catch (e) {
-            if (!(e instanceof ApiError && e.status === 409)) throw e;
+        // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
+        const sync = new RevisionSync<Deck>(meta.id, meta.updatedAt, {
+          save: (d, rev) => api.saveDeck(meta.id, d, rev),
+          load: async () => {
             const latest = await api.getDeck(meta.id);
-            rev = latest.meta.updatedAt;
-            ctl?.replaceWith(latest.deck);
-          }
+            return { meta: latest.meta, doc: latest.deck };
+          },
         });
-        setState({ meta, ctl });
+        ctl = new DeckController(deck, sync.save);
+        stopSync = sync.attach(ctl);
+        setState({ meta, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -88,6 +87,7 @@ export function DeckPage() {
       });
     return () => {
       cancelled = true;
+      stopSync();
       if (ctl) {
         void ctl.saver.flush();
         ctl.dispose();
@@ -106,12 +106,12 @@ export function DeckPage() {
       </div>
     );
   }
-  return <DeckWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} />;
+  return <DeckWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
 }
 
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | null;
 
-function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: DeckController }) {
+function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> }) {
   useDeckController(ctl);
   useDeckFonts(ctl.deck);
   useFavicon('deck');
@@ -163,11 +163,15 @@ function DeckWorkbench({ initialMeta, ctl }: { initialMeta: SheetMeta; ctl: Deck
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
-  // A save was refused because the presentation changed elsewhere; the editor now shows that version.
-  const externalChanges = ctl.externalChanges;
-  useEffect(() => {
-    if (externalChanges) notify('Updated with changes saved elsewhere (for example by the assistant in ChatGPT).');
-  }, [externalChanges, notify]);
+  // The file was saved somewhere else (another tab, the ChatGPT plugin) and the editor took that version.
+  useEffect(
+    () =>
+      sync.onTaken((t) => {
+        setMeta(t.meta);
+        if (t.changed) notify(takenMessage(t));
+      }),
+    [sync, notify],
+  );
 
   const addImageFiles = useCallback(
     async (files: File[]) => {

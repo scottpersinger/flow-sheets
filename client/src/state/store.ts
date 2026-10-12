@@ -336,6 +336,17 @@ export class AutoSaver<D = Workbook> {
     if (this.pending && this.status !== 'error') await this.flush();
   }
 
+  /** The document as it is now is what is stored (it was just loaded): forget any change waiting to be saved. */
+  adopt(): void {
+    this.lastVersion = this.store.version;
+    this.pending = false;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.status !== 'saving') this.setStatus('saved');
+  }
+
   hasUnsavedChanges(): boolean {
     return this.pending || this.status === 'saving';
   }
