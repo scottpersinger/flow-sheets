@@ -418,27 +418,115 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       }),
   );
 
-  const { image: _embedded, ...transformShape } = schemas.transform_image.shape;
+  // One edit of a picture, said as what the picture should become: each change is a field of its own, typed for
+  // what it takes. (The app's assistant gives a list of operations instead; this is turned into one.)
+  const px = (what: string) => z.number().describe(what);
+  const box = { x: px('Left edge, in pixels from the left of the picture.'), y: px('Top edge, in pixels from the top of the picture.'), width: z.number().positive().describe('Width in pixels.'), height: z.number().positive().describe('Height in pixels.') };
+  const pictureEdit = {
+    file_id: fileId,
+    crop: z.object(box).optional().describe('Keep only this rectangle of the picture.'),
+    rotate: z.number().int().optional().describe('Turn the picture clockwise by this many degrees: 90, 180 or 270.'),
+    straighten: z.number().min(-45).max(45).optional().describe('Level a tilted picture: degrees clockwise, between -45 and 45.'),
+    flip: z.enum(['horizontal', 'vertical']).optional().describe('Mirror the picture: horizontal swaps left and right.'),
+    adjust: z
+      .object({
+        brightness: z.number().min(-100).max(100).optional(),
+        contrast: z.number().min(-100).max(100).optional(),
+        saturation: z.number().min(-100).max(100).optional(),
+        vibrance: z.number().min(-100).max(100).optional(),
+        hue: z.number().min(-180).max(180).optional().describe('Degrees.'),
+        blur: z.number().min(0).max(100).optional(),
+      })
+      .optional()
+      .describe('Change the colors of the whole picture; give only the ones to change.'),
+    filter: z.enum(['grayscale', 'sepia', 'invert', 'sharpen', 'none']).optional().describe('A look for the whole picture; none removes the filters.'),
+    redact: z
+      .array(z.object({ ...box, mode: z.enum(['solid', 'blur', 'pixelate']).optional().describe('Default solid, which cannot be seen through.') }))
+      .max(10)
+      .optional()
+      .describe('Rectangles of the picture to hide.'),
+    shapes: z
+      .array(
+        z.object({
+          kind: z.enum(['rect', 'ellipse', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star', 'line', 'arrow']),
+          x: px('Left edge of the box the shape fills (every kind but line and arrow).').optional(),
+          y: px('Top edge of that box.').optional(),
+          width: z.number().positive().optional().describe('Width of that box.'),
+          height: z.number().positive().optional().describe('Height of that box.'),
+          x1: px('Line and arrow: where it starts.').optional(),
+          y1: z.number().optional(),
+          x2: px('Line and arrow: where it ends (the arrow head).').optional(),
+          y2: z.number().optional(),
+          color: z.string().optional().describe('Outline color, a CSS color such as #ff0000. Default red.'),
+          stroke_width: z.number().positive().optional().describe('Outline thickness in pixels of the picture. Default 6.'),
+          fill: z.string().optional().describe('A color inside the shape. Default none (outline only).'),
+          corner_radius: z.number().min(0).optional().describe('Rounded corners, for rect.'),
+        }),
+      )
+      .max(10)
+      .optional()
+      .describe('Shapes, lines and arrows to draw on the picture.'),
+    text: z
+      .array(
+        z.object({
+          text: z.string().min(1).max(2000),
+          x: px('Left edge of the text, in pixels from the left of the picture.'),
+          y: px('Top edge of the text, in pixels from the top of the picture.'),
+          width: z.number().positive().optional().describe('Where the text wraps. Defaults to the rest of the picture.'),
+          size: z.number().positive().optional().describe('Font size in pixels of the picture. Default 48; a headline on a 3000 pixel wide photo wants 150 or more.'),
+          color: z.string().optional().describe('A CSS color such as #ffffff. Default black.'),
+          font: z.string().optional().describe('A font family.'),
+          bold: z.boolean().optional(),
+          italic: z.boolean().optional(),
+          align: z.enum(['left', 'center', 'right']).optional().describe('Within its width.'),
+          background: z.string().optional().describe('A color behind the text, to keep it readable over a busy picture.'),
+        }),
+      )
+      .max(10)
+      .optional()
+      .describe('Text to write on the picture.'),
+    resize_width: z.number().positive().optional().describe('Scale the finished picture down to this width in pixels; the height follows. Never up.'),
+    remove_background: z.boolean().optional().describe('Not available here: when true nothing is changed, and the answer says where in the full app the background can be removed.'),
+    save: schemas.transform_image.shape.save,
+  };
+  /** The edit as the app's operations, in the order they are applied. */
+  const operationsOf = (e: Record<string, unknown>): Record<string, unknown>[] => {
+    const list = (v: unknown) => (Array.isArray(v) ? (v as Record<string, unknown>[]) : []);
+    return [
+      ...(e.crop ? [{ op: 'crop', ...(e.crop as object) }] : []),
+      ...(e.rotate ? [{ op: 'rotate', degrees: e.rotate }] : []),
+      ...(e.straighten ? [{ op: 'straighten', degrees: e.straighten }] : []),
+      ...(e.flip ? [{ op: 'flip', axis: e.flip }] : []),
+      ...(e.adjust && Object.keys(e.adjust).length ? [{ op: 'adjust', ...(e.adjust as object) }] : []),
+      ...(e.filter ? [{ op: 'filter', name: e.filter }] : []),
+      ...list(e.redact).map((r) => ({ op: 'redact', ...r })),
+      ...list(e.shapes).map((sh) => ({ op: 'shape', ...sh })),
+      ...list(e.text).map((t) => ({ op: 'text', ...t })),
+      ...(e.resize_width ? [{ op: 'resize', width: e.resize_width }] : []),
+    ];
+  };
 
   server.registerTool(
     'transform_image',
     {
       title: 'Edit a picture',
-      description: `${(schemas.transform_image.description ?? '').replace(' (a stored picture file by file_id, or a picture inside a presentation, document or spreadsheet by image)', '')} The editing is done by the app, so it must be showing: call open_file with the picture first. remove_background is not available here: it fails with the address of the picture in the full app, where the user can remove the background; give them that link.`.replace(' If the user has the picture open in the image editor, the edits are made there instead, as one undo step, and are saved when the user saves.', ' If the user has the picture open in the app’s image editor, the edits are made there instead, as one undo step, and are saved when the user saves.'),
-      // Stored picture files only: a picture inside a document is edited in the full app.
-      inputSchema: { ...transformShape, file_id: fileId },
+      description:
+        "Edit a stored picture (PNG, JPEG or WebP) exactly, with the app's image editor. Give the changes to make: crop, rotate, straighten, flip, adjust the colors, a filter, rectangles to redact, shapes and arrows to draw, text to write, and a width to resize to. They are applied in that order, as one edit, and every pixel you do not name stays as it was. Call view_image first: it reports the picture's width and height. Positions are in pixels of the picture; for redact, shapes and text they are pixels of the picture after any crop, rotation or flip in the same call. By default the result is saved as a new file and the original is kept. The result comes back as a picture: look at it, and if something landed in the wrong place call transform_image again on the original with better numbers. The editing is done by the app, so it must be showing: call open_file with the picture first. If the user has the picture open in the app's image editor, the edit is made there as one undo step and is saved when the user saves.",
+      inputSchema: pictureEdit,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ file_id, operations, save }) =>
+    async ({ file_id, save, remove_background, ...edit }) =>
       guard(async () => {
+        const operations = operationsOf(edit);
         const f = await service.editableImage(file_id);
         if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) throw new ToolError(`${f.meta.filename} cannot be edited: only PNG, JPEG and WebP pictures can.`);
         // Removing a background takes a model the app here cannot load. Said at once, before anything is done,
         // with where it can be done.
-        if (operations.some((op) => op.op === 'remove_background')) {
+        if (remove_background) {
           const where = opts.publicUrl ? ` Open ${f.meta.filename} there: ${opts.publicUrl}/f/${encodeURIComponent(f.meta.id)} , choose Edit, then Magic and Remove background (or ask the assistant there).` : '';
-          throw new ToolError(`Removing a background is only available in the full Universal Docs app, not here.${where} Nothing was changed. The other operations can be done here: call transform_image again without remove_background.`);
+          throw new ToolError(`Removing a background is only available in the full Universal Docs app, not here.${where} Nothing was changed. The other changes can be made here: call transform_image again without remove_background.`);
         }
+        if (!operations.length) throw new ToolError('Give at least one change to make: crop, rotate, straighten, flip, adjust, filter, redact, shapes, text or resize_width.');
         const r = await service.runImageJob(file_id, operations, save === 'replace' ? 'replace' : 'copy');
         if (!r.ok) return fail(r.error ?? 'The picture could not be edited.');
         const resultId = r.file_id ?? file_id;

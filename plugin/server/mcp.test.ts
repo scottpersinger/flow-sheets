@@ -252,7 +252,7 @@ describe('MCP server', () => {
     expect(seen.structuredContent).toMatchObject({ file_id: imgId, filename: 'photo.png', type: 'image/png', width: 1, height: 1 });
     expect((seen.content as { type: string; mimeType?: string }[]).map((c) => `${c.type}${c.mimeType ? `:${c.mimeType}` : ''}`)).toEqual(['text', 'image:image/png']);
     // An exact edit is done by the app: it takes the job with its state, edits, saves, and answers.
-    const editing = call('transform_image', { file_id: imgId, operations: [{ op: 'rotate', degrees: 90 }] });
+    const editing = call('transform_image', { file_id: imgId, rotate: 90 });
     let jobs: { id: string; file_id: string; operations: unknown[]; save: string }[] | undefined;
     for (let i = 0; i < 50 && !jobs; i++) {
       await new Promise((r) => setTimeout(r, 10));
@@ -264,7 +264,7 @@ describe('MCP server', () => {
     const edited = await editing;
     expect(edited.data).toMatchObject({ edited: true, file_id: copy.file.id, filename: 'photo-edited.png', source_file_id: imgId, applied: ['Rotated 90° (now 1 × 1)'], size: { width: 1, height: 1 }, saved: true, note: expect.stringContaining('original is unchanged') });
     // What the app could not do comes back as an error the model can act on.
-    const failing = call('transform_image', { file_id: imgId, operations: [{ op: 'crop', x: 9, y: 9, width: 5, height: 5 }], save: 'replace' });
+    const failing = call('transform_image', { file_id: imgId, crop: { x: 9, y: 9, width: 5, height: 5 }, save: 'replace' });
     let failed: typeof jobs;
     for (let i = 0; i < 50 && !failed; i++) {
       await new Promise((r) => setTimeout(r, 10));
@@ -273,17 +273,17 @@ describe('MCP server', () => {
     expect(failed![0].save).toBe('replace');
     await call('image_job_result', { job_id: failed![0].id, ok: false, error: 'Operation 1 (crop): That rectangle is outside the picture, which is 1 × 1 pixels at this point.' });
     expect(await failing).toMatchObject({ isError: true, text: expect.stringContaining('outside the picture') });
-    expect((await call('transform_image', { file_id: 'nope', operations: [{ op: 'flip', axis: 'horizontal' }] })).text).toMatch(/no file nope/);
+    expect((await call('transform_image', { file_id: 'nope', flip: 'horizontal' })).text).toMatch(/no file nope/);
     // Removing a background is for the full app: said at once, with nothing handed to the app and nothing changed.
-    const noRemoval = await call('transform_image', { file_id: imgId, operations: [{ op: 'rotate', degrees: 90 }, { op: 'remove_background' }] });
+    const noRemoval = await call('transform_image', { file_id: imgId, rotate: 90, remove_background: true });
     expect(noRemoval).toMatchObject({ isError: true, text: expect.stringMatching(/only available in the full Universal Docs app.*Nothing was changed/) });
     expect((await call('app_state')).data?.jobs).toBeUndefined();
-    expect((await call('transform_image', { file_id: imgId, operations: [] })).isError).toBe(true);
+    expect((await call('transform_image', { file_id: imgId })).text).toMatch(/at least one change/);
     // The app's own tools are not offered to the model.
     const offered = (await client.listTools()).tools;
     expect(offered.find((t) => t.name === 'image_job_result')?._meta).toMatchObject({ ui: { visibility: ['app'] } });
     expect(offered.find((t) => t.name === 'transform_image')?._meta?.ui).toBeUndefined();
-    expect(offered.find((t) => t.name === 'transform_image')?.description).toMatch(/remove_background is not available here/);
+    expect(offered.find((t) => t.name === 'transform_image')?.inputSchema.properties).not.toHaveProperty('operations');
     // A web page is stored as it is, by its name or by how it starts.
     attachments.set('https://files.example/chart.html', Buffer.from('<h1>Chart</h1><script>document.title = 1</script>'));
     const html = await call('import_file', { file: { download_url: 'https://files.example/chart.html', file_name: 'chart.html' } });
