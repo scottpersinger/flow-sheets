@@ -27,6 +27,8 @@ tools wait for approval, and the server must keep working with the approved tool
 - [x] Every tool has `readOnlyHint`, `destructiveHint` and `openWorldHint`; the tools that fetch from the web
       (`import_file`, `insert_image`, `set_cell_image`) say so
 - [x] The app declares its content security policy (our origin and Google Fonts)
+- [x] The model's tools return no revisions, dates or account ids (the app's own tools keep them)
+- [x] The sign-in and consent pages list everything that is shared and link the privacy policy and terms
 - [x] Privacy policy, terms of service and support pages, public and readable without scripts
 
 ## To do before submitting

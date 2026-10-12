@@ -113,7 +113,16 @@ describe('MCP server', () => {
     const read = await call('read_doc');
     expect((read.data?.blocks as { markdown: string }[]).map((b) => b.markdown)).toEqual(['Hello.', 'World.']);
     const state = await call('app_state');
-    expect((state.data?.open as { rev: string }).rev).toBe(read.data?.rev);
+    // The app keeps in step by the revision; the model's tools do not return revisions or dates.
+    expect((state.data?.open as { rev: string }).rev).toMatch(/^\d{4}-/);
+    expect(read.data).not.toHaveProperty('rev');
+    expect(created.data?.open).not.toHaveProperty('rev');
+    expect(created.data?.file).toEqual({ kind: 'doc', id: (created.data?.file as { id: string }).id, title: 'Notes' });
+    expect(created.text).not.toMatch(/updated_at|"rev"/);
+    const listed = (await call('list_files')).data?.files as Record<string, unknown>[];
+    expect(Object.keys(listed[0]).sort()).toEqual(['id', 'kind', 'title']);
+    const library = (await call('library_files')).data?.files as Record<string, unknown>[];
+    expect(library[0]).toMatchObject({ id: listed[0].id, updated_at: expect.any(String), created_at: expect.any(String) });
   });
 
   it('creates a Markdown document and edits its text with the document tools', async () => {

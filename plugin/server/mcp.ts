@@ -179,6 +179,25 @@ function fail(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
+const withoutDates = (file: unknown): unknown => {
+  if (!file || typeof file !== 'object') return file;
+  const { updated_at: _u, created_at: _c, rev: _r, ...rest } = file as Record<string, unknown>;
+  return rest;
+};
+
+/** A tool result as the model gets it: without the revisions and dates the app keeps in step with. */
+export function forModel(result: CallToolResult): CallToolResult {
+  const data = result.structuredContent as Record<string, unknown> | undefined;
+  if (!data || result.isError) return result;
+  const { rev: _rev, ...rest } = data;
+  if ('file' in rest) rest.file = withoutDates(rest.file);
+  if ('open' in rest) rest.open = withoutDates(rest.open);
+  if (Array.isArray(rest.files)) rest.files = rest.files.map(withoutDates);
+  const [first, ...others] = result.content;
+  // The first part is the same data as text (see ok); pictures and the like follow it.
+  return { ...result, structuredContent: rest, content: first?.type === 'text' ? [{ type: 'text', text: JSON.stringify(rest) }, ...others] : result.content };
+}
+
 /** Run a tool body, turning the errors the model (or the app) should see into error results. */
 async function guard(fn: () => Promise<CallToolResult> | CallToolResult): Promise<CallToolResult> {
   try {
@@ -207,6 +226,13 @@ const HELLO = '<!doctype html><html><head><meta charset="utf-8"><style>body{font
 
 export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
   const server = new McpServer({ ...SERVER_INFO, icons: [DOC_ICON] }, { instructions: INSTRUCTIONS });
+  // What a tool returns to the model holds only what a request needs: revisions and dates are for the app's
+  // own tools, which keep them.
+  const register = server.registerTool.bind(server) as (name: string, config: { _meta?: Record<string, unknown> }, handler: (...args: unknown[]) => Promise<CallToolResult> | CallToolResult) => unknown;
+  (server as unknown as { registerTool: typeof register }).registerTool = (name, config, handler) => {
+    const appOnlyTool = ((config._meta?.ui as { visibility?: string[] } | undefined)?.visibility ?? []).join() === 'app';
+    return register(name, config, appOnlyTool ? handler : async (...args) => forModel(await handler(...args)));
+  };
   const level = opts.level ?? 'full';
   const ui = level === 'render' || level === 'app' || level === 'full';
   // Only the levels that show the app need the bundle. An unbuilt app still lists its tools (the resource
@@ -276,14 +302,15 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'get_profile',
     {
       title: 'Linked account',
-      description: 'The account the plugin is signed in as: its id and email.',
+      description: 'The account the plugin is signed in as: its email address.',
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: { 'openai/profile': true },
     },
     async () => {
       const p = service.profile();
-      return ok({ id: p.id, email: p.email, name: p.email });
+      // The email is the account's name here too; the id inside the app is not for anyone else.
+      return ok({ id: p.email, email: p.email, name: p.email });
     },
   );
 
@@ -718,6 +745,9 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         return ok({ ...service.state() });
       }),
   );
+
+  // The library's listing, with the dates it shows and sorts by.
+  server.registerTool('library_files', { description: "Every file of the account for the app's library, with when each was made and last changed.", inputSchema: {}, ...appOnly(true) }, async () => guard(() => ok({ files: service.list() })));
 
   server.registerTool('get_file', { description: 'Load a whole file for the editor.', inputSchema: { kind, id: fileId }, ...appOnly(true) }, async ({ kind: k, id }) => guard(async () => ok({ ...(await service.get(k, id)) })));
 

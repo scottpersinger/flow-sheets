@@ -400,7 +400,7 @@ export class OAuthServer {
     return page(
       `Sign in to ${this.appName}`,
       `<h1>Sign in to ${escapeHtml(this.appName)}</h1>
-<p class="muted"><strong>${escapeHtml(p.client_name)}</strong> wants to read and edit your documents and presentations. Sign in to continue; you can choose what to allow on the next page.</p>
+<p class="muted"><strong>${escapeHtml(p.client_name)}</strong> wants to read and edit the files in your ${escapeHtml(this.appName)} library: documents, presentations, spreadsheets, Markdown files, pictures and other stored files. Sign in to continue; you can choose what to allow on the next page.</p>
 ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
 ${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Continue with Google</a><div class="or">or</div>` : ''}
 <form method="post" action="/oauth/login">
@@ -408,7 +408,8 @@ ${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Contin
   <label>Email <input type="email" name="email" autocomplete="username" required autofocus></label>
   <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
   <button class="btn primary" type="submit">Sign in</button>
-</form>`,
+</form>
+${POLICY_LINKS}`,
     );
   }
 
@@ -417,7 +418,7 @@ ${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Contin
     if (!p || !p.user_id) return this.errorPage('This sign-in link has expired. Start again from ChatGPT.');
     const who = this.profile(p.user_id);
     const id = escapeHtml(pendingId);
-    const scopes = p.params.scope.split(' ').map((s) => `<li>${escapeHtml({ 'files:read': 'Read your documents and presentations', 'files:write': 'Create, change and delete your documents and presentations' }[s] ?? s)}</li>`).join('');
+    const scopes = p.params.scope.split(' ').map((s) => `<li>${escapeHtml({ 'files:read': 'See the names of your files and read their contents: documents, presentations, spreadsheets, Markdown files, pictures and other stored files', 'files:write': 'Create, change, import and delete those files' }[s] ?? s)}</li>`).join('');
     return page(
       `Allow ${p.client_name}?`,
       `<h1>Allow ${escapeHtml(p.client_name)}?</h1>
@@ -428,7 +429,9 @@ ${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Contin
   <input type="hidden" name="p" value="${id}">
   <button class="btn" type="submit" name="allow" value="no">Deny</button>
   <button class="btn primary" type="submit" name="allow" value="yes">Allow</button>
-</form>`,
+</form>
+<p class="muted">It will also see the email address of this account. You can disconnect it in ChatGPT at any time.</p>
+${POLICY_LINKS}`,
     );
   }
 
@@ -469,6 +472,9 @@ export function redirectMatches(registered: string, requested: string): boolean 
     return false;
   }
 }
+
+/** The app's privacy policy and terms, shown before anyone signs in or allows access (the app serves them). */
+const POLICY_LINKS = '<p class="muted"><a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> · <a href="/terms" target="_blank" rel="noopener">Terms of Service</a></p>';
 
 function page(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title>

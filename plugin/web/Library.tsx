@@ -31,7 +31,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
 
   const load = () =>
     host
-      .call<{ files: FileSummary[] }>('list_files')
+      .call<{ files: FileSummary[] }>('library_files')
       .then((r) => setItems(r.files.map(toItem)))
       .catch((e: Error) => setError(e.message));
   useEffect(() => void load(), [host]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -108,7 +108,7 @@ describe('OAuth', () => {
     const files = await mcp(tokens.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_files', arguments: {} } }).then((r) => r.json());
     expect((files.result.structuredContent.files as { title: string }[]).map((f) => f.title)).toEqual(['Mine']);
     const profile = await mcp(tokens.access_token, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_profile', arguments: {} } }).then((r) => r.json());
-    expect(profile.result.structuredContent).toMatchObject({ id: 'u1', email: 'a@example.com' });
+    expect(profile.result.structuredContent).toEqual({ id: 'a@example.com', email: 'a@example.com', name: 'a@example.com' });
     // The code is single use; replaying it kills what it issued.
     const replay = await fetch(`${base}/oauth/token`, form({ grant_type: 'authorization_code', code, code_verifier: 'the-verifier-value-1234567890', redirect_uri: REDIRECT }));
     expect(replay.status).toBe(400);
