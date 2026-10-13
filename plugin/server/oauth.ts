@@ -1,12 +1,15 @@
 // OAuth 2.1 authorization server for the plugin, the way ChatGPT (and Claude) connect to a remote MCP server:
 // discovery documents, client identification by metadata document or dynamic registration, the
 // authorization code flow with PKCE, a sign-in page that checks the app's own accounts (password or Google),
-// a consent page, opaque access and refresh tokens, and bearer validation for /mcp.
+// a consent page, opaque access and refresh tokens, and bearer validation for /mcp. An agent without a browser
+// (mcp-remote --device-code, say) signs in with the device authorization grant instead (RFC 8628): the person
+// enters its code on /oauth/device, and its tokens are bound to the versioned endpoint it asked for, never /mcp.
 //
 // State lives in a small SQLite file of its own (plugin.db); only hashes of codes and tokens are stored.
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AuthService } from '../../server/auth.ts';
+import type { ConnectedAgent } from '../../shared/types.ts';
 import { GoogleLoginError, type GoogleLogin } from '../../server/googleAuth.ts';
 
 export const SCOPES = ['files:read', 'files:write'] as const;
@@ -15,6 +18,14 @@ export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 const PENDING_TTL_MS = 15 * 60 * 1000;
 const CLIENT_DOC_TTL_MS = 60 * 60 * 1000;
+export const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+const GRANTS = ['authorization_code', 'refresh_token', DEVICE_GRANT];
+const DEVICE_TTL_MS = 10 * 60 * 1000;
+const DEVICE_INTERVAL_S = 5;
+/** Wrong codes one address may enter on /oauth/device before it has to wait. */
+const DEVICE_TRIES = 10;
+/** Letters for user codes: no vowels (so no words) and none easily read as another; 20^8 codes. */
+const USER_CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ';
 
 export interface OAuthOptions {
   db: DatabaseSync;
@@ -55,7 +66,8 @@ export interface AuthorizeParams {
 
 interface Pending {
   id: string;
-  params: AuthorizeParams & { client_id: string; redirect_uri: string; code_challenge: string; scope: string };
+  /** A device sign-in has no redirect_uri or code_challenge (both ''); it names the device code's hash and where the request came from. */
+  params: AuthorizeParams & { client_id: string; redirect_uri: string; code_challenge: string; scope: string; device?: string; origin?: string };
   client_name: string;
   user_id: string | null;
 }
@@ -79,6 +91,8 @@ export class OAuthServer {
   private readonly fetchFn: typeof fetch;
   private readonly appName: string;
   private readonly clientDocs = new Map<string, { doc: ClientDoc; expires: number }>();
+  /** Wrong codes entered on /oauth/device, by address. */
+  private readonly deviceTries = new Map<string, { count: number; until: number }>();
 
   constructor(opts: OAuthOptions) {
     this.db = opts.db;
@@ -95,7 +109,12 @@ export class OAuthServer {
       CREATE TABLE IF NOT EXISTS oauth_codes (hash TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, scope TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
       CREATE TABLE IF NOT EXISTS oauth_tokens (hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL, user_id TEXT NOT NULL, scope TEXT NOT NULL, family TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS oauth_tokens_family ON oauth_tokens(family);
+      CREATE TABLE IF NOT EXISTS oauth_connections (id TEXT PRIMARY KEY, family TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, client_name TEXT NOT NULL, origin TEXT NOT NULL, resource TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS oauth_device (hash TEXT PRIMARY KEY, user_code TEXT NOT NULL UNIQUE, client_id TEXT NOT NULL, client_name TEXT NOT NULL, scope TEXT NOT NULL, resource TEXT NOT NULL, origin TEXT NOT NULL, status TEXT NOT NULL, user_id TEXT, interval_s INTEGER NOT NULL, last_poll_at INTEGER, expires_at TEXT NOT NULL);
     `);
+    // The resource a token is bound to (a device sign-in's endpoint), or NULL for every endpoint.
+    const cols = this.db.prepare('PRAGMA table_info(oauth_tokens)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'resource')) this.db.exec('ALTER TABLE oauth_tokens ADD COLUMN resource TEXT');
   }
 
   get googleEnabled(): boolean {
@@ -136,9 +155,10 @@ export class OAuthServer {
       token_endpoint: `${this.issuer}/oauth/token`,
       registration_endpoint: `${this.issuer}/oauth/register`,
       revocation_endpoint: `${this.issuer}/oauth/revoke`,
+      device_authorization_endpoint: `${this.issuer}/oauth/device_authorization`,
       response_types_supported: ['code'],
       response_modes_supported: ['query'],
-      grant_types_supported: ['authorization_code', 'refresh_token'],
+      grant_types_supported: GRANTS,
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none'],
       revocation_endpoint_auth_methods_supported: ['none'],
@@ -159,12 +179,15 @@ export class OAuthServer {
 
   /** Dynamic client registration (RFC 7591), for clients without a metadata document. */
   register(body: unknown) {
-    const b = (body ?? {}) as { redirect_uris?: unknown; client_name?: unknown; token_endpoint_auth_method?: unknown };
+    const b = (body ?? {}) as { redirect_uris?: unknown; client_name?: unknown; token_endpoint_auth_method?: unknown; grant_types?: unknown };
+    const asked = Array.isArray(b.grant_types) ? b.grant_types.filter((g): g is string => typeof g === 'string' && GRANTS.includes(g)) : [];
+    const grants = asked.length ? asked : ['authorization_code', 'refresh_token'];
     const uris = Array.isArray(b.redirect_uris) ? b.redirect_uris.filter((u): u is string => typeof u === 'string') : [];
-    if (!uris.length || !uris.every(isAllowedRedirect)) throw new OAuthError('invalid_redirect_uri', 'redirect_uris must be https URLs (or http://localhost for development).');
+    // A client that only signs in with the device grant never comes back to a redirect URI.
+    if ((grants.includes('authorization_code') && !uris.length) || !uris.every(isAllowedRedirect)) throw new OAuthError('invalid_redirect_uri', 'redirect_uris must be https URLs (or http://localhost for development).');
     if (b.token_endpoint_auth_method !== undefined && b.token_endpoint_auth_method !== 'none') throw new OAuthError('invalid_client_metadata', 'Only token_endpoint_auth_method "none" (public client with PKCE) is supported.');
     const id = `dcr_${randomUUID()}`;
-    const name = typeof b.client_name === 'string' && b.client_name.trim() ? b.client_name.trim().slice(0, 100) : new URL(uris[0]).host;
+    const name = typeof b.client_name === 'string' && b.client_name.trim() ? b.client_name.trim().slice(0, 100) : uris.length ? new URL(uris[0]).host : 'An agent';
     this.db.prepare('INSERT INTO oauth_clients (id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)').run(id, name, JSON.stringify(uris), iso(now()));
     return {
       client_id: id,
@@ -172,9 +195,18 @@ export class OAuthServer {
       client_name: name,
       redirect_uris: uris,
       token_endpoint_auth_method: 'none',
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
+      grant_types: grants,
+      response_types: grants.includes('authorization_code') ? ['code'] : [],
     };
+  }
+
+  /** The name of a client that has no redirect URI to check (a device sign-in). */
+  private async clientName(clientId: string | undefined): Promise<string> {
+    if (!clientId) throw new OAuthError('invalid_request', 'client_id is required.');
+    if (/^https:\/\//.test(clientId)) return (await this.clientDocument(clientId)).client_name ?? new URL(clientId).host;
+    const row = this.db.prepare('SELECT name FROM oauth_clients WHERE id = ?').get(clientId) as { name: string } | undefined;
+    if (!row) throw new OAuthError('invalid_client', 'Unknown client_id.', 401);
+    return row.name;
   }
 
   /** Who the client is, and whether it may use this redirect URI. */
@@ -291,11 +323,17 @@ export class OAuthServer {
     this.db.prepare('UPDATE oauth_pending SET user_id = NULL WHERE id = ?').run(pendingId);
   }
 
-  /** The user allowed or denied: where to send the browser (back to the client). */
+  /** The user allowed or denied: where to send the browser (back to the client, or for a device to the done page). */
   decide(pendingId: string | undefined, allow: boolean): string {
     const p = this.pending(pendingId);
     if (!p) throw new OAuthError('invalid_request', 'This sign-in link has expired. Start again from ChatGPT.');
     this.db.prepare('DELETE FROM oauth_pending WHERE id = ?').run(p.id);
+    if (p.params.device) {
+      const ok = allow && !!p.user_id;
+      const changed = this.db.prepare("UPDATE oauth_device SET status = ?, user_id = ? WHERE hash = ? AND status = 'pending' AND expires_at >= ?").run(ok ? 'approved' : 'denied', ok ? p.user_id : null, p.params.device, iso(now()));
+      if (!changed.changes) throw new OAuthError('invalid_request', 'This code has expired or was already used. Start again from your agent.');
+      return `/oauth/device/done${ok ? '?ok=1' : ''}`;
+    }
     if (!allow || !p.user_id) return this.redirect(p.params.redirect_uri, { error: 'access_denied', error_description: 'The user declined.', state: p.params.state });
     const code = token();
     this.db
@@ -311,12 +349,105 @@ export class OAuthServer {
     return url.href;
   }
 
+  // --- Device sign-in (RFC 8628) -----------------------------------------------------------
+
+  /**
+   * An agent without a browser asks to sign in. It shows the person the address and the code; they enter the
+   * code on /oauth/device and sign in there, while the agent polls the token endpoint. There is deliberately
+   * no verification_uri_complete: typing the code is what makes the person look at it, so a link someone
+   * else started cannot be approved with one click.
+   */
+  async deviceAuthorization(form: Record<string, string>, origin: string) {
+    const clientName = await this.clientName(form.client_id);
+    // Only a versioned endpoint: /mcp is the version ChatGPT reviewed, and it signs in with the code flow.
+    if (!form.resource || form.resource === this.resource || !this.isResource(form.resource)) throw new OAuthError('invalid_target', `Device sign-in is for a versioned endpoint, such as ${this.resource}/v2; name it as resource.`);
+    const scope = this.cleanScope(form.scope);
+    if (!scope) throw new OAuthError('invalid_scope', `Supported scopes: ${SCOPES.join(' ')}.`);
+    this.purge();
+    const deviceCode = token();
+    let userCode = '';
+    do userCode = Array.from({ length: 8 }, () => USER_CODE_LETTERS[randomInt(USER_CODE_LETTERS.length)]).join('');
+    while (this.db.prepare('SELECT 1 FROM oauth_device WHERE user_code = ?').get(userCode));
+    this.db
+      .prepare("INSERT INTO oauth_device (hash, user_code, client_id, client_name, scope, resource, origin, status, interval_s, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)")
+      .run(sha(deviceCode), userCode, form.client_id, clientName, scope, form.resource, origin.slice(0, 200), DEVICE_INTERVAL_S, iso(now() + DEVICE_TTL_MS));
+    return { device_code: deviceCode, user_code: `${userCode.slice(0, 4)}-${userCode.slice(4)}`, verification_uri: `${this.issuer}/oauth/device`, expires_in: DEVICE_TTL_MS / 1000, interval: DEVICE_INTERVAL_S };
+  }
+
+  /** The person entered a code on /oauth/device: a sign-in like the code flow's, which ends on the device row instead of a redirect. */
+  startDevice(input: unknown, address: string): { pendingId: string } | { error: string } {
+    const t = now();
+    const tries = this.deviceTries.get(address);
+    const counting = tries && tries.until > t ? tries : null;
+    if (counting && counting.count >= DEVICE_TRIES) return { error: 'Too many wrong codes. Wait a few minutes, then try again.' };
+    const code = typeof input === 'string' ? input.toUpperCase().replace(/[^A-Z]/g, '') : '';
+    const row = code.length === 8
+      ? (this.db.prepare("SELECT hash, client_id, client_name, scope, resource, origin FROM oauth_device WHERE user_code = ? AND status = 'pending' AND expires_at >= ?").get(code, iso(t)) as { hash: string; client_id: string; client_name: string; scope: string; resource: string; origin: string } | undefined)
+      : undefined;
+    if (!row) {
+      this.deviceTries.set(address, { count: (counting?.count ?? 0) + 1, until: counting?.until ?? t + DEVICE_TTL_MS });
+      return { error: "That code isn't right, or it has expired. Check the code your agent shows, or start again there." };
+    }
+    const id = token();
+    const params = { client_id: row.client_id, redirect_uri: '', code_challenge: '', scope: row.scope, resource: row.resource, device: row.hash, origin: row.origin };
+    this.db.prepare('INSERT INTO oauth_pending (id, params, client_name, user_id, expires_at) VALUES (?, ?, ?, NULL, ?)').run(id, JSON.stringify(params), row.client_name, iso(t + PENDING_TTL_MS));
+    return { pendingId: id };
+  }
+
+  /** The agent polls: still waiting, too fast, declined, expired, or its tokens (once). */
+  private exchangeDevice(form: Record<string, string>) {
+    if (!form.device_code) throw new OAuthError('invalid_request', 'device_code is required.');
+    const row = this.db.prepare('SELECT * FROM oauth_device WHERE hash = ?').get(sha(form.device_code)) as
+      | { hash: string; client_id: string; client_name: string; origin: string; scope: string; resource: string; status: string; user_id: string | null; interval_s: number; last_poll_at: number | null; expires_at: string }
+      | undefined;
+    if (!row || (form.client_id && form.client_id !== row.client_id)) throw new OAuthError('invalid_grant', 'The device code is invalid.');
+    if (row.expires_at < iso(now())) {
+      this.db.prepare('DELETE FROM oauth_device WHERE hash = ?').run(row.hash);
+      throw new OAuthError('expired_token', 'The device code has expired. Start the sign-in again.');
+    }
+    const t = now();
+    // A second of slack for the time a request takes; a slow_down widens the interval for good (RFC 8628 3.5).
+    if (row.last_poll_at !== null && t - row.last_poll_at < row.interval_s * 1000 - 1000) {
+      this.db.prepare('UPDATE oauth_device SET interval_s = interval_s + 5, last_poll_at = ? WHERE hash = ?').run(t, row.hash);
+      throw new OAuthError('slow_down', `Poll at most every ${row.interval_s + 5} seconds.`);
+    }
+    this.db.prepare('UPDATE oauth_device SET last_poll_at = ? WHERE hash = ?').run(t, row.hash);
+    if (row.status === 'pending') throw new OAuthError('authorization_pending', 'Waiting for the user to enter the code and allow access.');
+    this.db.prepare('DELETE FROM oauth_device WHERE hash = ?').run(row.hash);
+    if (row.status !== 'approved' || !row.user_id) throw new OAuthError('access_denied', 'The user declined.');
+    // Listed on the Settings page, where the person can disconnect it.
+    this.db.prepare('INSERT INTO oauth_connections (id, family, user_id, client_name, origin, resource, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), row.hash, row.user_id, row.client_name, row.origin, row.resource, iso(now()));
+    return this.issue(row.client_id, row.user_id, row.scope, row.hash, row.resource);
+  }
+
+  /** The agents signed in to this account with a device code that can still get tokens, newest first. */
+  connectedAgents(userId: string): ConnectedAgent[] {
+    const rows = this.db
+      .prepare(
+        `SELECT c.id, c.client_name, c.origin, c.resource, c.created_at, MAX(t.created_at) AS last_active FROM oauth_connections c
+         JOIN oauth_tokens t ON t.family = c.family AND t.kind = 'refresh' AND t.revoked_at IS NULL AND t.expires_at >= ?
+         WHERE c.user_id = ? GROUP BY c.id ORDER BY c.created_at DESC`,
+      )
+      .all(iso(now()), userId) as { id: string; client_name: string; origin: string; resource: string; created_at: string; last_active: string }[];
+    return rows.map((r) => ({ id: r.id, name: r.client_name, origin: r.origin, endpoint: r.resource, connectedAt: r.created_at, lastActiveAt: r.last_active }));
+  }
+
+  /** Signs an agent out: every token it holds stops working at once. False when the account has no such agent. */
+  disconnectAgent(userId: string, id: string): boolean {
+    const row = this.db.prepare('SELECT family FROM oauth_connections WHERE id = ? AND user_id = ?').get(id, userId) as { family: string } | undefined;
+    if (!row) return false;
+    this.db.prepare('UPDATE oauth_tokens SET revoked_at = ? WHERE family = ? AND revoked_at IS NULL').run(iso(now()), row.family);
+    this.db.prepare('DELETE FROM oauth_connections WHERE id = ?').run(id);
+    return true;
+  }
+
   // --- Tokens ----------------------------------------------------------------------------
 
   token(form: Record<string, string>) {
     if (form.grant_type === 'authorization_code') return this.exchangeCode(form);
     if (form.grant_type === 'refresh_token') return this.refresh(form);
-    throw new OAuthError('unsupported_grant_type', 'grant_type must be authorization_code or refresh_token.');
+    if (form.grant_type === DEVICE_GRANT) return this.exchangeDevice(form);
+    throw new OAuthError('unsupported_grant_type', `grant_type must be authorization_code, refresh_token or ${DEVICE_GRANT}.`);
   }
 
   private exchangeCode(form: Record<string, string>) {
@@ -352,16 +483,17 @@ export class OAuthServer {
     const scope = wanted ? this.cleanScope(wanted) : row.scope;
     if (!scope || !scope.split(' ').every((s) => row.scope.split(' ').includes(s))) throw new OAuthError('invalid_scope', 'The requested scope exceeds the original grant.');
     this.db.prepare('UPDATE oauth_tokens SET revoked_at = ? WHERE hash = ?').run(iso(now()), row.hash);
-    return this.issue(row.client_id, row.user_id, scope, row.family);
+    return this.issue(row.client_id, row.user_id, scope, row.family, row.resource);
   }
 
-  private issue(clientId: string, userId: string, scope: string, family: string) {
+  /** resource binds the tokens to that one endpoint; null leaves them good for every version of it. */
+  private issue(clientId: string, userId: string, scope: string, family: string, resource: string | null = null) {
     const access = token();
     const refresh = token();
     const t = now();
-    const ins = this.db.prepare('INSERT INTO oauth_tokens (hash, kind, client_id, user_id, scope, family, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    ins.run(sha(access), 'access', clientId, userId, scope, family, iso(t + ACCESS_TTL_MS), iso(t));
-    ins.run(sha(refresh), 'refresh', clientId, userId, scope, family, iso(t + REFRESH_TTL_MS), iso(t));
+    const ins = this.db.prepare('INSERT INTO oauth_tokens (hash, kind, client_id, user_id, scope, family, expires_at, created_at, resource) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    ins.run(sha(access), 'access', clientId, userId, scope, family, iso(t + ACCESS_TTL_MS), iso(t), resource);
+    ins.run(sha(refresh), 'refresh', clientId, userId, scope, family, iso(t + REFRESH_TTL_MS), iso(t), resource);
     return { access_token: access, token_type: 'Bearer', expires_in: Math.floor(ACCESS_TTL_MS / 1000), refresh_token: refresh, scope };
   }
 
@@ -375,18 +507,19 @@ export class OAuthServer {
     else this.db.prepare('UPDATE oauth_tokens SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL').run(iso(now()), row.hash);
   }
 
-  /** The account behind a bearer token, or null. */
-  authenticate(authorization: string | undefined): { userId: string; scope: string } | null {
+  /** The account behind a bearer token on an MCP path (/mcp, /mcp/v2), or null. */
+  authenticate(authorization: string | undefined, endpoint = '/mcp'): { userId: string; scope: string } | null {
     const m = /^Bearer\s+(\S+)$/i.exec(authorization ?? '');
     if (!m) return null;
     const row = this.tokenRow(m[1], 'access');
     if (!row || row.revoked_at) return null;
+    if (row.resource && row.resource !== this.resourceAt(endpoint)) return null;
     return { userId: row.user_id, scope: row.scope };
   }
 
   private tokenRow(raw: string, kind: 'access' | 'refresh') {
     const row = this.db.prepare('SELECT * FROM oauth_tokens WHERE hash = ? AND kind = ?').get(sha(raw), kind) as
-      | { hash: string; kind: string; client_id: string; user_id: string; scope: string; family: string; expires_at: string; revoked_at: string | null }
+      | { hash: string; kind: string; client_id: string; user_id: string; scope: string; family: string; expires_at: string; revoked_at: string | null; resource: string | null }
       | undefined;
     return row && row.expires_at >= iso(now()) ? row : null;
   }
@@ -402,6 +535,10 @@ export class OAuthServer {
     this.db.prepare('DELETE FROM oauth_pending WHERE expires_at < ?').run(t);
     this.db.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(t);
     this.db.prepare('DELETE FROM oauth_tokens WHERE expires_at < ?').run(t);
+    this.db.prepare('DELETE FROM oauth_connections WHERE family NOT IN (SELECT family FROM oauth_tokens)').run();
+    // Kept a while past expiry, so a late poll hears expired_token rather than an unknown code.
+    this.db.prepare('DELETE FROM oauth_device WHERE expires_at < ?').run(iso(now() - DEVICE_TTL_MS));
+    for (const [address, tries] of this.deviceTries) if (tries.until < now()) this.deviceTries.delete(address);
   }
 
   // --- Pages -------------------------------------------------------------------------------
@@ -431,11 +568,16 @@ ${POLICY_LINKS}`,
     if (!p || !p.user_id) return this.errorPage('This sign-in link has expired. Start again from ChatGPT.');
     const who = this.profile(p.user_id);
     const id = escapeHtml(pendingId);
+    // A device sign-in may have been started by someone else, who sent this person the address and code.
+    const device = p.params.device
+      ? `<p class="error">Only allow this if you started this sign-in yourself, from an agent you trust. The request came from ${escapeHtml(p.params.origin ?? 'an unknown address')}, and "${escapeHtml(p.client_name)}" is the name the agent gave itself.</p>`
+      : '';
     const scopes = p.params.scope.split(' ').map((s) => `<li>${escapeHtml({ 'files:read': 'See the names of your files and read their contents: documents, presentations, spreadsheets, Markdown files, pictures and other stored files', 'files:write': 'Create, change, import and delete those files' }[s] ?? s)}</li>`).join('');
     return page(
       `Allow ${p.client_name}?`,
       `<h1>Allow ${escapeHtml(p.client_name)}?</h1>
 <p class="muted">Signed in as <strong>${escapeHtml(who?.email ?? '')}</strong>. <a href="/oauth/switch?p=${id}">Not you?</a></p>
+${device}
 <p>${escapeHtml(p.client_name)} will be able to:</p>
 <ul>${scopes}</ul>
 <form method="post" action="/oauth/decision" class="row">
@@ -443,9 +585,31 @@ ${POLICY_LINKS}`,
   <button class="btn" type="submit" name="allow" value="no">Deny</button>
   <button class="btn primary" type="submit" name="allow" value="yes">Allow</button>
 </form>
-<p class="muted">It will also see the email address of this account. You can disconnect it in ChatGPT at any time.</p>
+<p class="muted">It will also see the email address of this account.${p.params.device ? '' : ' You can disconnect it in ChatGPT at any time.'}</p>
 ${POLICY_LINKS}`,
     );
+  }
+
+  /** Where the person enters the code an agent showed them. */
+  devicePage(error?: string): string {
+    return page(
+      'Connect an agent',
+      `<h1>Connect an agent to ${escapeHtml(this.appName)}</h1>
+<p class="muted">Enter the code your agent showed you.</p>
+<p><strong>Only enter a code from an agent you started yourself.</strong> Whoever started it will be able to read and change your files.</p>
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+<form method="post" action="/oauth/device">
+  <label>Code <input name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" required autofocus></label>
+  <button class="btn primary" type="submit">Continue</button>
+</form>
+${POLICY_LINKS}`,
+    );
+  }
+
+  deviceDonePage(allowed: boolean): string {
+    return allowed
+      ? page('Agent connected', `<h1>Agent connected</h1><p>You can close this page and go back to your agent.</p>`)
+      : page('Not connected', `<h1>Not connected</h1><p class="muted">You did not allow access, so the agent cannot use your files.</p>`);
   }
 
   errorPage(message: string): string {

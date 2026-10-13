@@ -32,7 +32,8 @@ export interface MountOptions {
   production: boolean;
 }
 
-export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Promise<void> {
+/** Returns the OAuth server, for the app's Settings page (the agents connected with a device code). */
+export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Promise<OAuthServer> {
   const publicUrl = opts.publicUrl.replace(/\/$/, '');
   const hub = new FileHub({ db: opts.db, dataDir: opts.dataDir, publicUrl, sheets: opts.sheets, images: opts.images, files: opts.files });
   const oauth = new OAuthServer({
@@ -64,6 +65,7 @@ export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Pro
     });
   });
   app.log.info(`ChatGPT plugin mounted at ${publicUrl}/mcp (OAuth issuer ${publicUrl})`);
+  return oauth;
 }
 
 function parseCookie(header: string | undefined): Record<string, string> {

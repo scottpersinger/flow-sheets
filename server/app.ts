@@ -184,9 +184,7 @@ export async function buildApp(opts: AppOptions) {
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
   await app.register(cookie);
-  if (opts.plugin) {
-    await mountPlugin(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, auth, google, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, production: !!opts.staticDir });
-  }
+  const pluginOAuth = opts.plugin ? await mountPlugin(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, auth, google, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, production: !!opts.staticDir }) : null;
   // Raw file uploads (xlsx import).
   app.addContentTypeParser([XLSX_MIME, PPTX_MIME, DOCX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
     done(null, body),
@@ -1249,6 +1247,15 @@ export async function buildApp(opts: AppOptions) {
         if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
         throw e;
       }
+    });
+
+    // --- Agents signed in to the plugin's MCP endpoint with a device code (none when the plugin is not mounted) ---
+    r.get('/api/settings/agents', async (req) => ({ enabled: !!pluginOAuth, agents: pluginOAuth?.connectedAgents(req.user!.id) ?? [] }));
+
+    r.delete('/api/settings/agents/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (!pluginOAuth?.disconnectAgent(req.user!.id, id)) return reply.code(404).send({ error: 'No such agent.' });
+      return { ok: true };
     });
 
     // --- App-change jobs (self-improvement) ---

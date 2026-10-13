@@ -77,4 +77,38 @@ describe('plugin mounted in the app', () => {
     const consentAgain = await app.inject({ method: 'GET', url: `/oauth/consent?p=${pendingId}` });
     expect(consentAgain.body).toContain('expired');
   });
+
+  it('lists agents signed in with a device code on Settings, and disconnects them', async () => {
+    const { cookie } = await signUp(app, box, 'agents@x.com', 'password-12345');
+    const formBody = (b: Record<string, string>) => ({ headers: { 'content-type': 'application/x-www-form-urlencoded' }, payload: new URLSearchParams(b).toString() });
+    const list = async (c = cookie) => (await app.inject({ method: 'GET', url: '/api/settings/agents', headers: { cookie: c } })).json();
+    expect(await list()).toEqual({ enabled: true, agents: [] });
+
+    const reg = await app.inject({ method: 'POST', url: '/oauth/register', headers: { 'content-type': 'application/json' }, payload: { client_name: 'mcp-remote', grant_types: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token'] } });
+    const clientId = reg.json().client_id as string;
+    const issued = (await app.inject({ method: 'POST', url: '/oauth/device_authorization', ...formBody({ client_id: clientId, resource: 'https://docs.test/mcp/v2' }) })).json();
+    // Signed in to the app in this browser: the code goes straight to consent.
+    const entered = await app.inject({ method: 'POST', url: '/oauth/device', headers: { ...formBody({}).headers, cookie }, payload: new URLSearchParams({ code: issued.user_code }).toString() });
+    expect(entered.statusCode).toBe(302);
+    const pendingId = new URL(entered.headers.location as string, 'https://docs.test').searchParams.get('p')!;
+    await app.inject({ method: 'POST', url: '/oauth/decision', ...formBody({ p: pendingId, allow: 'yes' }) });
+    const tokens = (await app.inject({ method: 'POST', url: '/oauth/token', ...formBody({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: issued.device_code, client_id: clientId }) })).json();
+    const toolsList = () => app.inject({ method: 'POST', url: '/mcp/v2', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${tokens.access_token}` }, payload: { jsonrpc: '2.0', id: 1, method: 'tools/list' } });
+    expect((await toolsList()).statusCode).toBe(200);
+
+    const { agents } = await list();
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({ name: 'mcp-remote', endpoint: 'https://docs.test/mcp/v2' });
+    // Another account neither sees it nor can disconnect it.
+    const other = await signUp(app, box, 'someone@x.com', 'password-12345');
+    expect((await list(other.cookie)).agents).toEqual([]);
+    expect((await app.inject({ method: 'DELETE', url: `/api/settings/agents/${agents[0].id}`, headers: { cookie: other.cookie } })).statusCode).toBe(404);
+    expect((await toolsList()).statusCode).toBe(200);
+
+    expect((await app.inject({ method: 'DELETE', url: `/api/settings/agents/${agents[0].id}`, headers: { cookie } })).statusCode).toBe(200);
+    expect((await list()).agents).toEqual([]);
+    expect((await toolsList()).statusCode).toBe(401);
+    const refresh = await app.inject({ method: 'POST', url: '/oauth/token', ...formBody({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }) });
+    expect(refresh.json().error).toBe('invalid_grant');
+  });
 });

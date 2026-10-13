@@ -174,6 +174,20 @@ export function newWorkbook(firstTabId: string): Workbook {
 }
 
 /** A stored file (generated PDF, upload): metadata only; the bytes are served from `url` / `downloadUrl`. */
+/** An agent signed in to the account's files with a device code (the plugin's /mcp/v2), listed on the Settings page. */
+export interface ConnectedAgent {
+  id: string;
+  /** The name the agent gave itself when it registered. */
+  name: string;
+  /** Where the sign-in was started from: address and user agent. */
+  origin: string;
+  /** The MCP endpoint its tokens are for. */
+  endpoint: string;
+  connectedAt: string;
+  /** When it last got fresh tokens (it refreshes about hourly while in use). */
+  lastActiveAt: string;
+}
+
 export interface StoredFile {
   id: string;
   filename: string;

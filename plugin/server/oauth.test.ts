@@ -4,12 +4,12 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthService, hashPassword } from '../../server/auth.ts';
 import { openDb } from '../../server/db.ts';
 import { FileHub } from './files.ts';
 import { createPluginServer } from './http.ts';
-import { OAuthServer, redirectMatches } from './oauth.ts';
+import { DEVICE_GRANT, OAuthServer, redirectMatches } from './oauth.ts';
 
 const CLIENT_DOC_URL = 'https://chatgpt.example/oauth/client.json';
 const REDIRECT = 'https://chatgpt.example/connector/callback';
@@ -191,5 +191,99 @@ describe('OAuth', () => {
     await fetch(`${base}/oauth/login`, form({ p: pendingId, email: 'a@example.com', password: 'secret-pw' }));
     const deny = await fetch(`${base}/oauth/decision`, form({ p: pendingId, allow: 'no' }));
     expect(new URL(deny.headers.get('location')!).searchParams.get('error')).toBe('access_denied');
+  });
+});
+
+describe('Device sign-in', () => {
+  const V2 = 'https://plugin.example/mcp/v2';
+  const list = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
+
+  /** Registers as mcp-remote --device-code does: device and refresh grants, and a loopback redirect it never uses. */
+  async function register() {
+    const reg = await fetch(`${base}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'mcp-remote', redirect_uris: ['http://localhost:4123/oauth/callback'], grant_types: [DEVICE_GRANT, 'refresh_token'], token_endpoint_auth_method: 'none' }) });
+    expect(reg.status).toBe(201);
+    const client = (await reg.json()) as { client_id: string; grant_types: string[] };
+    expect(client.grant_types).toEqual([DEVICE_GRANT, 'refresh_token']);
+    return client.client_id;
+  }
+  const start = (clientId: string, resource = V2) => fetch(`${base}/oauth/device_authorization`, form({ client_id: clientId, scope: 'files:read files:write', resource }));
+  const poll = (clientId: string, deviceCode: string) => fetch(`${base}/oauth/token`, form({ grant_type: DEVICE_GRANT, device_code: deviceCode, client_id: clientId, resource: V2 }));
+  /** The person's side: enter the code, sign in, allow or deny. Returns where the decision sent the browser. */
+  async function approve(userCode: string, allow = true) {
+    const entered = await fetch(`${base}/oauth/device`, form({ code: userCode.toLowerCase().replace('-', ' ') }));
+    const pendingId = /name="p" value="([^"]+)"/.exec(await entered.text())![1];
+    await fetch(`${base}/oauth/login`, form({ p: pendingId, email: 'a@example.com', password: 'secret-pw' }));
+    const consent = await fetch(`${base}/oauth/consent?p=${pendingId}`).then((r) => r.text());
+    expect(consent).toContain('Only allow this if you started this sign-in yourself');
+    expect(consent).toContain('"mcp-remote" is the name the agent gave itself');
+    const decision = await fetch(`${base}/oauth/decision`, form({ p: pendingId, allow: allow ? 'yes' : 'no' }));
+    return decision.headers.get('location');
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is advertised in the authorization server metadata', async () => {
+    const r = await fetch(`${base}/.well-known/oauth-authorization-server`).then((r) => r.json());
+    expect(r.device_authorization_endpoint).toBe('https://plugin.example/oauth/device_authorization');
+    expect(r.grant_types_supported).toContain(DEVICE_GRANT);
+  });
+
+  it('signs an agent in with a code the person enters, for /mcp/v2 only', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+    const clientId = await register();
+    const issued = await start(clientId).then((r) => r.json());
+    expect(issued).toMatchObject({ verification_uri: 'https://plugin.example/oauth/device', expires_in: 600, interval: 5 });
+    expect(issued.user_code).toMatch(/^[B-Z]{4}-[B-Z]{4}$/);
+    expect(issued).not.toHaveProperty('verification_uri_complete');
+
+    const pending = await poll(clientId, issued.device_code);
+    expect(pending.status).toBe(400);
+    expect((await pending.json()).error).toBe('authorization_pending');
+    expect((await poll(clientId, issued.device_code).then((r) => r.json())).error).toBe('slow_down');
+
+    expect(await approve(issued.user_code)).toBe('/oauth/device/done?ok=1');
+    expect(await fetch(`${base}/oauth/device/done?ok=1`).then((r) => r.text())).toContain('Agent connected');
+    vi.setSystemTime(Date.now() + 10_000);
+    const tokens = await poll(clientId, issued.device_code).then((r) => r.json());
+    expect(tokens.token_type).toBe('Bearer');
+    expect((await mcp(tokens.access_token, list, '/mcp/v2')).status).toBe(200);
+    // Version 1 is what ChatGPT reviewed: a device sign-in never reaches it.
+    expect((await mcp(tokens.access_token, list, '/mcp')).status).toBe(401);
+    // The device code is spent.
+    vi.setSystemTime(Date.now() + 10_000);
+    expect((await poll(clientId, issued.device_code).then((r) => r.json())).error).toBe('invalid_grant');
+    // Refreshed tokens stay bound to /mcp/v2.
+    const refreshed = await fetch(`${base}/oauth/token`, form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, resource: V2 })).then((r) => r.json());
+    expect((await mcp(refreshed.access_token, list, '/mcp/v2')).status).toBe(200);
+    expect((await mcp(refreshed.access_token, list, '/mcp')).status).toBe(401);
+  });
+
+  it('refuses /mcp as the resource, and tells the agent when the person declines or the code expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+    const clientId = await register();
+    for (const resource of ['https://plugin.example/mcp', 'https://plugin.example/other', '']) {
+      const r = await start(clientId, resource);
+      expect(r.status).toBe(400);
+      expect((await r.json()).error).toBe('invalid_target');
+    }
+    expect((await start('nobody').then((r) => r.json())).error).toBe('invalid_client');
+
+    const denied = await start(clientId).then((r) => r.json());
+    expect(await approve(denied.user_code, false)).toBe('/oauth/device/done');
+    expect((await poll(clientId, denied.device_code).then((r) => r.json())).error).toBe('access_denied');
+
+    const late = await start(clientId).then((r) => r.json());
+    vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+    expect((await poll(clientId, late.device_code).then((r) => r.json())).error).toBe('expired_token');
+    expect(await fetch(`${base}/oauth/device`, form({ code: late.user_code })).then((r) => r.text())).toContain("That code isn&#39;t right");
+  });
+
+  it('stops an address that keeps entering wrong codes', async () => {
+    const clientId = await register();
+    const issued = await start(clientId).then((r) => r.json());
+    for (let i = 0; i < 10; i++) expect(await fetch(`${base}/oauth/device`, form({ code: 'BBBB-BBBB' })).then((r) => r.text())).toContain("That code isn&#39;t right");
+    expect(await fetch(`${base}/oauth/device`, form({ code: issued.user_code })).then((r) => r.text())).toContain('Too many wrong codes');
   });
 });

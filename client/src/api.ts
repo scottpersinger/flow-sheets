@@ -4,7 +4,7 @@ import type { Deck } from '../../shared/deck.ts';
 import type { Doc } from '../../shared/doc.ts';
 import type { MarkdownDoc } from '../../shared/markdown.ts';
 import type { FilePreview } from '../../shared/preview.ts';
-import { CELL_IMAGE_TOO_LARGE, type DeletedFile, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import { CELL_IMAGE_TOO_LARGE, type ConnectedAgent, type DeletedFile, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 
 export interface User {
   id: string;
@@ -217,6 +217,8 @@ export const api = {
     request<FetchResult>('POST', `/api/connections/${encodeURIComponent(id)}/fetch`, body),
   assistantSettings: () => request<{ settings: AssistantSettings }>('GET', '/api/settings/assistant'),
   saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', '/api/settings/assistant', body),
+  connectedAgents: () => request<{ enabled: boolean; agents: ConnectedAgent[] }>('GET', '/api/settings/agents'),
+  disconnectAgent: (id: string) => request<{ ok: true }>('DELETE', `/api/settings/agents/${encodeURIComponent(id)}`),
   revertJob: (id: string) => request<{ job: AgentJob }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/revert`, {}),
 };
 

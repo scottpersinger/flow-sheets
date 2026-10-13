@@ -169,6 +169,28 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
             throw e;
           }
         }
+        // --- Device sign-in (RFC 8628): the agent asks for a code, the person enters it on /oauth/device ---
+        if (p === '/oauth/device_authorization' && req.method === 'POST') {
+          try {
+            const agent = String(req.headers['user-agent'] ?? '').slice(0, 80);
+            return json(res, 200, await oauth.deviceAuthorization(await readForm(req), `${clientAddress(req)}${agent ? ` (${agent})` : ''}`));
+          } catch (e) {
+            return oauthFailure(res, e);
+          }
+        }
+        if (p === '/oauth/device' && req.method === 'GET') return html(res, 200, oauth.devicePage());
+        if (p === '/oauth/device' && req.method === 'POST') {
+          const form = await readForm(req);
+          const r = oauth.startDevice(form.code, clientAddress(req));
+          if ('error' in r) return html(res, 200, oauth.devicePage(r.error));
+          const known = opts.sessionUser?.(req) ?? null;
+          if (known) {
+            oauth.setUser(r.pendingId, known);
+            return redirect(res, `/oauth/consent?p=${encodeURIComponent(r.pendingId)}`);
+          }
+          return html(res, 200, oauth.signInPage(r.pendingId));
+        }
+        if (p === '/oauth/device/done' && req.method === 'GET') return html(res, 200, oauth.deviceDonePage(url.searchParams.get('ok') === '1'));
         if (p === '/oauth/token' && req.method === 'POST') {
           try {
             return json(res, 200, oauth.token(await readForm(req)));
@@ -190,7 +212,7 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
       if (version) {
         let userId = opts.devUserId ?? null;
         if (oauth) {
-          const who = oauth.authenticate(req.headers.authorization);
+          const who = oauth.authenticate(req.headers.authorization, p);
           if (!who) {
             res.writeHead(401, { 'www-authenticate': oauth.wwwAuthenticate(req.headers.authorization ? 'invalid_token' : undefined, p), 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
             return;
@@ -337,6 +359,13 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
     }
   };
   return { handles: (pathname) => PLUGIN_PATH.test(pathname), handle };
+}
+
+/** The address a request came from: the proxy's view of the client when behind one (Railway), else the socket's. */
+function clientAddress(req: http.IncomingMessage): string {
+  const real = req.headers['x-real-ip'];
+  const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+  return (typeof real === 'string' && real.trim()) || forwarded || req.socket.remoteAddress || 'unknown';
 }
 
 /** A form body (application/x-www-form-urlencoded) or a JSON body, as flat strings. */

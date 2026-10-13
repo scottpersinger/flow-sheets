@@ -1,8 +1,10 @@
 // Settings: what the assistant runs on. By default that is the server's model; a user can instead enter their
-// own OpenAI API key and pick a model. The key goes to the server and is never shown again.
+// own OpenAI API key and pick a model. The key goes to the server and is never shown again. Below that, the
+// agents signed in to the account's files with a device code, each of which can be disconnected.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { OPENAI_MODELS, type AssistantSettings, type OpenAIModelId } from '../../../shared/agent/protocol.ts';
+import type { ConnectedAgent } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { Account } from '../components/Account.tsx';
@@ -126,6 +128,84 @@ export function SettingsPage() {
         )}
         {saved === null && error && <div className="form-error">{error}</div>}
       </section>
+      <ConnectedAgents />
     </div>
+  );
+}
+
+const when = (iso: string) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+/** Agents signed in with a device code (mcp-remote --device-code, say). Disconnecting one revokes its tokens at once. */
+function ConnectedAgents() {
+  const [agents, setAgents] = useState<ConnectedAgent[] | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .connectedAgents()
+      .then((res) => {
+        setEnabled(res.enabled);
+        setAgents(res.agents);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  const disconnect = async (id: string) => {
+    setBusy(id);
+    setError(null);
+    try {
+      await api.disconnectAgent(id);
+      setAgents((list) => list?.filter((a) => a.id !== id) ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!enabled && !error) return null;
+  return (
+    <section className="home-inner changes">
+      <h2>Connected agents</h2>
+      <p className="changes-intro">Agents you signed in with a device code can read and change your files. Disconnect one to stop its access right away; it would have to be signed in again.</p>
+      {error && <div className="form-error">{error}</div>}
+      {agents === null ? (
+        !error && <div className="page-loading">Loading…</div>
+      ) : agents.length === 0 ? (
+        <p className="changes-empty">No agents are connected.</p>
+      ) : (
+        <table className="agents-table">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Signed in from</th>
+              <th>Connected</th>
+              <th>Last active</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {agents.map((a) => (
+              <tr key={a.id}>
+                <td>
+                  <div className="agents-name">{a.name}</div>
+                  <div className="agents-endpoint">{a.endpoint}</div>
+                </td>
+                <td>{a.origin}</td>
+                <td>{when(a.connectedAt)}</td>
+                <td>{when(a.lastActiveAt)}</td>
+                <td>
+                  <button type="button" className="btn danger" disabled={busy === a.id} onClick={() => void disconnect(a.id)}>
+                    {busy === a.id ? 'Disconnecting…' : 'Disconnect'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
