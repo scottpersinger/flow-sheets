@@ -217,6 +217,8 @@ export const api = {
     request<FetchResult>('POST', `/api/connections/${encodeURIComponent(id)}/fetch`, body),
   assistantSettings: () => request<{ settings: AssistantSettings }>('GET', '/api/settings/assistant'),
   saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', '/api/settings/assistant', body),
+  /** Store a copy of a picture on the web; resolves to its /api/images/... address. */
+  keepWebImage: async (url: string) => (await request<{ url: string }>('POST', '/api/images/fetch', { url })).url,
   connectedAgents: () => request<{ enabled: boolean; agents: ConnectedAgent[] }>('GET', '/api/settings/agents'),
   disconnectAgent: (id: string) => request<{ ok: true }>('DELETE', `/api/settings/agents/${encodeURIComponent(id)}`),
   revertJob: (id: string) => request<{ job: AgentJob }>('POST', `/api/agent/jobs/${encodeURIComponent(id)}/revert`, {}),

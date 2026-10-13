@@ -3,6 +3,7 @@ import type { ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { newDeck, slideContent, slideTitle, type TextElement } from '../../../shared/deck.ts';
 import { DeckController } from '../deck/controller.ts';
 import { confirmationFor, runClientTool, type ClientToolEnv } from './clientTools.ts';
+import { keepDeckPictures } from './deckTools.ts';
 
 function setup() {
   const deck = new DeckController(newDeck(), async () => {});
@@ -293,5 +294,37 @@ describe('agent deck tools', () => {
     await expect(runClientTool({ id: 'x', name: 'read_range', input: { range: 'A1' } }, env)).rejects.toThrow(/A presentation is open, not a spreadsheet/);
     const opened = JSON.parse(await runClientTool({ id: 'x', name: 'open_deck', input: { deck_id: 'd1' } }, noDeck));
     expect(opened).toMatchObject({ opened: true, slide_count: deck.deck.slides.length });
+  });
+});
+
+describe('pictures from the web on a slide', () => {
+  const call = (name: string, input: Record<string, unknown>): ClientToolCall => ({ id: 'c1', name, input });
+  const web = 'https://logos.example/openai.png';
+
+  it('are stored with the presentation before the tool runs, once each', async () => {
+    const fetched: string[] = [];
+    const keep = async (url: string) => {
+      fetched.push(url);
+      return `/api/images/00000000-0000-4000-8000-00000000000${fetched.length}`;
+    };
+    const stored = '/api/images/00000000-0000-4000-8000-000000000001';
+    const edited = await keepDeckPictures(call('edit_elements', { slide: 1, set: [{ type: 'image', src: web, x: 10 }, { id: 'a', src: web }, { id: 'b', x: 5 }, { id: 'c', src: '/api/images/11111111-1111-4111-8111-111111111111' }] }), keep);
+    expect(edited.input.set).toEqual([{ type: 'image', src: stored, x: 10 }, { id: 'a', src: stored }, { id: 'b', x: 5 }, { id: 'c', src: '/api/images/11111111-1111-4111-8111-111111111111' }]);
+    expect(fetched).toEqual([web]);
+    expect((await keepDeckPictures(call('update_slide', { slide: 2, image: web }), keep)).input).toEqual({ slide: 2, image: '/api/images/00000000-0000-4000-8000-000000000002' });
+    expect((await keepDeckPictures(call('add_slides', { slides: [{ title: 'A' }, { layout: 'image', image: web }] }), keep)).input.slides).toEqual([{ title: 'A' }, { layout: 'image', image: '/api/images/00000000-0000-4000-8000-000000000003' }]);
+    // Nothing to keep: the call is passed on as it is, and other tools are never touched.
+    const plain = call('update_slide', { slide: 1, title: 'Hi' });
+    expect(await keepDeckPictures(plain, keep)).toBe(plain);
+    const other = call('insert_image', { src: web });
+    expect(await keepDeckPictures(other, keep)).toBe(other);
+    expect(fetched).toHaveLength(3);
+  });
+
+  it('tell the assistant to pick another picture when one cannot be fetched', async () => {
+    const failing = keepDeckPictures(call('edit_elements', { slide: 1, set: [{ type: 'image', src: web }] }), async () => {
+      throw new Error('The server answered 403.');
+    });
+    await expect(failing).rejects.toThrow('The picture at https://logos.example/openai.png could not be fetched (The server answered 403.) Use another picture');
   });
 });

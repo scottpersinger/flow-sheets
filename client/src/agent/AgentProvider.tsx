@@ -20,6 +20,7 @@ import { deckToPdf } from '../deck/pdf.ts';
 import { renderSlideImage } from '../deck/renderSlide.ts';
 import type { SheetController } from '../state/controller.ts';
 import { confirmationFor, runClientTool, ToolError, type OpenedDoc } from './clientTools.ts';
+import { keepDeckPictures } from './deckTools.ts';
 
 export interface OpenSheet {
   ctl: SheetController;
@@ -484,7 +485,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
       if (signal.aborted) break;
       try {
-        const content = await runClientTool(call, {
+        // A picture from the web that is going on a slide is stored with the presentation first.
+        const content = await runClientTool(await keepDeckPictures(call, api.keepWebImage), {
           ctl: sheetRef.current?.ctl ?? null,
           deck: deckRef.current?.ctl ?? null,
           doc: docRef.current?.ctl ?? null,

@@ -2,6 +2,8 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { LEGAL_PATHS, legalPage } from './legal.ts';
 import { llmsTxt } from './llms.ts';
+import { sniffImageType } from './importFile.ts';
+import { fetchPublicFile, WebFetchError } from './webFetch.ts';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, statSync } from 'node:fs';
@@ -832,6 +834,23 @@ export async function buildApp(opts: AppOptions) {
         return reply.code(400).send({ error: 'Upload a PNG, JPEG, GIF or WebP image as the request body.' });
       }
       return { url: await images.create(req.user!.id, type, body) };
+    });
+
+    // Keep a copy of a picture that is on the web: the assistant puts pictures it found on slides, and one left
+    // at its web address would break when the site moves it (and cannot be drawn into a render or a PDF). It is
+    // stored like an upload, with the file it is used in, and is not a file in the user's library.
+    r.post('/api/images/fetch', async (req, reply) => {
+      const { url } = (req.body ?? {}) as { url?: unknown };
+      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return reply.code(400).send({ error: 'Give the http(s) address of a picture.' });
+      try {
+        const { bytes } = await fetchPublicFile(url, { limit: MAX_CELL_IMAGE_BYTES, timeoutMs: 20_000 });
+        const type = sniffImageType(bytes);
+        if (!type) return reply.code(400).send({ error: 'That address does not hold a PNG, JPEG, GIF or WebP picture.' });
+        return { url: await images.create(req.user!.id, type, bytes) };
+      } catch (e) {
+        if (e instanceof WebFetchError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
     });
 
     r.get('/api/images/:id', async (req, reply) => {

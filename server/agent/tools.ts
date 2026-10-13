@@ -604,7 +604,7 @@ export const schemas = {
       title: z.string().trim().max(200).optional().describe('A title or name for what is imported, e.g. "Golden retriever". Defaults to the name in the address. Always give one for a pasted or attached picture, which has no name: say what is in it.'),
     })
     .describe(
-      'Save a file from the web, or a picture the user pasted or attached in the chat, into the user’s files. Use it when the user asks to save, download, keep or import something: a picture (PNG, JPEG, GIF, WebP), PDF, video (.mp4, .mov, .webm) or web page is stored as it is; a Word document (.docx) becomes a document, a Markdown file (.md) a Markdown document holding its text, a PowerPoint file (.pptx) a presentation, and an Excel workbook (.xlsx) or CSV file a spreadsheet. Returns the id of what was made. It does not put a picture inside a document or cell: set_cell_image and insert_image do that.',
+      'Save a file from the web, or a picture the user pasted or attached in the chat, into the user’s files. Use it when the user asks to save, download, keep or import something: a picture (PNG, JPEG, GIF, WebP), PDF, video (.mp4, .mov, .webm) or web page is stored as it is; a Word document (.docx) becomes a document, a Markdown file (.md) a Markdown document holding its text, a PowerPoint file (.pptx) a presentation, and an Excel workbook (.xlsx) or CSV file a spreadsheet. Returns the id of what was made. It adds a file to the user’s library, so use it only when they ask for that. It does not put a picture on a slide or inside a document or cell, and is not needed for that: give the picture’s web address to edit_elements (src), update_slide or add_slides (image), insert_image or set_cell_image.',
     ),
   image_search: z
     .object({

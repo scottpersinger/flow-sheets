@@ -64,6 +64,38 @@ const spec = (s: Input): SlideContent & { layout?: LayoutId } => ({
   ...(typeof s.background === 'string' ? { background: s.background } : {}),
 });
 
+/**
+ * The call with every picture that is at a web address replaced by a stored copy of it (`keep` stores one and
+ * returns its /api/images/... address). A picture the assistant found for a slide then belongs to the
+ * presentation: it does not break when the site moves it, it draws in render_slide and the PDF, and it never
+ * needs to be saved as a file in the user's library to be used.
+ */
+export async function keepDeckPictures(call: ClientToolCall, keep: (url: string) => Promise<string>): Promise<ClientToolCall> {
+  if (call.name !== 'add_slides' && call.name !== 'update_slide' && call.name !== 'edit_elements') return call;
+  const kept = new Map<string, string>();
+  const stored = async (src: unknown): Promise<unknown> => {
+    if (typeof src !== 'string' || !/^https?:\/\/\S+$/i.test(src)) return src;
+    if (!kept.has(src)) {
+      try {
+        kept.set(src, await keep(src));
+      } catch (e) {
+        throw new ToolError(`The picture at ${src} could not be fetched (${e instanceof Error ? e.message : String(e)}) Use another picture, such as another image_search result.`);
+      }
+    }
+    return kept.get(src);
+  };
+  const each = async (list: unknown, key: 'image' | 'src'): Promise<unknown> => {
+    if (!Array.isArray(list)) return list;
+    const out: unknown[] = [];
+    for (const item of list) out.push(item && typeof item === 'object' && key in item ? { ...item, [key]: await stored((item as Input)[key]) } : item);
+    return out;
+  };
+  const i = call.input;
+  if (call.name === 'add_slides') return { ...call, input: { ...i, slides: await each(i.slides, 'image') } };
+  if (call.name === 'update_slide') return i.image === undefined ? call : { ...call, input: { ...i, image: await stored(i.image) } };
+  return { ...call, input: { ...i, set: await each(i.set, 'src') } };
+}
+
 function checkImage(src: unknown): string {
   const problem = checkCellImage(src);
   if (problem) throw new ToolError(`${problem}.`);

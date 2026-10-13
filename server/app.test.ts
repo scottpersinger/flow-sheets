@@ -3,11 +3,12 @@ import { OPENAI_MODELS } from '../shared/agent/protocol.ts';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildSlide, newId } from '../shared/deck.ts';
 import { buildPptx } from '../shared/pptxExport.ts';
 import { buildApp } from './app.ts';
 import { buildDocx, mailbox, signUp } from './testing.ts';
+import { resolver } from './webFetch.ts';
 
 let dir: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -972,5 +973,46 @@ describe('video files', () => {
     const rest = await app.inject({ method: 'GET', url: file.url, headers: { cookie, range: 'bytes=15-' } });
     expect([rest.headers['content-range'], rest.body]).toEqual(['bytes 15-19/20', 'fghij']);
     expect((await app.inject({ method: 'GET', url: file.url, headers: { cookie, range: 'bytes=50-' } })).statusCode).toBe(416);
+  });
+});
+
+describe('a picture from the web for a slide', () => {
+  it('is fetched by the server and stored like an upload, not as a file in the library', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'webimg-'));
+    const box = mailbox();
+    const a = await buildApp({ dataDir: dir, sendMail: box.send });
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(20, 3)]);
+    const realLookup = resolver.lookup;
+    resolver.lookup = async (host) => (host === 'intranet.example' ? ['10.0.0.8'] : ['93.184.216.34']);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://logos.example/openai.png') return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } });
+      if (url === 'https://logos.example/page') return new Response('<html>not a picture</html>', { headers: { 'content-type': 'text/html' } });
+      return new Response('nope', { status: 404 });
+    });
+    try {
+      const { cookie } = await signUp(a, box, 'slides@x.com', 'password-12345');
+      const keep = (url: unknown, c = cookie) => a.inject({ method: 'POST', url: '/api/images/fetch', headers: c ? { cookie: c } : {}, payload: { url } });
+      expect((await keep('https://logos.example/openai.png', '')).statusCode).toBe(401);
+      const kept = await keep('https://logos.example/openai.png');
+      expect(kept.statusCode).toBe(200);
+      expect(kept.json().url).toMatch(/^\/api\/images\/[0-9a-f-]{36}$/);
+      const served = await a.inject({ method: 'GET', url: kept.json().url, headers: { cookie } });
+      expect(served.headers['content-type']).toBe('image/png');
+      expect(served.rawPayload.equals(png)).toBe(true);
+      // Nothing was added to the user's files.
+      expect((await a.inject({ method: 'GET', url: '/api/files', headers: { cookie } })).json().files).toEqual([]);
+      // Not a picture, not there, not on the public internet, not an address.
+      expect((await keep('https://logos.example/page')).json().error).toContain('does not hold a PNG');
+      expect((await keep('https://logos.example/missing.png')).statusCode).toBe(400);
+      expect((await keep('https://intranet.example/logo.png')).statusCode).toBe(400);
+      expect((await keep('file:///etc/passwd')).statusCode).toBe(400);
+      expect((await keep(42)).statusCode).toBe(400);
+    } finally {
+      fetchSpy.mockRestore();
+      resolver.lookup = realLookup;
+      await a.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
