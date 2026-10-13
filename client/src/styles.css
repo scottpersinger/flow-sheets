@@ -2617,6 +2617,14 @@ button.agent-tool-label:hover {
   pointer-events: none;
   box-sizing: border-box;
 }
+/* The selection box drawn by dragging from the slide's background; it is placed in screen coordinates. */
+.deck-marquee {
+  position: fixed;
+  border: 1px solid var(--blue);
+  background: rgba(26, 115, 232, 0.1);
+  pointer-events: none;
+  z-index: 5;
+}
 /* A frame the pointer is on the line of: a click there takes it (shared/deckHit.ts). */
 .sl-outline-hover {
   border-color: rgba(26, 115, 232, 0.55);

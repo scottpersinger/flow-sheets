@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SlideElement } from './deck.ts';
-import { clickTarget, frameUnderPointer, isHollow, onOutline } from './deckHit.ts';
+import { clickTarget, elementsInBox, frameUnderPointer, isHollow, onOutline } from './deckHit.ts';
 
 const picture: SlideElement = { id: 'pic', type: 'image', src: '/api/images/x', x: 100, y: 100, w: 400, h: 300 };
 const frame: SlideElement = { id: 'frame', type: 'shape', shape: 'rect', fill: 'none', stroke: '#c4c7cc', x: 100, y: 100, w: 400, h: 300 };
@@ -90,5 +90,50 @@ describe('a click around a hollow shape', () => {
     expect(frameUnderPointer(els, null, 50, 250, REACH)).toBeNull();
     // A frame over nothing is taken by a click anywhere in it, but the cue is for its line.
     expect(frameUnderPointer([frame], frame, 300, 250, REACH)).toBeNull();
+  });
+});
+
+describe('a selection box', () => {
+  const box: SlideElement = { id: 'box', type: 'shape', shape: 'rect', fill: '#ffffff', x: 100, y: 100, w: 100, h: 50 };
+  const text: SlideElement = { id: 'text', type: 'text', x: 300, y: 100, w: 200, h: 40, paragraphs: [{ text: 'Hi' }] };
+  const line: SlideElement = { id: 'line', type: 'line', kind: 'straight', x: 100, y: 300, w: 200, h: 200 };
+  const ids = (els: SlideElement[], ax: number, ay: number, bx: number, by: number) => elementsInBox(els, ax, ay, bx, by).map((e) => e.id);
+
+  it('takes everything it touches, drawn in any direction', () => {
+    const els = [box, text, line];
+    expect(ids(els, 50, 50, 600, 600)).toEqual(['box', 'text', 'line']);
+    // Through a corner of the box only, and the same box drawn from the other corner.
+    expect(ids(els, 190, 140, 250, 200)).toEqual(['box']);
+    expect(ids(els, 250, 200, 190, 140)).toEqual(['box']);
+    expect(ids(els, 190, 90, 310, 110)).toEqual(['box', 'text']);
+    expect(ids(els, 210, 160, 290, 290)).toEqual([]);
+  });
+
+  it('takes a straight line only where the box crosses it', () => {
+    // Inside the line's bounding box but off the line (which runs corner to corner).
+    expect(ids([line], 250, 320, 290, 360)).toEqual([]);
+    expect(ids([line], 190, 390, 210, 410)).toEqual(['line']);
+    // A line drawn the other way runs from the top right to the bottom left.
+    const flipped = { ...line, flipH: true } as SlideElement;
+    expect(ids([flipped], 250, 320, 290, 360)).toEqual(['line']);
+    expect(ids([flipped], 110, 310, 140, 340)).toEqual([]);
+    // An elbow goes by its bounding box.
+    expect(ids([{ ...line, kind: 'elbow' } as SlideElement], 250, 320, 290, 360)).toEqual(['line']);
+  });
+
+  it('leaves a frame alone when it is drawn in its open middle, and takes it at its line', () => {
+    const inside: SlideElement = { ...box, id: 'inside', x: 200, y: 200, w: 50, h: 50 };
+    expect(ids([frame, inside], 180, 180, 300, 300)).toEqual(['inside']);
+    expect(ids([frame, inside], 90, 180, 300, 300)).toEqual(['frame', 'inside']);
+    expect(ids([frame, inside], 50, 50, 600, 600)).toEqual(['frame', 'inside']);
+    // A filled shape has no open middle.
+    expect(ids([{ ...frame, fill: '#ffffff' } as SlideElement], 180, 180, 300, 300)).toEqual(['frame']);
+  });
+
+  it('takes a turned element by the box that holds it as turned', () => {
+    const turned = { ...box, x: 100, y: 100, w: 200, h: 20, rot: 90 } as SlideElement;
+    // Turned a quarter, it stands from (190, 10) to (210, 210).
+    expect(ids([turned], 195, 20, 205, 40)).toEqual(['box']);
+    expect(ids([turned], 110, 105, 150, 115)).toEqual([]);
   });
 });

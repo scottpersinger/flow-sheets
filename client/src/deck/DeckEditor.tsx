@@ -7,13 +7,24 @@ import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { fitZoomActions, useWheelZoom, ZoomControls } from '../components/ZoomControls.tsx';
 import { SLIDE_H, SLIDE_W, THEMES, type LineElement, type SlideElement } from '../../../shared/deck.ts';
 import { boxFromEnds, compactLine, DEFAULT_LINE_WIDTH, lineEnds, lineGeometry, nearSites, SITES, sitePoint, snapAngle, type SiteHit } from '../../../shared/lines.ts';
-import { clickTarget, frameUnderPointer } from '../../../shared/deckHit.ts';
+import { clickTarget, elementsInBox, frameUnderPointer } from '../../../shared/deckHit.ts';
 import { CropOverlay } from './CropOverlay.tsx';
 import { arcGeometry, arcTightBox, type ArcGeom } from '../../../shared/shapes.ts';
 import type { DeckController } from './controller.ts';
 import { LineDrawing, SlideView, type BoxPreview } from './SlideView.tsx';
 
 /** Dragging a line: drawing a new one, moving one of its ends, or its middle (an elbow's bend). */
+/** A selection box being drawn, by where the press was and where the pointer is, on the screen. */
+interface Marquee {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** The selection the box adds to (Shift), or nothing. */
+  base: string[];
+  moved: boolean;
+}
+
 interface LineDrag {
   mode: 'draw' | 'start' | 'end' | 'mid';
   /** The line as it looks now (a draft while drawing). */
@@ -275,6 +286,39 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!drag, scale]);
 
+  // --- The selection box: a drag that starts on the slide's background or the backdrop selects what it touches ---
+  const [marquee, setMarquee] = useState<Marquee | null>(null);
+  const marqueeRef = useRef<Marquee | null>(null);
+  const setMq = (m: Marquee | null) => {
+    marqueeRef.current = m;
+    setMarquee(m);
+  };
+  /** What the box touches, with what was selected before it when Shift is held. */
+  const marqueeIds = (m: Marquee): string[] => {
+    const hit = elementsInBox(slide.elements, ...toSlide({ clientX: m.x0, clientY: m.y0 }), ...toSlide({ clientX: m.x1, clientY: m.y1 })).map((el) => el.id);
+    return [...m.base, ...hit.filter((id) => !m.base.includes(id))];
+  };
+  useEffect(() => {
+    if (!marquee) return;
+    const onMove = (e: MouseEvent) => {
+      const m = marqueeRef.current;
+      if (m) setMq({ ...m, x1: e.clientX, y1: e.clientY, moved: m.moved || Math.abs(e.clientX - m.x0) + Math.abs(e.clientY - m.y0) >= 3 });
+    };
+    const onUp = () => {
+      const m = marqueeRef.current;
+      setMq(null);
+      // A press that never moved was a click on the background, which has already cleared the selection.
+      if (m?.moved) ctl.select(marqueeIds(m));
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!marquee, scale]);
+
   // Around a frame (a shape that is only an outline) a click is for the frame near its line, on either side,
   // and for what lies under it in its open middle: see shared/deckHit.ts. The band is in screen pixels, so a
   // thin line is as easy to take hold of at any zoom.
@@ -284,7 +328,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
   const [hoverFrame, setHoverFrame] = useState<string | null>(null);
   const onPointerMove = (e: ReactMouseEvent) => {
     let over: string | null = null;
-    if (!drag && !lineDrag && !ctl.tool && !ctl.editing && !ctl.cropping) {
+    if (!drag && !lineDrag && !marquee && !ctl.tool && !ctl.editing && !ctl.cropping) {
       const at = (e.target as Element).closest?.('[data-el]')?.getAttribute('data-el');
       const hit = at ? (slide.elements.find((el) => el.id === at) ?? null) : null;
       over = frameUnderPointer(slide.elements, hit, ...toSlide(e), reach)?.id ?? null;
@@ -386,6 +430,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
   const single = selected.length === 1 && !ctl.editing && !cropped ? selected[0] : null;
   const boxOf = (el: SlideElement): Box => ({ x: el.x, y: el.y, w: el.w, h: el.h, ...drag?.preview[el.id] });
   const preview: Record<string, BoxPreview> | undefined = lineDrag && lineDrag.mode !== 'draw' ? { ...drag?.preview, [lineDrag.line.id]: linePreview(lineDrag.line) } : drag?.preview;
+  const boxed = marquee?.moved ? marqueeIds(marquee) : [];
   const theme = THEMES[ctl.deck.theme];
   const dot = 9 / scale;
   const hs = 10 / scale; // handles keep their screen size
@@ -412,8 +457,12 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
             return;
           }
           if (ctl.editing) ctl.stopEditing();
-          ctl.select([]);
+          // Shift keeps the selection, for a box that adds to it.
+          if (!e.shiftKey) ctl.select([]);
           wrapRef.current?.focus();
+          // Dragging from here draws a selection box (and must not select the page's text on the way).
+          e.preventDefault();
+          setMq({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, base: e.shiftKey ? ctl.selection : [], moved: false });
         }
       }}
       onDragOver={(e) => {
@@ -460,6 +509,11 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
           const el = hoverFrame && !ctl.selection.includes(hoverFrame) ? slide.elements.find((x) => x.id === hoverFrame) : undefined;
           return el ? <div className="sl-outline sl-outline-hover" style={{ left: el.x, top: el.y, width: el.w, height: el.h, borderWidth: 2 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} /> : null;
         })()}
+        {marquee?.moved &&
+          // What the box would select, outlined as it is drawn (a line shows its own ends once selected).
+          slide.elements
+            .filter((el) => el.type !== 'line' && !ctl.selection.includes(el.id) && boxed.includes(el.id))
+            .map((el) => <div key={`mq-${el.id}`} className="sl-outline" style={{ left: el.x, top: el.y, width: el.w, height: el.h, borderWidth: 1.5 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} />)}
         {selected.map((el) => {
           if (el.type === 'line' || el.id === cropped?.id) return null;
           const b = boxOf(el);
@@ -516,6 +570,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
           })}
       </SlideView>
     </div>
+      {marquee?.moved && <div className="deck-marquee" style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }} />}
       <ZoomControls percent={scale * 100} {...fitZoomActions(zoom, setZoom)} />
       {assisting && ctl.assistant && (
         <InlinePrompt

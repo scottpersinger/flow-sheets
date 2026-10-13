@@ -75,3 +75,54 @@ export function frameUnderPointer(elements: SlideElement[], hit: SlideElement | 
   const target = clickTarget(elements, hit, px, py, reach);
   return target && onOutline(target, px, py, reach) ? target : null;
 }
+
+/** True if the segment from (x1, y1) to (x2, y2) touches the box with corners (l, t) and (r, b). */
+function segmentTouchesBox(x1: number, y1: number, x2: number, y2: number, l: number, t: number, r: number, b: number): boolean {
+  // Liang-Barsky: clip the segment's parameter range against each side of the box.
+  let [t0, t1] = [0, 1];
+  const [dx, dy] = [x2 - x1, y2 - y1];
+  for (const [p, q] of [[-dx, x1 - l], [dx, r - x1], [-dy, y1 - t], [dy, b - y1]]) {
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const u = q / p;
+    if (p < 0) t0 = Math.max(t0, u);
+    else t1 = Math.min(t1, u);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+/**
+ * The elements a selection box touches, in drawing order. The box is given by two opposite corners (where the
+ * drag started and where the pointer is), in slide points. An element is touched when the box overlaps any of
+ * it, except that:
+ *  - a straight line is touched only where the box crosses the line itself, not anywhere in its bounding box;
+ *  - an outline (see isHollow) is touched at its line, not in its open middle, so that the things inside a
+ *    frame can be boxed without taking the frame;
+ *  - a turned element is taken by the box that holds it as turned.
+ */
+export function elementsInBox(elements: SlideElement[], ax: number, ay: number, bx: number, by: number): SlideElement[] {
+  const [l, r] = ax < bx ? [ax, bx] : [bx, ax];
+  const [t, b] = ay < by ? [ay, by] : [by, ay];
+  return elements.filter((el) => {
+    if (el.type === 'line' && el.kind === 'straight') {
+      return segmentTouchesBox(el.flipH ? el.x + el.w : el.x, el.flipV ? el.y + el.h : el.y, el.flipH ? el.x : el.x + el.w, el.flipV ? el.y : el.y + el.h, l, t, r, b);
+    }
+    let [x0, y0, x1, y1] = [el.x, el.y, el.x + el.w, el.y + el.h];
+    if (el.rot) {
+      const [cx, cy] = [el.x + el.w / 2, el.y + el.h / 2];
+      const a = (el.rot * Math.PI) / 180;
+      const [hw, hh] = [(Math.abs(el.w * Math.cos(a)) + Math.abs(el.h * Math.sin(a))) / 2, (Math.abs(el.w * Math.sin(a)) + Math.abs(el.h * Math.cos(a))) / 2];
+      [x0, y0, x1, y1] = [cx - hw, cy - hh, cx + hw, cy + hh];
+    }
+    if (r < x0 || l > x1 || b < y0 || t > y1) return false;
+    if (isHollow(el) && !el.rot && el.type === 'shape') {
+      const line = el.strokeWidth ?? 2;
+      // Wholly within the open middle: the frame's line is not touched.
+      if (l > x0 + line && r < x1 - line && t > y0 + line && b < y1 - line) return false;
+    }
+    return true;
+  });
+}
