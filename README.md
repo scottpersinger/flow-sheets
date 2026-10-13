@@ -47,7 +47,7 @@ The packaged app holds the server's TypeScript as plain files (`asar` is off), w
 
 ## Videos
 
-A video file (`.mp4`, `.m4v`, `.mov`, `.webm`, `.ogv`) opens in a page with the browser's player. On the web, import one from the home page (the Import tile or a drop, 100 MB maximum); it is stored as the file it is, like a PDF. The server answers Range requests for stored files, so the player can seek without downloading the whole file. Whether a file plays depends on its codec: H.264 and VP8/VP9 play everywhere, while HEVC (the default of recent iPhones) does not play in every browser.
+A video file (`.mp4`, `.m4v`, `.mov`, `.webm`, `.ogv`) opens in a page with the browser's player. On the web, import one from the home page (the Import tile or a drop, 200 MB maximum); it is stored as the file it is, like a PDF. The server answers Range requests for stored files, so the player can seek without downloading the whole file. Whether a file plays depends on its codec: H.264 and VP8/VP9 play everywhere, while HEVC (the default of recent iPhones) does not play in every browser.
 
 ## Folders
 

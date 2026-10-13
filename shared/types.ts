@@ -224,4 +224,4 @@ export const isHtmlName = (filename: string): boolean => /\.html?$/i.test(filena
 export const isTextFileType = (type: string): boolean => !/^(application\/pdf|image\/(?!svg)|video\/|audio\/)/.test(type);
 
 /** Largest video that can be uploaded. */
-export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
