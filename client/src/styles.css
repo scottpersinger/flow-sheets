@@ -3967,6 +3967,15 @@ button.agent-tool-label:hover {
   padding: 8px 12px;
 }
 
+/* A folder that would take the file being dragged over it. */
+.sheet-list tbody tr.drop-target,
+.file-card.drop-target,
+.breadcrumbs .crumb.drop-target {
+  background: #e8f0fe;
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
 /* An open file's place in the library, before its name in the page header. */
 .folder-crumbs {
   display: inline-flex;

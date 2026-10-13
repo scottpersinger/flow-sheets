@@ -1,5 +1,5 @@
 // Exports: one file in a readable format (GET /api/files/:id/export?format=...) and the whole account as a
-// zip (GET /api/export.zip). Documents export as Markdown, presentations as PowerPoint, spreadsheets as CSV
+// zip (GET /api/export.zip), or one folder of it (GET /api/folders/download). Documents export as Markdown, presentations as PowerPoint, spreadsheets as CSV
 // (one tab) or Excel, and every kind as its native JSON. Images stored on the server go into the zip's
 // images/ folder, and Markdown exports point at them with relative paths.
 import ExcelJS from 'exceljs';
@@ -16,6 +16,9 @@ import { Engine } from '../shared/formula/engine.ts';
 import { buildPptx } from '../shared/pptxExport.ts';
 import { STORED_IMAGE_RE, type CellStyle, type DocKind, type SheetMeta, type Tab, type Workbook } from '../shared/types.ts';
 import { formatValue, isError, type Scalar } from '../shared/values.ts';
+import type { FileStore } from './files.ts';
+import { folderName } from '../shared/folders.ts';
+import type { Folders } from './folders.ts';
 import type { ImageStore } from './images.ts';
 import type { SheetStore } from './sheets.ts';
 
@@ -355,6 +358,86 @@ export async function exportAll(sheets: SheetStore, ownerId: string, source: Ima
     }
   }
   if (problems.length) zip.file('problems.txt', problems.join('\n') + '\n');
+  const body = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  return { body, files, problems };
+}
+
+/**
+ * One folder as a zip, laid out as the folder is: each document, presentation and spreadsheet in its
+ * readable format (a CSV file as CSV), stored files as they are, and the folders inside it as folders.
+ * Stored images that documents show go in images/, as in the export of everything.
+ */
+export async function exportFolder(
+  stores: { sheets: SheetStore; files: FileStore; folders: Folders },
+  ownerId: string,
+  folder: string,
+  source: ImageSource,
+): Promise<{ body: Buffer; files: number; problems: string[] }> {
+  const zip = new JSZip();
+  const problems: string[] = [];
+  const imageNames = new Map<string, string>();
+  const usedNames = new Set<string>(['images']);
+  let files = 0;
+
+  /** A name nothing else in its zip folder has; `dir` is '' or ends with a slash. */
+  const unique = (dir: string, name: string): string => {
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    let candidate = dir + name;
+    for (let n = 2; usedNames.has(candidate.toLowerCase()); n++) candidate = `${dir}${base} (${n})${ext}`;
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  };
+
+  const addImage = async (src: string): Promise<void> => {
+    if (imageNames.has(src)) return;
+    const img = await source.stored(src);
+    if (!img) return;
+    const name = `images/${src.slice('/api/images/'.length)}.${IMAGE_EXT[img.type] ?? 'bin'}`;
+    zip.file(name, img.bytes);
+    imageNames.set(src, name);
+  };
+
+  const add = async (path: string, dir: string, depth: number): Promise<void> => {
+    for (const meta of stores.sheets.listIn(ownerId, path)) {
+      try {
+        const loaded = await loadFile(stores.sheets, ownerId, meta.id);
+        if (!loaded) continue;
+        const { data } = loaded;
+        if (data.kind === 'doc') {
+          for (const src of docImages(data.doc)) await addImage(src);
+          const md = docMarkdown(data.doc, (src) => (imageNames.has(src) ? '../'.repeat(depth) + imageNames.get(src) : src));
+          zip.file(unique(dir, safeName(meta.title, 'md')), md);
+        } else {
+          const out = await exportFile(meta, data, meta.format === 'csv' ? 'csv' : EXPORT_FORMATS[meta.kind][0], source);
+          zip.file(unique(dir, out.name), out.body);
+        }
+        files++;
+      } catch (e) {
+        problems.push(`${dir}${meta.title}: ${(e as Error).message}`);
+      }
+    }
+    for (const f of stores.files.listIn(ownerId, path)) {
+      try {
+        const stored = stores.files.get(ownerId, f.id);
+        if (!stored) continue;
+        zip.file(unique(dir, f.filename.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-') || 'file'), await readFile(stored.file));
+        files++;
+      } catch (e) {
+        problems.push(`${dir}${f.filename}: ${(e as Error).message}`);
+      }
+    }
+    for (const child of stores.folders.children(ownerId, path)) {
+      const sub = unique(dir, folderName(child)) + '/';
+      // An empty folder is still a folder.
+      zip.folder(sub.slice(0, -1));
+      await add(child, sub, depth + 1);
+    }
+  };
+
+  await add(folder, '', 0);
+  if (problems.length) zip.file(unique('', 'problems.txt'), problems.join('\n') + '\n');
   const body = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   return { body, files, problems };
 }

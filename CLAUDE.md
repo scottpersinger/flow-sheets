@@ -65,6 +65,8 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app
   (`LocalFolders`). The home page lists one folder through `GET /api/library?folder=`; a request that
   names a `folder` (query or body) has it checked and put on `req.folder` by `requireUser`.
+  `GET /api/folders/download?folder=` is a folder as a zip (`exportFolder` in `server/export.ts`), and a file
+  dragged onto a folder in the list or the breadcrumbs is moved there (`FileLibrary`'s `onMove`).
 
 Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a change is finished.
 

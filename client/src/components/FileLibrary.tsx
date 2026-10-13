@@ -2,7 +2,7 @@
 // per-row menu, plus the create, rename and delete prompts and the import progress. It is the home page
 // of the app (client/src/pages/HomePage.tsx) and the library inside ChatGPT (plugin/web/Library.tsx);
 // each passes its own data source, actions and header controls, so both look and behave the same.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { isHtmlName, type SheetMeta } from '../../../shared/types.ts';
 import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon } from './Logo.tsx';
 import { pastedFile } from '../pastedFile.ts';
@@ -158,6 +158,10 @@ export interface FileLibraryProps {
   onOpenFolder?(path: string): void;
   onCreateFolder?(name: string): Promise<void>;
   onDeleteFolder?(path: string): Promise<void>;
+  /** Download a folder and everything in it. Adds "Download" to a folder's menu. */
+  onDownloadFolder?(path: string): void;
+  /** Put a file in another folder. Lets a file be dragged onto a folder in the list or in the breadcrumbs. */
+  onMove?(item: LibraryItem, folder: string): Promise<void>;
   /**
    * Look for the search text in every folder, not just the one being shown. Adds a "Find files" button
    * under the filtered list; its results replace the list until the search text changes.
@@ -279,6 +283,56 @@ export function FileLibrary(props: FileLibraryProps) {
     if (wantFind && items !== null && q && !(found && found.text === q)) void find();
   });
   const [dragOver, setDragOver] = useState(false);
+  // A file of the list being dragged, and the folder it is over that would take it.
+  const dragged = useRef<LibraryItem | null>(null);
+  const [dropFolder, setDropFolder] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  useEffect(() => setMoveError(null), [items]);
+  /** What makes a file's row or card something to drag. */
+  const dragSource = (s: LibraryItem) =>
+    props.onMove
+      ? {
+          draggable: true,
+          onDragStart: (e: DragEvent<HTMLElement>) => {
+            dragged.current = s;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', s.title);
+            setMenuFor(null);
+          },
+          onDragEnd: () => {
+            dragged.current = null;
+            setDropFolder(null);
+          },
+        }
+      : {};
+  /** What makes a folder's row, card or breadcrumb take a dragged file (one that is not in it already). */
+  const dropTarget = (path: string) => {
+    const takes = () => !!dragged.current && (dragged.current.folder ?? '') !== path;
+    return props.onMove
+      ? {
+          onDragOver: (e: DragEvent<HTMLElement>) => {
+            if (!takes()) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (dropFolder !== path) setDropFolder(path);
+          },
+          onDragLeave: (e: DragEvent<HTMLElement>) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropFolder((f) => (f === path ? null : f));
+          },
+          onDrop: (e: DragEvent<HTMLElement>) => {
+            const item = dragged.current;
+            if (!item || !takes()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            dragged.current = null;
+            setDropFolder(null);
+            setMoveError(null);
+            props.onMove!(item, path).catch((err: unknown) => setMoveError(err instanceof Error ? err.message : 'Could not move the file.'));
+          },
+        }
+      : {};
+  };
+  const dropClass = (path: string) => (dropFolder === path ? ' drop-target' : '');
   const [sort, setSortState] = useState<SortOrder>(loadSort);
   /** Show only one type of file (the menu next to the view buttons); folders are not listed while it is on. */
   const [typeFilter, setTypeFilter] = useState<TypeGroup | 'all'>('all');
@@ -426,6 +480,7 @@ export function FileLibrary(props: FileLibraryProps) {
       {menuFor === `folder:${f.path}` && (
         <div className="dropdown">
           <button onClick={() => openFolder(f.path)}>Open</button>
+          {props.onDownloadFolder && <button onClick={() => (setMenuFor(null), props.onDownloadFolder!(f.path))}>Download</button>}
           {props.onDeleteFolder && (
             <button className="danger" onClick={() => (setMenuFor(null), setDeletingFolder(f))}>
               Delete
@@ -476,7 +531,7 @@ export function FileLibrary(props: FileLibraryProps) {
     <div
       className={`home${dragOver ? ' drag-over' : ''}`}
       onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return;
+        if (dragged.current || !e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();
         setDragOver(true);
       }}
@@ -486,6 +541,7 @@ export function FileLibrary(props: FileLibraryProps) {
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
+        if (dragged.current) return;
         const file = e.dataTransfer.files[0];
         if (file && !importing) props.onImport(file);
       }}
@@ -594,7 +650,7 @@ export function FileLibrary(props: FileLibraryProps) {
                   {i === all.length - 1 ? (
                     <span aria-current="page">{i === 0 ? (props.listTitle ?? 'Your files') : f.name}</span>
                   ) : (
-                    <button className="crumb" onClick={() => openFolder(f.path)}>
+                    <button className={`crumb${dropClass(f.path)}`} onClick={() => openFolder(f.path)} {...dropTarget(f.path)}>
                       {i === 0 ? (props.listTitle ?? 'Your files') : f.name}
                     </button>
                   )}
@@ -646,6 +702,7 @@ export function FileLibrary(props: FileLibraryProps) {
           </div>
         </div>
         {error && <div className="form-error">{error}</div>}
+        {moveError && <div className="form-error">{moveError}</div>}
         {items === null ? (
           <div className="muted">Loading…</div>
         ) : visible.length === 0 && folders.length === 0 && error ? null : visible.length === 0 && folders.length === 0 ? (
@@ -653,7 +710,7 @@ export function FileLibrary(props: FileLibraryProps) {
         ) : view === 'grid' ? (
           <div className="file-grid">
             {folders.map((f) => (
-              <div key={`folder:${f.path}`} className="file-card" onClick={() => openFolder(f.path)}>
+              <div key={`folder:${f.path}`} className={`file-card${dropClass(f.path)}`} onClick={() => openFolder(f.path)} {...dropTarget(f.path)}>
                 <div className="file-thumb folder">
                   <FolderIcon size={64} />
                 </div>
@@ -669,7 +726,7 @@ export function FileLibrary(props: FileLibraryProps) {
               </div>
             ))}
             {visible.map(({ s }) => (
-              <div key={s.id} className="file-card" onClick={() => onOpen(s)}>
+              <div key={s.id} className="file-card" onClick={() => onOpen(s)} {...dragSource(s)}>
                 {props.thumbnail!(s)}
                 <div className="file-card-foot">
                   <div className="file-card-name" title={s.title}>
@@ -713,7 +770,7 @@ export function FileLibrary(props: FileLibraryProps) {
             </thead>
             <tbody>
               {folders.map((f) => (
-                <tr key={`folder:${f.path}`} onClick={() => openFolder(f.path)}>
+                <tr key={`folder:${f.path}`} className={dropClass(f.path).trim() || undefined} onClick={() => openFolder(f.path)} {...dropTarget(f.path)}>
                   <td>
                     <span className="sheet-title">
                       <FolderIcon /> {f.name}
@@ -729,7 +786,7 @@ export function FileLibrary(props: FileLibraryProps) {
                 </tr>
               ))}
               {visible.map(({ s, depth }) => (
-                <tr key={s.id} onClick={() => onOpen(s)}>
+                <tr key={s.id} onClick={() => onOpen(s)} {...dragSource(s)}>
                   <td>
                     {titleLink(
                       s,

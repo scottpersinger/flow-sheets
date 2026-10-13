@@ -238,6 +238,11 @@ export function HomePage() {
         await api.deleteFolder(path);
         await load();
       }}
+      onDownloadFolder={(path) => window.location.assign(`/api/folders/download?folder=${encodeURIComponent(path)}`)}
+      onMove={async (s, to) => {
+        await api.moveToFolder(s.kind, s.id, to);
+        await load();
+      }}
       headerActions={
         <>
           <div className="home-more" ref={moreRef}>

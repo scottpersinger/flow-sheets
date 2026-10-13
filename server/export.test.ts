@@ -155,6 +155,37 @@ describe('export routes', () => {
     expect(Object.keys(empty.files).filter((n) => !empty.files[n].dir)).toEqual([]);
   });
 
+  it('downloads a folder as a zip laid out like the folder', async () => {
+    const post = (url: string, payload: object) => app.inject({ method: 'POST', url, headers: { cookie }, payload });
+    await post('/api/folders', { name: 'Trip' });
+    await post('/api/folders', { name: 'Receipts', folder: 'Trip' });
+    await post('/api/folders', { name: 'Empty', folder: 'Trip' });
+    const img = ((await app.inject({ method: 'POST', url: '/api/images', headers: { cookie, 'content-type': 'image/png' }, payload: PNG })).json() as { url: string }).url;
+    await post('/api/docs', { title: 'Plan', doc: markdownToDoc(`Go\n\n![pic](${img})\n`), folder: 'Trip/Receipts' });
+    await post('/api/markdown', { title: 'Notes', text: '# Hi\n', folder: 'Trip' });
+    await post('/api/sheets', { title: 'Costs', csv: 'a,b\n1,2', folder: 'Trip' });
+    await post('/api/sheets', { title: 'Budget', folder: 'Trip' });
+    await post('/api/docs', { title: 'Elsewhere', doc: markdownToDoc('No\n') });
+    const upload = (folder: string) => app.inject({ method: 'POST', url: `/api/files?folder=${encodeURIComponent(folder)}`, headers: { cookie, 'content-type': 'application/pdf', 'x-filename': 'Notes.md' }, payload: Buffer.from('raw') });
+    expect((await upload('Trip')).statusCode).toBe(200);
+
+    const res = await app.inject({ method: 'GET', url: '/api/folders/download?folder=Trip', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/zip');
+    expect(res.headers['content-disposition']).toContain('filename="Trip.zip"');
+    const zip = await JSZip.loadAsync(res.rawPayload);
+    expect(Object.keys(zip.files).map((n) => n.replace(/\/$/, '')).sort()).toEqual(
+      ['Budget.xlsx', 'Costs.csv', 'Empty', 'Notes (2).md', 'Notes.md', 'Receipts', 'Receipts/Plan.md', 'images', `images/${img.slice(-36)}.png`].sort(),
+    );
+    expect(await zip.file('Costs.csv')!.async('string')).toBe('a,b\n1,2\n');
+    expect(await zip.file('Receipts/Plan.md')!.async('string')).toContain(`![pic](../images/${img.slice(-36)}.png)`);
+
+    expect((await app.inject({ method: 'GET', url: '/api/folders/download?folder=Nope', headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/api/folders/download?folder=Trip' })).statusCode).toBe(401);
+    const other = await signUp(app, box, 'zip@x.com');
+    expect((await app.inject({ method: 'GET', url: '/api/folders/download?folder=Trip', headers: { cookie: other.cookie } })).statusCode).toBe(404);
+  });
+
   it('lists deleted files in the trash and restores them', async () => {
     let res = await app.inject({ method: 'POST', url: '/api/docs', headers: { cookie }, payload: { title: 'Keep me', doc: markdownToDoc('Precious\n') } });
     const id = (res.json() as { doc: { id: string } }).doc.id;

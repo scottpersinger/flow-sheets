@@ -32,7 +32,7 @@ import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, VERIFY_TTL_MS, validateCrede
 import { Backup } from './backup.ts';
 import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
 import { openDb } from './db.ts';
-import { EXPORT_FORMATS, ExportError, exportAll, exportFile, imageSource, loadFile, type ExportFormat } from './export.ts';
+import { EXPORT_FORMATS, ExportError, exportAll, exportFile, exportFolder, imageSource, loadFile, type ExportFormat } from './export.ts';
 import { openGettingStarted } from './gettingStarted.ts';
 import { isFileId } from './ids.ts';
 import { ImageStore } from './images.ts';
@@ -1071,6 +1071,14 @@ export async function buildApp(opts: AppOptions) {
       if (res === 'missing') return reply.code(404).send({ error: 'Folder not found' });
       if (res === 'not-empty') return reply.code(409).send({ error: 'This folder is not empty. Move or delete what is in it first.' });
       return { ok: true };
+    });
+
+    // The request's folder as a zip: its files in their readable formats, and the folders inside it.
+    r.get('/api/folders/download', async (req, reply) => {
+      const id = req.user!.id;
+      const { body, files, problems } = await exportFolder({ sheets, files: storedFiles, folders }, id, req.folder, imageSource(images, id));
+      req.log.info({ folder: req.folder, files, problems: problems.length }, 'downloaded folder');
+      return attachment(reply, `${req.folder ? folderName(req.folder) : 'Files'}.zip`, 'application/zip').send(body);
     });
 
     // Move a document (any kind) or a stored file into the request's folder.
