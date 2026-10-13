@@ -48,6 +48,12 @@ describe('public pages', () => {
         expect(res.body).toContain(`<h1>${heading}</h1>`);
         expect(res.body).toContain('mailto:');
       }
+      // Without the plugin there is no MCP server to describe.
+      const llms = await a.inject({ method: 'GET', url: '/llms.txt' });
+      expect(llms.statusCode).toBe(200);
+      expect(llms.headers['content-type']).toContain('text/markdown');
+      expect(llms.body).toContain('# Universal Docs');
+      expect(llms.body).not.toContain('/mcp');
     } finally {
       await a.close();
     }

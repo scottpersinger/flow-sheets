@@ -46,6 +46,11 @@ describe('plugin mounted in the app', () => {
     expect(mcp.headers['www-authenticate']).toContain('resource_metadata=');
     const health = await app.inject({ method: 'GET', url: '/plugin/health' });
     expect(health.json()).toEqual({ ok: true, auth: 'oauth' });
+    // /llms.txt tells an agent where the MCP server is and how to sign in, with or without a browser.
+    const llms = await app.inject({ method: 'GET', url: '/llms.txt' });
+    expect(llms.headers['content-type']).toContain('text/markdown');
+    expect(llms.body).toContain('Endpoint: `https://docs.test/mcp/v2`');
+    expect(llms.body).toContain('npx -y mcp-remote https://docs.test/mcp/v2 --device-code');
   });
 
   it("leaves the app's own routes alone", async () => {
