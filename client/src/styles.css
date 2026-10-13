@@ -4238,3 +4238,205 @@ img.thumb-image {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ Phones */
+/* A narrow window: the headers fold onto two rows, the side trays move out of the way of the page, and
+   the file list keeps only the columns that fit. */
+@media (max-width: 640px) {
+  /* Home and the stored-file page: the search gets a row of its own under the brand and the buttons. */
+  .home-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .home-brand {
+    flex-shrink: 0;
+  }
+  .home-search {
+    order: 1;
+    flex-basis: 100%;
+    max-width: none;
+    padding: 9px 16px;
+  }
+  .home-user {
+    gap: 8px;
+    min-width: 0;
+  }
+  .file-page .home-user {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .file-page-title {
+    min-width: 0;
+  }
+  .home-inner {
+    padding: 0 12px;
+  }
+  .tiles {
+    gap: 12px;
+  }
+  /* The guide tile's words need the room its icon takes. */
+  .help-tile svg {
+    display: none;
+  }
+  .list-heading {
+    flex-wrap: wrap;
+  }
+  .list-tools {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+  }
+  /* Name, last modified and the row's menu; a file's type shows in its icon. */
+  .sheet-list:not(.trash-list) .col-type,
+  .sheet-list:not(.trash-list) th:nth-child(4),
+  .sheet-list:not(.trash-list) td:nth-child(4),
+  .open-tab-btn {
+    display: none;
+  }
+  .sheet-list th,
+  .sheet-list td {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .sheet-list td:nth-child(3) {
+    white-space: nowrap;
+  }
+  .sheet-list .row-actions {
+    width: 36px;
+  }
+  .file-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .find-files {
+    flex-wrap: wrap;
+  }
+
+  /* The assistant's button is its icon alone. */
+  .agent-toggle {
+    font-size: 0;
+    gap: 0;
+    padding: 7px 8px;
+  }
+
+  /* An editor's header: the logo, the name and the buttons, then the menus with the save status beside them. */
+  .wb-header {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding: 6px 8px 0;
+  }
+  .wb-titles,
+  .wb-title-row {
+    display: contents;
+  }
+  .wb-title-row .folder-crumbs {
+    display: none;
+  }
+  .wb-title {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    font-size: 16px;
+  }
+  .wb-user {
+    gap: 8px;
+  }
+  .menubar {
+    order: 1;
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+  .save-status {
+    order: 2;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
+  }
+  .toolbar {
+    margin: 4px 4px;
+    border-radius: 16px;
+  }
+  .name-box {
+    width: 64px;
+  }
+
+  /* Slides: the thumbnails are a strip under the slide. */
+  .deck-body {
+    flex-direction: column;
+    margin: 0 4px 4px;
+  }
+  .deck-thumbs {
+    order: 1;
+    width: auto !important;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px;
+  }
+  .deck-thumb {
+    flex-shrink: 0;
+  }
+  .deck-thumb.drop-before::before,
+  .deck-thumb.drop-after::after {
+    top: 2px;
+    bottom: 2px;
+    width: 3px;
+    height: auto;
+    right: auto;
+  }
+  .deck-thumb.drop-before::before {
+    left: -7px;
+  }
+  .deck-thumb.drop-after::after {
+    left: auto;
+    right: -7px;
+  }
+  .deck-notes textarea {
+    height: 56px;
+  }
+  .deck-thumbs-resize,
+  .md-preview-resize {
+    display: none;
+  }
+
+  /* Documents: the page has the whole width. */
+  .doc-thumbs-col {
+    display: none;
+  }
+  .doc-body-row {
+    margin: 0 4px 4px;
+  }
+  .doc-body {
+    padding: 12px 8px 64px;
+  }
+
+  /* Markdown: the preview is under the text. */
+  .md-body-row {
+    flex-direction: column;
+    margin: 0 4px 4px;
+  }
+  .md-editor {
+    padding: 12px 14px;
+  }
+  .md-preview {
+    width: auto !important;
+    flex: 1;
+  }
+  .md-preview-body {
+    padding: 16px 16px 48px;
+  }
+
+  /* Text a phone would zoom the page to show while typing in it. */
+  .home-search,
+  .md-editor,
+  .agent-compose textarea,
+  .modal input,
+  .modal textarea {
+    font-size: 16px;
+  }
+  .toast {
+    max-width: calc(100vw - 24px);
+  }
+}
