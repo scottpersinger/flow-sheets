@@ -76,9 +76,39 @@ describe('MCP server', () => {
     const newer = (await v2.listTools()).tools;
     expect(v2.getServerVersion()?.version).toBe('0.3.0');
     expect(v2.getInstructions()).toContain('read_file');
-    expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(['read_file']);
-    // Besides read_file, only edit_elements differs: version 2 places an arc by its own box or its center and radius.
-    expect(newer.filter((t) => t.name !== 'read_file' && JSON.stringify(t) !== JSON.stringify(tools.find((o) => o.name === t.name))).map((t) => t.name)).toEqual(['edit_elements']);
+    const added = ['create_folder', 'move_file', 'upload_file', 'read_file'];
+    expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(added);
+    // Besides those, two tools differ: list_files knows about folders, and edit_elements places an arc by its own box or its center and radius.
+    expect(newer.filter((t) => !added.includes(t.name) && JSON.stringify(t) !== JSON.stringify(tools.find((o) => o.name === t.name))).map((t) => t.name)).toEqual(['list_files', 'edit_elements']);
+    await v2.close();
+  });
+
+  it('keeps files in folders in version 2: makes them, moves files into them and lists one', async () => {
+    const v2 = await connect(2);
+    const doc = (await call('create_doc', { title: 'Plan' }, v2)).data!.file as { id: string };
+    await call('create_sheet', { title: 'Budget' }, v2);
+    expect((await call('create_folder', { path: 'Reports/2026' }, v2)).data).toEqual({ folder: { path: 'Reports/2026', created: true } });
+    expect((await call('create_folder', { path: 'Reports' }, v2)).data).toEqual({ folder: { path: 'Reports', created: false } });
+    expect((await call('create_folder', { path: 'a/../b' }, v2)).isError).toBe(true);
+
+    expect((await call('move_file', { kind: 'doc', id: doc.id, folder: 'Reports/2026' }, v2)).data!.file).toMatchObject({ id: doc.id, folder: 'Reports/2026' });
+    const missing = await call('move_file', { kind: 'doc', id: doc.id, folder: 'Nowhere' }, v2);
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toContain('create_folder');
+
+    const all = (await call('list_files', {}, v2)).data!;
+    expect(all.folders).toEqual(['Reports', 'Reports/2026']);
+    expect((all.files as { title: string; folder: string }[]).map((f) => [f.title, f.folder]).sort()).toEqual([['Budget', ''], ['Plan', 'Reports/2026']]);
+    const titles = async (folder: string) => ((await call('list_files', { folder }, v2)).data!.files as { title: string }[]).map((f) => f.title);
+    expect(await titles('Reports/2026')).toEqual(['Plan']);
+    expect(await titles('')).toEqual(['Budget']);
+    expect(await titles('Reports')).toEqual([]);
+    // Back to the top level.
+    await call('move_file', { kind: 'doc', id: doc.id, folder: '' }, v2);
+    expect((await titles('')).sort()).toEqual(['Budget', 'Plan']);
+    // Version 1 says nothing of folders, and this server has no public address to upload to.
+    expect((await call('list_files')).data).not.toHaveProperty('folders');
+    expect((await call('upload_file', { file_name: 'a.pdf' }, v2)).text).toContain('no public address');
     await v2.close();
   });
 

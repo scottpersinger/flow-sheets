@@ -1,3 +1,5 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,6 +9,7 @@ import { openDb } from '../../server/db.ts';
 import { buildDocx } from '../../server/testing.ts';
 import { FileHub } from './files.ts';
 import { createPluginServer } from './http.ts';
+import { createMcpServer } from './mcp.ts';
 
 let dir: string;
 let base: string;
@@ -28,6 +31,41 @@ beforeEach(async () => {
 afterEach(async () => {
   await close();
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('upload from an agent', () => {
+  it('gives version 2 an address to post a local file to, once, into a folder', async () => {
+    const server = createMcpServer(hub.forUser('u1'), { bundle: () => ({ js: '', css: '', hash: 'x' }), publicUrl: base, version: 2 });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const client = new Client({ name: 'test', version: '0' });
+    await client.connect(b);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const r = await client.callTool({ name, arguments: args });
+      return { isError: r.isError === true, data: r.structuredContent as Record<string, string> };
+    };
+    // The folder has to be there first.
+    expect((await call('upload_file', { file_name: 'report.pdf', folder: 'Inbox/Scans' })).isError).toBe(true);
+    await call('create_folder', { path: 'Inbox/Scans' });
+    const { data } = await call('upload_file', { file_name: 'report.pdf', folder: 'Inbox/Scans' });
+    expect(data.upload_url).toMatch(new RegExp(`^${base}/plugin/import\\?ticket=[\\w-]+&name=report\\.pdf$`));
+    expect(data.example).toContain('curl -sS -X POST --data-binary @"/path/to/report.pdf"');
+
+    const pdf = new Uint8Array(Buffer.from('%PDF-1.7\n%%EOF'));
+    const up = await fetch(data.upload_url, { method: 'POST', body: pdf });
+    expect(up.status).toBe(200);
+    expect(((await up.json()) as { file: unknown }).file).toMatchObject({ kind: 'file', title: 'report.pdf', folder: 'Inbox/Scans' });
+    expect((await fetch(data.upload_url, { method: 'POST', body: pdf })).status).toBe(401);
+    expect(hub.files.list('u1').map((f) => [f.filename, f.folder])).toEqual([['report.pdf', 'Inbox/Scans']]);
+
+    // An editable file lands in the folder too; without a folder it goes to the top.
+    const docx = await buildDocx('<w:p><w:r><w:t>Hello</w:t></w:r></w:p>');
+    const word = await call('upload_file', { file_name: 'brief.docx', folder: 'Inbox', title: 'The brief' });
+    expect(((await (await fetch(word.data.upload_url, { method: 'POST', body: new Uint8Array(docx) })).json()) as { file: unknown }).file).toMatchObject({ kind: 'doc', title: 'The brief', folder: 'Inbox' });
+    const top = await call('upload_file', { file_name: 'notes.md' });
+    expect(((await (await fetch(top.data.upload_url, { method: 'POST', body: '# Notes' })).json()) as { file: Record<string, unknown> }).file).not.toHaveProperty('folder');
+    await client.close();
+  });
 });
 
 describe('import from the app', () => {

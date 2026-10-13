@@ -271,8 +271,9 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           res.writeHead(405).end();
           return;
         }
-        const userId = hub.redeemTicket(url.searchParams.get('ticket'));
-        if (!userId) return json(res, 401, { error: 'The upload ticket is missing, used or expired. Try again.' });
+        const ticket = hub.redeemTicket(url.searchParams.get('ticket'));
+        if (!ticket) return json(res, 401, { error: 'The upload ticket is missing, used or expired. Try again.' });
+        const { userId } = ticket;
         // Videos and PDFs may be larger than the files that are converted.
         const limit = importLimit(url.searchParams.get('name') ?? undefined);
         if (Number(req.headers['content-length'] ?? 0) > limit) return json(res, 413, { error: `This file must be under ${limit / 1024 / 1024} MB.` });
@@ -294,7 +295,7 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           if (replace) return json(res, 200, { file: await service.saveImage(replace, bytes) });
           // convert=1: an Excel file's tabs for the open spreadsheet (File → Import), not a new file.
           if (url.searchParams.get('convert')) return json(res, 200, await service.convertExcel(bytes, name));
-          const r = await service.importFile(bytes, name, url.searchParams.get('title') ?? undefined);
+          const r = await service.importFile(bytes, name, url.searchParams.get('title') ?? undefined, ticket.folder);
           service.setOpen({ kind: r.file.kind, id: r.file.id });
           return json(res, 200, r);
         } catch (e) {

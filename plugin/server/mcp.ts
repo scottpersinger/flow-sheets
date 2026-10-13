@@ -7,14 +7,14 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
-import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType, MAX_VIDEO_BYTES } from '../../shared/types.ts';
 import { editElementsV1, schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
 import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
 import type { ImageJobResult } from './files.ts';
-import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
+import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, UPLOAD_TICKET_MS, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
  * The app's resource URI. Hosts capture the HTML by URI when the plugin is created or its tools refreshed, so
@@ -75,11 +75,14 @@ export interface McpOptions {
 export const INSTRUCTIONS = `Universal Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.
 Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. A Markdown document (kind markdown) is a plain Markdown file, kept exactly as written: read_doc, insert_content, replace_blocks, delete_blocks and replace_text work on it, and its formatting is its text. After editing, the open file updates in the app by itself; do not call open_file again.`;
 
-/** The instructions a version of the server gives; version 2 adds how to read stored files. */
+const V2_INSTRUCTIONS =
+  'A file on your own computer (one you can read from disk, not an attachment or a web address) is uploaded with upload_file: it returns an address, and you send the file\'s bytes there yourself, with curl for example. Files can be kept in folders, named by their path ("Reports/2026"): list_files shows each file\'s folder and the folders there are, create_folder makes one, move_file puts a file in one, and upload_file can upload straight into one.';
+
+/** The instructions a version of the server gives; version 2 adds how to read stored files, upload local ones and use folders. */
 export const instructionsFor = (version: McpVersion = 1): string =>
   version === 1
     ? INSTRUCTIONS
-    : `${INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks.`;
+    : `${INSTRUCTIONS}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks.`;
 
 const DOC_ICON = {
   src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
@@ -284,7 +287,18 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const entrypoint = level === 'full';
 
   const listFiles = { title: 'List files', description: "The user's documents, Markdown documents, presentations, spreadsheets and stored files (PDFs, web pages, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
-  server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
+  // Version 2 knows about folders: each file's folder, the folders there are, and a listing of one folder.
+  if (version === 1) server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
+  else
+    server.registerTool(
+      'list_files',
+      {
+        ...listFiles,
+        description: `${listFiles.description} Each file has the path of the folder it is in, which is empty at the top. The result also lists every folder. Give folder to list only the files in one.`,
+        inputSchema: { ...listFiles.inputSchema, folder: z.string().max(1000).optional().describe('Only the files in this folder, by its path, such as "Reports/2026". An empty string means the top level. Leave out to list files in every folder.') },
+      },
+      async ({ kind: k, query, folder }) => guard(() => ok({ files: service.listWithFolders(k, query, folder === undefined ? undefined : service.folderPath(folder)).slice(0, folder === undefined ? 50 : 200), folders: service.folders(), ...service.state() })),
+    );
   if (level === 'minimal') return server;
 
   if (ui) server.server.registerCapabilities(SERVER_CAPABILITIES);
@@ -489,6 +503,62 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         return { content: [{ type: 'text', text: JSON.stringify(data) }, ...picture], structuredContent: data };
       }),
   );
+
+  if (version >= 2) {
+    const folderPath = z.string().max(1000);
+    server.registerTool(
+      'create_folder',
+      {
+        title: 'Create folder',
+        description: "Create a folder in the user's library. A folder is named by its path, such as \"Reports/2026\". Folders above it that are missing are created too. Nothing changes if the folder already exists.",
+        inputSchema: { path: folderPath.min(1).describe('The path of the new folder: names separated by "/", such as "Reports" or "Reports/2026".') },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ path: p }) => guard(() => ok({ folder: service.createFolder(p) })),
+    );
+
+    server.registerTool(
+      'move_file',
+      {
+        title: 'Move file to a folder',
+        description: 'Put a document, Markdown document, presentation, spreadsheet or stored file in a folder. The folder must exist; make it with create_folder. An empty folder path moves the file to the top level.',
+        inputSchema: { kind: anyKind, id: fileId, folder: folderPath.describe('The path of the folder to move the file into, such as "Reports/2026". An empty string means the top level.') },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ kind: k, id, folder }) => guard(() => ok({ file: service.move(k, id, service.folderPath(folder)) })),
+    );
+
+    server.registerTool(
+      'upload_file',
+      {
+        title: 'Upload a local file',
+        description:
+          "Get a one-time address for uploading a file from your own computer into the user's library. Use it when you can read the file from disk and run a command such as curl. Send the file's bytes to the address with an HTTP POST, as the result shows. The file is then imported like import_file does: a Word, PowerPoint, Excel, CSV or Markdown file becomes an editable file, and a PDF, web page, video or image is stored as it is. The address works once, for five minutes. Call this once for each file.",
+        inputSchema: {
+          file_name: z.string().min(1).max(200).describe('The name of the file with its extension, such as "report.pdf". The extension tells what kind of file it is.'),
+          folder: folderPath.optional().describe('The path of the folder to put the file in, such as "Reports/2026". The folder must exist; make it with create_folder. Leave out for the top level.'),
+          title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ file_name, folder, title }) =>
+        guard(() => {
+          if (!opts.publicUrl) return fail('This server has no public address to upload to.');
+          const into = folder ? service.folderPath(folder) : '';
+          const q = new URLSearchParams({ ticket: service.hub.issueTicket(service.userId, into), name: file_name, ...(title ? { title } : {}) });
+          const url = `${opts.publicUrl}/plugin/import?${q}`;
+          return ok({
+            upload_url: url,
+            method: 'POST',
+            body: "The file's bytes, as they are (not a form).",
+            example: `curl -sS -X POST --data-binary @"/path/to/${file_name}" "${url}"`,
+            expires_in_seconds: UPLOAD_TICKET_MS / 1000,
+            limits: `Videos up to ${MAX_VIDEO_BYTES / 1024 / 1024} MB, PDFs up to ${MAX_PDF_BYTES / 1024 / 1024} MB, other files up to ${MAX_IMPORT_BYTES / 1024 / 1024} MB.`,
+            note: 'The response is JSON with the new file (its kind and id) or an error. The address works once.',
+          });
+        }),
+    );
+  }
 
   /** The largest file read_file returns whole; a larger one gets a download link instead. */
   const MAX_READ_FILE_BYTES = 10 * 1024 * 1024;

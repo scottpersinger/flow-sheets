@@ -16,6 +16,8 @@ import { DeckController } from '../../client/src/deck/controller.ts';
 import { DocController } from '../../client/src/doc/controller.ts';
 import { SheetController } from '../../client/src/state/controller.ts';
 import { openDb, type DB } from '../../server/db.ts';
+import { FolderStore, type Folders } from '../../server/folders.ts';
+import { cleanFolderPath } from '../../shared/folders.ts';
 import { ImageStore } from '../../server/images.ts';
 import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
@@ -43,6 +45,9 @@ export const LIBRARY_KINDS: readonly LibraryKind[] = [...FILE_KINDS, 'file'];
 export { importLimit, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType } from '../../server/importFile.ts';
 /** How long a link to a stored file's bytes works (the player asks for the file in pieces as it plays). */
 const FILE_LINK_MS = 6 * 60 * 60 * 1000;
+
+/** How long an upload ticket works. */
+export const UPLOAD_TICKET_MS = 5 * 60 * 1000;
 
 /** An edit to a stored picture for the app to make (the image editor needs a browser). */
 export interface ImageJob {
@@ -95,6 +100,8 @@ export interface FileSummary {
   /** Stored files: the MIME type and the size in bytes. */
   type?: string;
   size?: number;
+  /** The path of the folder the file is in ('' at the top), where the listing asks for it. */
+  folder?: string;
 }
 
 /** Where the user is in the open file, as reported by the app's editor. */
@@ -129,6 +136,7 @@ export interface FileHubOptions {
   sheets?: SheetStore;
   images?: ImageStore;
   files?: FileStore;
+  folders?: Folders;
 }
 
 /** Tools the model may run on a document, in the app's vocabulary. */
@@ -212,18 +220,20 @@ export class FileHub {
   readonly sheets: SheetStore;
   readonly images: ImageStore;
   readonly files: FileStore;
+  readonly folders: Folders;
   readonly publicUrl: string | null;
   private readonly byUser = new Map<string, FileService>();
   /** Links to stored files' bytes: the app's iframe has no credentials, so the address carries a token. */
   private readonly fileLinks = new Map<string, { userId: string; id: string; expires: number }>();
   /** One-time tickets letting the app upload a file for import without a bearer token (it has none). */
-  private readonly tickets = new Map<string, { userId: string; expires: number }>();
+  private readonly tickets = new Map<string, { userId: string; expires: number; folder?: string }>();
 
   constructor(opts: FileHubOptions) {
     this.db = opts.db;
     this.sheets = opts.sheets ?? new SheetStore(opts.db, path.join(opts.dataDir, 'sheets'));
     this.images = opts.images ?? new ImageStore(opts.db, path.join(opts.dataDir, 'images'));
     this.files = opts.files ?? new FileStore(opts.db, path.join(opts.dataDir, 'files'));
+    this.folders = opts.folders ?? new FolderStore(opts.db);
     this.publicUrl = opts.publicUrl?.replace(/\/$/, '') ?? null;
   }
 
@@ -261,21 +271,25 @@ export class FileHub {
     return row ?? null;
   }
 
-  /** A ticket the app presents when posting a file to /plugin/import; good for one upload within five minutes. */
-  issueTicket(userId: string): string {
+  /**
+   * A ticket presented when posting a file to /plugin/import; good for one upload within five minutes. The app
+   * asks for one (upload_ticket), and so does an agent uploading a file of its own (upload_file), which may
+   * name the folder the file goes in.
+   */
+  issueTicket(userId: string, folder?: string): string {
     const now = Date.now();
     for (const [k, v] of this.tickets) if (v.expires < now) this.tickets.delete(k);
     const ticket = randomBytes(24).toString('base64url');
-    this.tickets.set(ticket, { userId, expires: now + 5 * 60 * 1000 });
+    this.tickets.set(ticket, { userId, expires: now + UPLOAD_TICKET_MS, ...(folder ? { folder } : {}) });
     return ticket;
   }
 
-  /** The account a ticket was issued to, consuming it; null when unknown or expired. */
-  redeemTicket(ticket: string | null | undefined): string | null {
+  /** The account a ticket was issued to (and the folder it named), consuming it; null when unknown or expired. */
+  redeemTicket(ticket: string | null | undefined): { userId: string; folder?: string } | null {
     if (!ticket) return null;
     const t = this.tickets.get(ticket);
     this.tickets.delete(ticket);
-    return t && t.expires >= Date.now() ? t.userId : null;
+    return t && t.expires >= Date.now() ? { userId: t.userId, folder: t.folder } : null;
   }
 
   /** A token for reading one stored file's bytes for a few hours; the same one while it has plenty of time left. */
@@ -342,6 +356,46 @@ export class FileService {
       .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
   }
 
+  /** The listing with each file's folder, optionally only the files in one folder. */
+  listWithFolders(kind?: LibraryKind, query?: string, folder?: string): FileSummary[] {
+    const q = query?.trim().toLowerCase();
+    const kinds = kind ? [kind] : LIBRARY_KINDS;
+    return kinds
+      .flatMap((k) => (k === 'file' ? this.hub.files.list(this.userId).map((f) => ({ ...fileSummary(f), folder: f.folder ?? '' })) : this.sheets.list(this.userId, k).map((m) => ({ ...summary(m), folder: m.folder ?? '' }))))
+      .filter((m) => (!q || m.title.toLowerCase().includes(q)) && (folder === undefined || m.folder === folder))
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+  }
+
+  // --- Folders: a folder is its path ("Reports/2026"); '' is the top -------------------
+
+  /** Every folder of the account, as paths. */
+  folders(): string[] {
+    const under = (parent: string): string[] => this.hub.folders.children(this.userId, parent).flatMap((p) => [p, ...under(p)]);
+    return under('');
+  }
+
+  /** A folder path the model gave, which must be a folder that exists. */
+  folderPath(input: string): string {
+    const clean = cleanFolderPath(input);
+    if (clean === null) throw new ToolError('That is not a folder path. Use names separated by "/", such as "Reports/2026"; a name cannot start with a dot or contain \\ : * ? " < > |.');
+    if (!this.hub.folders.exists(this.userId, clean)) throw new ToolError(`There is no folder "${clean}". Create it with create_folder, or see list_files for the folders there are.`);
+    return clean;
+  }
+
+  /** Make a folder, and the folders above it that are missing. */
+  createFolder(input: string): { path: string; created: boolean } {
+    const clean = cleanFolderPath(input);
+    if (!clean) throw new ToolError('Give the folder a path: names separated by "/", such as "Reports/2026". A name cannot start with a dot or contain \\ : * ? " < > |.');
+    return { path: clean, created: this.hub.folders.create(this.userId, clean) };
+  }
+
+  /** Put a file in a folder ('' for the top). */
+  move(kind: LibraryKind, id: string, folder: string): FileSummary {
+    const moved = kind === 'file' ? this.hub.files.move(this.userId, id, folder) : this.sheets.move(this.userId, id, folder);
+    if (!moved) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    return { ...(kind === 'file' ? fileSummary(moved as StoredFile) : summary(moved as SheetMeta)), folder };
+  }
+
   /** A text document built from the Markdown, or (kind markdown) a Markdown file holding it as it is. */
   async createDoc(title: string, markdown?: string, kind: 'doc' | 'markdown' = 'doc'): Promise<FileSummary> {
     if (kind === 'markdown') return summary(await this.sheets.createMarkdown(this.userId, title.trim() || 'Untitled Markdown', newMarkdownDoc(markdown ?? '')));
@@ -375,10 +429,11 @@ export class FileService {
    * Create a document from a Word file or a presentation from a PowerPoint file, with the app's own
    * converters (pictures are stored for the account). The kind comes from the bytes, not the name.
    */
-  async importFile(bytes: Buffer, name: string | undefined, title: string | undefined): Promise<{ file: FileSummary; warnings: string[] }> {
+  async importFile(bytes: Buffer, name: string | undefined, title: string | undefined, folder?: string): Promise<{ file: FileSummary; warnings: string[] }> {
     try {
       const made = await importBytes({ sheets: this.sheets, images: this.images, files: this.hub.files }, this.userId, bytes, name, title);
-      return { file: made.sheet ? summary(made.sheet) : fileSummary(made.file), warnings: made.warnings };
+      const file = made.sheet ? summary(made.sheet) : fileSummary(made.file);
+      return { file: folder ? this.move(file.kind, file.id, folder) : file, warnings: made.warnings };
     } catch (e) {
       if (e instanceof ImportFileError) throw new ToolError(e.message);
       throw e;

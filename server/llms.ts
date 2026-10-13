@@ -49,6 +49,8 @@ Do the first sign-in in a terminal before starting the client: a client that lau
 ### What the tools do
 
 - Files: list, open, create, rename, delete and import (from a web address) documents, Markdown files, spreadsheets, presentations and stored files.
+- Local files: \`upload_file\` returns a one-time address; POST the file's bytes to it (\`curl --data-binary @file <address>\`). Use it for files on the agent's own disk.
+- Folders: \`list_files\` shows each file's folder and the folders there are; \`create_folder\` and \`move_file\` organize them, and \`upload_file\` can upload into one.
 - Documents and Markdown: read as numbered blocks; insert, replace and delete blocks; replace text; format text and blocks; page setup.
 - Spreadsheets: read and write ranges (formulas included), insert and delete rows and columns, sort, filter, format, freeze panes, tabs.
 - Presentations: read a deck, add, update, move and delete slides, edit elements, set the theme.
