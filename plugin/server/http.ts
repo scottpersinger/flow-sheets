@@ -144,6 +144,21 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           if (!r.ok) return html(res, 200, oauth.signInPage(form.p ?? '', r.error));
           return redirect(res, `/oauth/consent?p=${encodeURIComponent(form.p ?? '')}`);
         }
+        // --- Creating an account: email and password, then the emailed link, which comes back here ---
+        if (p === '/oauth/signup' && req.method === 'GET') return html(res, 200, oauth.signUpPage(url.searchParams.get('p') ?? ''));
+        if (p === '/oauth/signup' && req.method === 'POST') {
+          const form = await readForm(req);
+          const r = await oauth.signUp(form.p ?? '', form.email, form.password);
+          if (!r.ok) return html(res, 200, oauth.signUpPage(form.p ?? '', r.error, form.email));
+          return html(res, 200, oauth.checkEmailPage(form.p ?? '', r.email));
+        }
+        if (p === '/oauth/verify' && req.method === 'GET') return html(res, 200, oauth.verifyPage(url.searchParams.get('p') ?? '', url.searchParams.get('token') ?? ''));
+        if (p === '/oauth/verify' && req.method === 'POST') {
+          const form = await readForm(req);
+          const r = oauth.verifyEmail(form.p, form.token);
+          if ('error' in r) return html(res, 400, oauth.errorPage(r.error));
+          return redirect(res, r.next);
+        }
         if (p === '/oauth/google/start' && req.method === 'GET') {
           const to = oauth.googleStart(url.searchParams.get('p') ?? '', `${oauth.issuer}/oauth/google/callback`);
           if (!to) return html(res, 400, oauth.errorPage('Google sign-in is not available, or this sign-in link has expired.'));

@@ -83,6 +83,54 @@ describe('plugin mounted in the app', () => {
     expect(consentAgain.body).toContain('expired');
   });
 
+  it('lets someone without an account create one on the sign-in page and carry on once the email is verified', async () => {
+    const formBody = (b: Record<string, string>) => ({ headers: { 'content-type': 'application/x-www-form-urlencoded' }, payload: new URLSearchParams(b).toString() });
+    const reg = await app.inject({ method: 'POST', url: '/oauth/register', headers: { 'content-type': 'application/json' }, payload: { client_name: 'Claude', redirect_uris: ['https://claude.test/cb'] } });
+    const q = new URLSearchParams({ response_type: 'code', client_id: reg.json().client_id, redirect_uri: 'https://claude.test/cb', code_challenge: 'c', code_challenge_method: 'S256', state: 's1' });
+    const signIn = await app.inject({ method: 'GET', url: `/oauth/authorize?${q}` });
+    const pendingId = /name="p" value="([^"]+)"/.exec(signIn.body)![1];
+    expect(signIn.body).toContain(`<a href="/oauth/signup?p=${pendingId}">Create an account</a>`);
+    expect((await app.inject({ method: 'GET', url: `/oauth/signup?p=${pendingId}` })).body).toContain('Create your Universal Docs account');
+
+    const weak = await app.inject({ method: 'POST', url: '/oauth/signup', ...formBody({ p: pendingId, email: 'new@x.com', password: 'short' }) });
+    expect(weak.body).toContain('at least 8 characters');
+    const taken = await signUp(app, box, 'taken@x.com', 'password-12345');
+    expect(taken.cookie).toBeTruthy();
+    expect((await app.inject({ method: 'POST', url: '/oauth/signup', ...formBody({ p: pendingId, email: 'taken@x.com', password: 'password-12345' }) })).body).toContain('already exists');
+
+    const created = await app.inject({ method: 'POST', url: '/oauth/signup', ...formBody({ p: pendingId, email: 'New@x.com', password: 'password-12345' }) });
+    expect(created.body).toContain('Check your email');
+    expect(created.body).toContain('new@x.com');
+    const mail = [...box.sent].reverse().find((m) => m.to === 'new@x.com')!;
+    expect(mail.subject).toBe('Verify your email for Universal Docs');
+    expect(mail.text).toContain('continue connecting Claude');
+    const link = new URL(/https:\/\/docs\.test\/oauth\/verify\?\S+/.exec(mail.text)![0]);
+    expect(link.searchParams.get('p')).toBe(pendingId);
+    const token = link.searchParams.get('token')!;
+
+    // Not signed in until the address is verified: neither by the password nor by skipping to consent.
+    expect((await app.inject({ method: 'GET', url: `/oauth/consent?p=${pendingId}` })).body).toContain('expired');
+    const early = await app.inject({ method: 'POST', url: '/oauth/login', ...formBody({ p: pendingId, email: 'new@x.com', password: 'password-12345' }) });
+    expect(early.body).toContain('We sent a new link to new@x.com');
+    // The newer link replaced the first one.
+    expect((await app.inject({ method: 'POST', url: '/oauth/verify', ...formBody({ p: pendingId, token }) })).body).toContain('invalid or has expired');
+    const again = [...box.sent].reverse().find((m) => m.to === 'new@x.com')!;
+    const token2 = new URL(/https:\/\/docs\.test\/oauth\/verify\?\S+/.exec(again.text)![0]).searchParams.get('token')!;
+
+    // Opening the link (as a mail scanner might) verifies nothing; the button does.
+    const opened = await app.inject({ method: 'GET', url: `/oauth/verify?p=${pendingId}&token=${token2}` });
+    expect(opened.body).toContain('Verify and continue');
+    const verified = await app.inject({ method: 'POST', url: '/oauth/verify', ...formBody({ p: pendingId, token: token2 }) });
+    expect(verified.statusCode).toBe(302);
+    expect(verified.headers.location).toBe(`/oauth/consent?p=${pendingId}`);
+    expect((await app.inject({ method: 'GET', url: verified.headers.location as string })).body).toContain('new@x.com');
+    const decision = await app.inject({ method: 'POST', url: '/oauth/decision', ...formBody({ p: pendingId, allow: 'yes' }) });
+    const back = new URL(decision.headers.location as string);
+    expect(back.origin + back.pathname).toBe('https://claude.test/cb');
+    expect(back.searchParams.get('code')).toBeTruthy();
+    expect(back.searchParams.get('state')).toBe('s1');
+  });
+
   it('lists agents signed in with a device code on Settings, and disconnects them', async () => {
     const { cookie } = await signUp(app, box, 'agents@x.com', 'password-12345');
     const formBody = (b: Record<string, string>) => ({ headers: { 'content-type': 'application/x-www-form-urlencoded' }, payload: new URLSearchParams(b).toString() });

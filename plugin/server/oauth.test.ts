@@ -57,6 +57,8 @@ async function obtainCode(opts: { clientId?: string; verifier: string; signIn?: 
   const page = await fetch(`${base}/oauth/authorize?${q}`);
   expect(page.status).toBe(200);
   const htmlText = await page.text();
+  // No mailer here, so nobody can be sent a verification link: creating an account is not offered.
+  expect(htmlText).not.toContain('Create an account');
   const pendingId = /name="p" value="([^"]+)"/.exec(htmlText)![1];
   if (opts.signIn) await opts.signIn(pendingId);
   else {

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { AuthService } from '../../server/auth.ts';
 import { googleFromEnv, GoogleLogin } from '../../server/googleAuth.ts';
+import { mailerFromEnv } from '../../server/mail.ts';
 import { FileHub } from './files.ts';
 import { createPluginServer } from './http.ts';
 import type { McpOptions } from './mcp.ts';
@@ -53,6 +54,7 @@ if (devEmail) {
     auth: new AuthService(hub.db),
     profile: (id) => hub.profile(id),
     google: googleOpts ? new GoogleLogin(googleOpts) : null,
+    sendMail: mailerFromEnv((msg) => console.log(msg)),
   });
   console.log(`OAuth on: sign in with ${googleOpts ? 'Google or ' : ''}password; Google redirect URI ${publicUrl}/oauth/google/callback`);
 }

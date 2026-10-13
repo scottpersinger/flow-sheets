@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { AuthService } from '../../server/auth.ts';
 import type { DB } from '../../server/db.ts';
 import type { GoogleLogin } from '../../server/googleAuth.ts';
+import type { Mailer } from '../../server/mail.ts';
 import type { FileStore } from '../../server/files.ts';
 import type { ImageStore } from '../../server/images.ts';
 import type { SheetStore } from '../../server/sheets.ts';
@@ -23,6 +24,9 @@ export interface MountOptions {
   files?: FileStore;
   auth: AuthService;
   google: GoogleLogin | null;
+  /** The app's mailer and its limit on emails per address, for accounts created on the plugin's sign-in page. */
+  sendMail: Mailer;
+  mailAllowed: (email: string) => boolean;
   /** Public origin of the app (the OAuth issuer and where images come from), e.g. https://docs.example.com. */
   publicUrl: string;
   /** Directory with the built plugin app (plugin/dist/web). */
@@ -43,6 +47,8 @@ export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Pro
     auth: opts.auth,
     profile: (id) => hub.profile(id),
     google: opts.google,
+    sendMail: opts.sendMail,
+    mailAllowed: opts.mailAllowed,
   });
   const handler = createPluginHandler({
     hub,

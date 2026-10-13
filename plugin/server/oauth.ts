@@ -1,14 +1,17 @@
 // OAuth 2.1 authorization server for the plugin, the way ChatGPT (and Claude) connect to a remote MCP server:
 // discovery documents, client identification by metadata document or dynamic registration, the
 // authorization code flow with PKCE, a sign-in page that checks the app's own accounts (password or Google),
-// a consent page, opaque access and refresh tokens, and bearer validation for /mcp. An agent without a browser
+// a consent page, opaque access and refresh tokens, and bearer validation for /mcp. Someone without an account
+// can create one from the sign-in page (email and password, then the emailed link, which comes back to the
+// same sign-in). An agent without a browser
 // (mcp-remote --device-code, say) signs in with the device authorization grant instead (RFC 8628): the person
 // enters its code on /oauth/device, and its tokens are bound to the versioned endpoint it asked for, never /mcp.
 //
 // State lives in a small SQLite file of its own (plugin.db); only hashes of codes and tokens are stored.
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AuthService } from '../../server/auth.ts';
+import { validateCredentials, type AuthService, type User } from '../../server/auth.ts';
+import type { Mailer } from '../../server/mail.ts';
 import type { ConnectedAgent } from '../../shared/types.ts';
 import { GoogleLoginError, type GoogleLogin } from '../../server/googleAuth.ts';
 
@@ -17,6 +20,8 @@ export const ACCESS_TTL_MS = 60 * 60 * 1000;
 export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 const PENDING_TTL_MS = 15 * 60 * 1000;
+/** How long a sign-in waits for someone who is creating an account to open the emailed link. */
+const SIGNUP_TTL_MS = 60 * 60 * 1000;
 const CLIENT_DOC_TTL_MS = 60 * 60 * 1000;
 export const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const GRANTS = ['authorization_code', 'refresh_token', DEVICE_GRANT];
@@ -37,6 +42,10 @@ export interface OAuthOptions {
   /** The email behind an account id, for the consent page. */
   profile: (userId: string) => { email: string } | null;
   google?: GoogleLogin | null;
+  /** Sends the verification link of a new account. Without it the sign-in page does not offer to create one. */
+  sendMail?: Mailer;
+  /** False when this address has been sent too many emails lately (the app's limit); asking counts as one. */
+  mailAllowed?: (email: string) => boolean;
   /** Tests pass a fake, to serve client metadata documents. */
   fetchFn?: typeof fetch;
   appName?: string;
@@ -88,6 +97,8 @@ export class OAuthServer {
   private readonly auth: AuthService;
   private readonly profile: OAuthOptions['profile'];
   private readonly google: GoogleLogin | null;
+  private readonly sendMail: Mailer | null;
+  private readonly mailAllowed: (email: string) => boolean;
   private readonly fetchFn: typeof fetch;
   private readonly appName: string;
   private readonly clientDocs = new Map<string, { doc: ClientDoc; expires: number }>();
@@ -101,6 +112,8 @@ export class OAuthServer {
     this.auth = opts.auth;
     this.profile = opts.profile;
     this.google = opts.google ?? null;
+    this.sendMail = opts.sendMail ?? null;
+    this.mailAllowed = opts.mailAllowed ?? (() => true);
     this.fetchFn = opts.fetchFn ?? fetch;
     this.appName = opts.appName ?? 'Universal Docs';
     this.db.exec(`
@@ -283,10 +296,64 @@ export class OAuthServer {
     if (!p) return { ok: false, error: 'This sign-in link has expired. Start again from ChatGPT.' };
     if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) return { ok: false, error: 'Enter your email and password.' };
     const user = await this.auth.login(email.trim(), password);
-    if (user === 'unverified') return { ok: false, error: 'This account has not verified its email address yet. Check your inbox for the verification link.' };
+    if (user === 'unverified') {
+      // The password was right, so this is the account's owner: send a link that comes back to this sign-in.
+      const account = this.auth.unverifiedUser(email);
+      if (account && this.sendMail && this.mailAllowed(account.email)) {
+        await this.sendVerification(p, account);
+        return { ok: false, error: `This account has not verified its email address yet. We sent a new link to ${account.email}; open it to continue.` };
+      }
+      return { ok: false, error: 'This account has not verified its email address yet. Check your inbox for the verification link.' };
+    }
     if (!user) return { ok: false, error: 'Wrong email or password.' };
     this.setUser(pendingId, user.id);
     return { ok: true };
+  }
+
+  // --- Creating an account ------------------------------------------------------------------
+
+  get signUpEnabled(): boolean {
+    return !!this.sendMail;
+  }
+
+  /** A new account, as the app makes one: it has to verify its email, and the emailed link continues this sign-in. */
+  async signUp(pendingId: string, email: unknown, password: unknown): Promise<{ ok: true; email: string } | { ok: false; error: string }> {
+    const p = this.pending(pendingId);
+    if (!p || !this.sendMail) return { ok: false, error: 'This sign-in link has expired. Start again from ChatGPT.' };
+    const problem = validateCredentials(email, password);
+    if (problem) return { ok: false, error: problem };
+    if (!this.mailAllowed(email as string)) return { ok: false, error: 'Too many sign-up attempts for this address. Try again in an hour.' };
+    const user = await this.auth.register(email as string, password as string);
+    if (user === 'exists') return { ok: false, error: 'An account with this email already exists. Sign in instead.' };
+    try {
+      await this.sendVerification(p, user);
+    } catch (e) {
+      console.error('verification email failed', e);
+      return { ok: false, error: 'The verification email could not be sent. Try again later.' };
+    }
+    return { ok: true, email: user.email };
+  }
+
+  /** Emails the link that verifies the address and comes back to this sign-in, which waits longer for it. */
+  private async sendVerification(p: Pending, user: User): Promise<void> {
+    const { token } = this.auth.createEmailVerification(user.id);
+    this.db.prepare('UPDATE oauth_pending SET expires_at = ? WHERE id = ?').run(iso(now() + SIGNUP_TTL_MS), p.id);
+    const link = `${this.issuer}/oauth/verify?p=${encodeURIComponent(p.id)}&token=${token}`;
+    await this.sendMail!({
+      to: user.email,
+      subject: `Verify your email for ${this.appName}`,
+      text: `Welcome to ${this.appName}! Confirm that ${user.email} is your address and continue connecting ${p.client_name} by opening this link in the browser you started in (it works for an hour):\n${link}\n\nIf you didn't create a ${this.appName} account, you can ignore this email.`,
+    });
+  }
+
+  /** The emailed link was opened and confirmed: the address is verified, and the sign-in continues as that account. */
+  verifyEmail(pendingId: string | undefined, token: string | undefined): { next: string } | { error: string } {
+    const user = token ? this.auth.verifyEmail(token) : null;
+    if (!user) return { error: 'This verification link is invalid or has expired. Sign in with your email and password to get a new one.' };
+    const p = this.pending(pendingId);
+    if (!p) return { error: 'Your email address is verified, but this sign-in has expired. Start again from the app you were connecting, and sign in with your new account.' };
+    this.setUser(p.id, user.id);
+    return { next: `/oauth/consent?p=${encodeURIComponent(p.id)}` };
   }
 
   /** Where to send the browser for "Continue with Google"; the callback lands on googleFinish. */
@@ -559,7 +626,54 @@ ${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Contin
   <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
   <button class="btn primary" type="submit">Sign in</button>
 </form>
+${this.sendMail ? `<p class="muted">New here? <a href="/oauth/signup?p=${id}">Create an account</a></p>` : ''}
 ${POLICY_LINKS}`,
+    );
+  }
+
+  signUpPage(pendingId: string, error?: string, email?: string): string {
+    const p = this.pending(pendingId);
+    if (!p || !this.sendMail) return this.errorPage('This sign-in link has expired. Start again from ChatGPT.');
+    const id = escapeHtml(pendingId);
+    return page(
+      `Create your ${this.appName} account`,
+      `<h1>Create your ${escapeHtml(this.appName)} account</h1>
+<p class="muted"><strong>${escapeHtml(p.client_name)}</strong> works with the files in a ${escapeHtml(this.appName)} library. Create an account to continue; we will email you a link to verify your address.</p>
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+${this.google ? `<a class="btn google" href="/oauth/google/start?p=${id}">Continue with Google</a><div class="or">or</div>` : ''}
+<form method="post" action="/oauth/signup">
+  <input type="hidden" name="p" value="${id}">
+  <label>Email <input type="email" name="email" autocomplete="username" value="${escapeHtml(email ?? '')}" required autofocus></label>
+  <label>Password <input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+  <button class="btn primary" type="submit">Create account</button>
+</form>
+<p class="muted">Already have an account? <a href="/oauth/switch?p=${id}">Sign in</a></p>
+${POLICY_LINKS}`,
+    );
+  }
+
+  /** After signing up: the sign-in waits for the emailed link. */
+  checkEmailPage(pendingId: string, email: string): string {
+    const p = this.pending(pendingId);
+    return page(
+      'Check your email',
+      `<h1>Check your email</h1>
+<p>We sent a link to <strong>${escapeHtml(email)}</strong>. Open it in this browser within the hour to verify your address and continue connecting ${escapeHtml(p?.client_name ?? 'your app')}.</p>
+<p class="muted">You can close this page. Nothing arrived? <a href="/oauth/signup?p=${escapeHtml(pendingId)}">Try again</a>.</p>`,
+    );
+  }
+
+  /** The emailed link lands here. Verifying takes a click, so a mail scanner that opens links does not use up the token. */
+  verifyPage(pendingId: string, token: string): string {
+    return page(
+      'Verify your email',
+      `<h1>Verify your email</h1>
+<p class="muted">Confirm your address to finish creating your ${escapeHtml(this.appName)} account and continue.</p>
+<form method="post" action="/oauth/verify">
+  <input type="hidden" name="p" value="${escapeHtml(pendingId)}">
+  <input type="hidden" name="token" value="${escapeHtml(token)}">
+  <button class="btn primary" type="submit">Verify and continue</button>
+</form>`,
     );
   }
 
