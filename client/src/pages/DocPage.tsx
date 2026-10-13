@@ -30,6 +30,7 @@ import { DOC_TRAY } from '../panelSize.ts';
 import { PageSetupDialog } from '../doc/PageSetupDialog.tsx';
 import { DocStyleDialog } from '../doc/DocStyleDialog.tsx';
 import { DocToolbar } from '../doc/DocToolbar.tsx';
+import { VideoDialog } from '../components/VideoDialog.tsx';
 import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
 import { useFavicon } from '../favicon.ts';
@@ -225,6 +226,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
     [ctl, notify],
   );
 
+  const [insertingVideo, setInsertingVideo] = useState(false);
   const insertImage = async () => {
     const file = await pickImageFile();
     if (file) await addImageFiles([file]);
@@ -349,6 +351,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
       label: 'Insert',
       items: () => [
         { label: 'Image…', action: () => void insertImage() },
+        { label: 'Video…', action: () => setInsertingVideo(true) },
         { label: 'Link…', shortcut: `${MOD}K`, action: openLinkDialog },
         { label: 'Horizontal rule', action: () => ctl.insertHorizontalRule() },
         { label: 'Page break', shortcut: `${MOD}⏎`, action: () => ctl.insertPageBreak() },
@@ -473,7 +476,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
           <Account before={() => ctl.saver.flush()} />
         </div>
       </header>
-      <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} onEditImage={editImage} />
+      <DocToolbar ctl={ctl} onLink={openLinkDialog} onInsertImage={() => void insertImage()} onInsertVideo={() => setInsertingVideo(true)} onEditImage={editImage} />
       {importWarnings.length > 0 && (
         <div className="import-banner" role="status">
           <div>
@@ -529,6 +532,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
 
       {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'docStyle' && <DocStyleDialog ctl={ctl} onClose={() => setDialog(null)} />}
+      {insertingVideo && <VideoDialog folder={meta.folder} onInsert={(src, title) => ctl.insertVideo(src, { title: title.replace(/\.[^.]+$/, '') })} onClose={() => setInsertingVideo(false)} />}
       {editingImage && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editingImage.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'link' && (

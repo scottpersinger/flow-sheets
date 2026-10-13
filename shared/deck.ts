@@ -8,6 +8,7 @@
 import { safeLinkUrl } from './links.ts';
 import { SHAPE_KINDS, tightArc, type ShapeKind } from './shapes.ts';
 import { checkCellImage } from './types.ts';
+import { checkVideo } from './video.ts';
 import { lineEnds } from './lines.ts';
 
 export type { ShapeKind };
@@ -112,6 +113,13 @@ export interface ImageElement extends ElementBase {
   duotone?: [string, string];
 }
 
+/** A video that plays in its box: in the show, and in the editor after a double-click. */
+export interface VideoElement extends ElementBase {
+  type: 'video';
+  /** A stored video file (/api/files/<id>) or a YouTube video's watch address (shared/video.ts). */
+  src: string;
+}
+
 export interface ShapeElement extends ElementBase {
   type: 'shape';
   /**
@@ -185,7 +193,7 @@ export interface LineElement extends ElementBase {
   bend?: number;
 }
 
-export type SlideElement = TextElement | ImageElement | ShapeElement | LineElement;
+export type SlideElement = TextElement | ImageElement | VideoElement | ShapeElement | LineElement;
 
 export interface Slide {
   id: string;
@@ -609,6 +617,10 @@ export function validateElement(e: unknown, where: string): string | null {
       if (el.duotone !== undefined && !(Array.isArray(el.duotone) && el.duotone.length === 2 && el.duotone.every((c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c)))) return `${where}: invalid duotone`;
       return null;
     }
+    case 'video': {
+      const problem = checkVideo(el.src);
+      return problem ? `${where}: ${problem}` : null;
+    }
     case 'line': {
       if (!['straight', 'elbow', 'curved'].includes(el.kind)) return `${where}: invalid line kind`;
       if (el.strokeColor !== undefined && !isColor(el.strokeColor)) return `${where}: invalid line color`;
@@ -698,6 +710,7 @@ export function deckOutline(deck: Deck, current?: number) {
         const box = { id: e.id, x: e.x, y: e.y, w: e.w, h: e.h };
         if (e.type === 'text') return { ...box, type: 'text', ...(e.role ? { role: e.role } : {}), text: fromParagraphs(e.paragraphs).join('\n'), ...(e.style ? { style: e.style } : {}) };
         if (e.type === 'image') return { ...box, type: 'image', src: e.src.length > 80 ? `${e.src.slice(0, 77)}...` : e.src };
+        if (e.type === 'video') return { ...box, type: 'video', src: e.src };
         if (e.type === 'line') {
           const { x1, y1, x2, y2 } = lineEnds(e);
           const conn = (c: LineConnection | undefined) => (c ? { element_id: c.elementId, site: c.site } : undefined);

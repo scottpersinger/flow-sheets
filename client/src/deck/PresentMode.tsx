@@ -61,7 +61,7 @@ export function PresentMode({ ctl, onExit }: { ctl: DeckController; onExit(): vo
   return (
     <div className={`present${notes ? ' with-notes' : ''}`} onClick={() => setIndex((i) => Math.min(n - 1, i + 1))} role="presentation">
       <div className="present-stage" style={{ height: slideArea }}>
-        <SlideView slide={slide} theme={ctl.deck.theme} scale={scale} />
+        <SlideView slide={slide} theme={ctl.deck.theme} scale={scale} playVideo />
       </div>
       {notes && (
         <div className="present-notes" style={{ height: size.h - slideArea }} onClick={(e) => e.stopPropagation()}>

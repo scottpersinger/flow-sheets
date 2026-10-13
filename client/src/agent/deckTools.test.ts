@@ -94,6 +94,15 @@ describe('agent deck tools', () => {
     expect(slide.elements[2]).toMatchObject({ type: 'image', src: 'https://example.com/pic.png' });
     expect(deck.selection).toEqual(res.set.map((e: { id: string }) => e.id));
 
+    // A video is kept by its address (a YouTube link in any form becomes its watch address) and stays a video when moved.
+    const added = await call('edit_elements', { slide: 1, set: [{ type: 'video', src: 'https://youtu.be/dQw4w9WgXcQ?t=4', x: 100, y: 100, w: 320, h: 180 }] });
+    const videoId = added.set[0].id as string;
+    expect(slide.elements).toHaveLength(3); // the slide read before the edit is not changed
+    await call('edit_elements', { slide: 1, set: [{ id: videoId, x: 40 }] });
+    expect(deck.deck.slides[0].elements.find((e) => e.id === videoId)).toMatchObject({ type: 'video', src: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', x: 40, y: 100, w: 320, h: 180 });
+    await expect(call('edit_elements', { slide: 1, set: [{ type: 'video', src: 'https://vimeo.com/1' }] })).rejects.toThrow(/video element needs src/);
+    await call('edit_elements', { slide: 1, remove: [videoId] });
+
     await expect(call('edit_elements', { slide: 1, set: [{ id: 'nope', x: 1 }] })).rejects.toThrow(/no element "nope"/);
     await expect(call('edit_elements', { slide: 1, set: [{ type: 'image', src: 'ftp://x/y.png' }] })).rejects.toThrow(/Image must be/);
     await expect(call('edit_elements', { slide: 1, set: [{ type: 'text', text: 'hi', x: Number.NaN }] })).rejects.toThrow(/invalid x/);

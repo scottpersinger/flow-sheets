@@ -9,6 +9,7 @@ import { Fragment, Mark, Node as PMNode, type Schema } from 'prosemirror-model';
 import { cleanFontFamily, docFromNode, docSchema, fontFamilyCss, isColor, parseFontSize, type Doc } from './doc.ts';
 import { safeLinkUrl } from './links.ts';
 import { checkCellImage } from './types.ts';
+import { videoAddress } from './video.ts';
 
 // ---------------------------------------------------------------------------
 // Parsing
@@ -91,6 +92,12 @@ class BlockParser {
       }
       if (PAGE_BREAK_RE.test(line)) {
         out.push(this.schema.nodes.page_break.create());
+        i++;
+        continue;
+      }
+      // A video is written as an image whose address is a video's: a YouTube link or a stored file.
+      if ((m = IMAGE_RE.exec(line)) && videoAddress(m[2])) {
+        out.push(this.schema.nodes.video.create({ src: videoAddress(m[2]), title: m[1] }));
         i++;
         continue;
       }
@@ -523,6 +530,8 @@ export function blockToMarkdown(node: PMNode): string {
       return '\\newpage';
     case 'image':
       return `![${String(node.attrs.alt ?? '').replace(/[[\]]/g, '')}](${String(node.attrs.src)})`;
+    case 'video':
+      return `![${String(node.attrs.title ?? '').replace(/[[\]]/g, '')}](${String(node.attrs.src)})`;
     case 'bullet_list':
     case 'ordered_list': {
       const ordered = node.type.name === 'ordered_list';

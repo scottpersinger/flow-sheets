@@ -113,6 +113,8 @@ export const editElementsV1 = editElements(elementSpecV1);
 
 const elementSpec = elementSpecV1
   .extend({
+    type: z.enum(['text', 'image', 'video', 'shape', 'line']).optional().describe('Required for a new element. Use "line" for lines, arrows and connectors, and "video" for a video that plays on the slide.'),
+    src: z.string().optional().describe('Image elements: an http(s) image URL, or the /api/images/... address of an image attached to the chat. Video elements: a YouTube link, or the /api/files/<id> address of a video among the stored files (list_files gives the id).'),
     start_angle: z
       .number()
       .min(-360)

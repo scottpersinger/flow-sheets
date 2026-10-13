@@ -76,7 +76,7 @@ export function measureOverflow(host: HTMLElement, slide: Slide): OverflowItem[]
   const out: OverflowItem[] = [];
   for (const node of Array.from(host.querySelectorAll<HTMLElement>('[data-el]'))) {
     const el = slide.elements.find((e) => e.id === node.dataset.el);
-    if (!el || el.type === 'image' || el.type === 'line') continue;
+    if (!el || el.type === 'image' || el.type === 'video' || el.type === 'line') continue;
     let textW = 0;
     let textH = 0;
     if (el.type === 'text') {
@@ -207,11 +207,12 @@ async function inlineImages(clone: HTMLElement, slide: Slide): Promise<string[]>
     Array.from(clone.querySelectorAll<HTMLImageElement>('[data-el] img')).map(async (img) => {
       const id = img.closest<HTMLElement>('[data-el]')?.dataset.el ?? '';
       const el = slide.elements.find((e) => e.id === id);
-      const data = el?.type === 'image' ? await toDataUrl(new URL(el.src, location.href).href) : null;
+      // A video's still is YouTube's: drawn when it can be fetched, and not a missing picture when it cannot.
+      const data = el?.type === 'image' ? await toDataUrl(new URL(el.src, location.href).href) : el?.type === 'video' ? await toDataUrl(img.src).catch(() => null) : null;
       if (data) img.setAttribute('src', data);
       else {
         img.removeAttribute('src');
-        missing.push(id);
+        if (el?.type !== 'video') missing.push(id);
       }
     }),
   );

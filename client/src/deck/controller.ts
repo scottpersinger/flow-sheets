@@ -412,6 +412,13 @@ export class DeckController {
     return this.addElement({ type: 'image', src, x: Math.round((SLIDE_W - w) / 2), y: Math.round((SLIDE_H - h) / 2), w, h });
   }
 
+  /** Add a video (shared/video.ts) in the middle of the slide, 16:9. */
+  addVideo(src: string): string {
+    const w = 560;
+    const h = 315;
+    return this.addElement({ type: 'video', src, x: Math.round((SLIDE_W - w) / 2), y: Math.round((SLIDE_H - h) / 2), w, h });
+  }
+
   /**
    * Put an edited picture in place of an image element's, wherever that element is now (the presentation may
    * have changed while the image editor was open). False when the element is gone.

@@ -134,7 +134,7 @@ function leaves(node: PMNode): PMNode[] {
   return [node];
 }
 
-const isLeafBlock = (node: PMNode) => node.type === n.image || node.type === n.horizontal_rule;
+const isLeafBlock = (node: PMNode) => node.type === n.image || node.type === n.video || node.type === n.horizontal_rule;
 
 /** A paragraph-like node's inline content (a code block's lines joined with line breaks). */
 function inlineOf(tb: PMNode): Fragment {
@@ -185,7 +185,7 @@ function convertBlocks(blocks: PMNode[], type: BlockType | undefined, align: Ali
   if (align) {
     const value = align === 'left' ? null : align;
     const withAlign = (node: PMNode): PMNode => {
-      if (node.type === n.paragraph || node.type === n.heading || node.type === n.title || node.type === n.subtitle || node.type === n.image) return node.type.create({ ...node.attrs, align: value }, node.content, node.marks);
+      if (node.type === n.paragraph || node.type === n.heading || node.type === n.title || node.type === n.subtitle || node.type === n.image || node.type === n.video) return node.type.create({ ...node.attrs, align: value }, node.content, node.marks);
       if (node.isLeaf || node.isTextblock) return node;
       const children: PMNode[] = [];
       node.forEach((c) => children.push(withAlign(c)));
@@ -205,7 +205,7 @@ export function docConfirmationFor(call: ClientToolCall, doc: DocController | nu
     const span = count === 1 ? `block ${a + 1}` : `blocks ${a + 1}–${b + 1}`;
     if (call.name === 'delete_blocks') {
       let hasContent = false;
-      for (let k = a; k <= b; k++) if (doc.doc.child(k).textContent.trim() || doc.doc.child(k).type === n.image) hasContent = true;
+      for (let k = a; k <= b; k++) if (doc.doc.child(k).textContent.trim() || doc.doc.child(k).type === n.image || doc.doc.child(k).type === n.video) hasContent = true;
       return hasContent ? `Delete ${span} of the document?` : null;
     }
     return count >= CONFIRM_REPLACE_BLOCKS ? `Replace ${span} (${count} blocks) of the document?` : null;

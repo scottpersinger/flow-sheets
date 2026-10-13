@@ -74,6 +74,11 @@ describe('deck model', () => {
     expect(validateDeck(dup)).toMatch(/duplicate slide id/);
     const badEl: Deck = { ...deck, slides: [{ ...deck.slides[0], elements: [{ id: 'e', type: 'image', x: 0, y: 0, w: 10, h: 10, src: 'javascript:alert(1)' }] }] };
     expect(validateDeck(badEl)).toMatch(/Image must be/);
+    const video = (src: string): Deck => ({ ...deck, slides: [{ ...deck.slides[0], elements: [{ id: 'v', type: 'video', x: 0, y: 0, w: 320, h: 180, src }] }] });
+    expect(validateDeck(video('https://www.youtube.com/watch?v=dQw4w9WgXcQ'))).toBeNull();
+    expect(validateDeck(video('/api/files/wvx2szrxf804'))).toBeNull();
+    expect(validateDeck(video('https://example.com/clip.mp4'))).toMatch(/Video must be/);
+    expect(deckOutline(video('/api/files/wvx2szrxf804')).slides[0].elements[0]).toMatchObject({ type: 'video', src: '/api/files/wvx2szrxf804' });
     const badBox: Deck = { ...deck, slides: [{ ...deck.slides[0], elements: [{ id: 'e', type: 'shape', shape: 'rect', x: Number.NaN, y: 0, w: 10, h: 10 }] }] };
     expect(validateDeck(badBox)).toMatch(/invalid x/);
   });

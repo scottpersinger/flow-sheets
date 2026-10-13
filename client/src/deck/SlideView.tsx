@@ -1,6 +1,7 @@
 // Renders one slide at a scale. The same component draws the editor canvas, the thumbnails, the present mode
 // and the print layout, so a slide always looks the same. Elements are absolutely positioned in a 960×540 box
 // that is scaled with a CSS transform.
+import { VideoPlayer, VideoPoster } from '../components/VideoPlayer.tsx';
 import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import {
   ROLE_SIZE,
@@ -37,6 +38,8 @@ export interface SlideViewProps {
   editing?: { id: string; caret?: { x: number; y: number }; onCommit(paragraphs: Paragraph[]): void; onStop(): void } | null;
   onElementMouseDown?(e: MouseEvent, el: SlideElement): void;
   onElementDoubleClick?(e: MouseEvent, el: SlideElement): void;
+  /** The videos that are players rather than stills: all of them (the show), or the one with this id. */
+  playVideo?: true | string | null;
   /** Drawn on top of the elements (selection handles). */
   children?: ReactNode;
   className?: string;
@@ -585,7 +588,7 @@ function TextEditor({ initial, onCommit, onStop, style, caret }: { initial: Para
   );
 }
 
-export function SlideView({ slide, theme: themeId, scale, preview, editing, onElementMouseDown, onElementDoubleClick, children, className }: SlideViewProps) {
+export function SlideView({ slide, theme: themeId, scale, preview, editing, onElementMouseDown, onElementDoubleClick, playVideo, children, className }: SlideViewProps) {
   const theme = THEMES[themeId];
   // On the editor canvas (not present mode or thumbnails) a plain click on a link of a non-editing box shows the link menu.
   const [linkAnchor, setLinkAnchor] = useState<HTMLAnchorElement | null>(null);
@@ -651,6 +654,21 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, onEl
               <div key={el.id} {...common} className="sl-el sl-image" style={{ ...box, ...(el.clip ? { clipPath: el.clip } : {}), ...(el.crop ? { overflow: 'hidden' } : {}), ...(el.opacity !== undefined ? { opacity: el.opacity } : {}) }}>
                 {el.duotone && <DuotoneFilter id={`sl-duo-${el.id}`} tones={el.duotone} />}
                 <img src={el.src} alt="" draggable={false} style={{ ...imageStyle(el), ...(el.duotone ? { filter: `url(#sl-duo-${el.id})` } : {}) }} />
+              </div>
+            );
+          }
+          if (el.type === 'video') {
+            // A player takes its own clicks (they must not move the element or advance the show).
+            if (playVideo === true || playVideo === el.id) {
+              return (
+                <div key={el.id} className="sl-el sl-video" style={box} data-el={el.id} onClick={(e) => e.stopPropagation()}>
+                  <VideoPlayer src={el.src} autoPlay={playVideo === el.id} />
+                </div>
+              );
+            }
+            return (
+              <div key={el.id} {...common} className="sl-el sl-video" style={box}>
+                <VideoPoster src={el.src} />
               </div>
             );
           }

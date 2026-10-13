@@ -95,6 +95,22 @@ describe('document markdown', () => {
     expect(inlineToMarkdown(p)).toBe('a  **b**  c');
   });
 
+  it('reads and writes a video as a picture whose address is a video', () => {
+    const doc = markdownToDoc('Watch:\n\n![Demo](https://youtu.be/dQw4w9WgXcQ?t=9)\n\n![Clip 1](/api/files/wvx2szrxf804)\n\n![Pic](https://example.com/a.png)\n');
+    expect(validateDoc(doc)).toBeNull();
+    const node = docNode(doc);
+    const blocks: { type: string; attrs: Record<string, unknown> }[] = [];
+    node.forEach((n) => blocks.push({ type: n.type.name, attrs: n.attrs }));
+    expect(blocks.map((b) => b.type)).toEqual(['paragraph', 'video', 'video', 'image']);
+    expect(blocks[1].attrs).toMatchObject({ src: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Demo' });
+    expect(blocks[2].attrs).toMatchObject({ src: '/api/files/wvx2szrxf804' });
+    expect(docToMarkdown(node)).toContain('![Demo](https://www.youtube.com/watch?v=dQw4w9WgXcQ)\n\n![Clip 1](/api/files/wvx2szrxf804)');
+    expect(docText(node)).toContain('[video: Demo]');
+    // A video block with any other address is not a valid document.
+    const bad = JSON.parse(JSON.stringify(doc).replace('/api/files/wvx2szrxf804', 'https://example.com/clip.mp4'));
+    expect(validateDoc(bad)).toMatch(/Invalid video/);
+  });
+
   it('ignores unsafe links and images, and accepts an empty document', () => {
     const n = markdownToNodes('[x](javascript:alert(1)) and ![y](javascript:alert(1))');
     expect(n[0].textContent).toBe('[x](javascript:alert(1)) and ![y](javascript:alert(1))');

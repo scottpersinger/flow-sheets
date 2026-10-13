@@ -78,14 +78,15 @@ export const ICONS = {
   outdent: 'M4 6h16M10 10h10M10 14h10M4 18h16M7 9l-3 3 3 3',
   indent: 'M4 6h16M10 10h10M10 14h10M4 18h16M4 9l3 3-3 3',
   image: 'M4 5h16v14H4zM8 10a1.2 1.2 0 1 0 0-.1M5 18l5-5 3 3 3-3 4 4',
+  video: 'M4 5h16v14H4zM10 9.2v5.6l5-2.8z',
   rule: 'M4 12h16',
   clear: 'M6 4h9l3 3-9 9H6zM4 20h16M9 16l-3-3',
 };
 
-export function DocToolbar({ ctl, onLink, onInsertImage, onEditImage }: { ctl: DocController; onLink(): void; onInsertImage(): void; /** Open the image editor on the selected picture; without it the button is not shown. */ onEditImage?(): void }) {
+export function DocToolbar({ ctl, onLink, onInsertImage, onInsertVideo, onEditImage }: { ctl: DocController; onLink(): void; onInsertImage(): void; /** Open the video dialog; without it the button is not shown. */ onInsertVideo?(): void; /** Open the image editor on the selected picture; without it the button is not shown. */ onEditImage?(): void }) {
   const block = ctl.currentBlock();
   const inList = block === 'bullet_list' || block === 'ordered_list';
-  const isNode = block === 'image' || block === 'horizontal_rule';
+  const isNode = block === 'image' || block === 'video' || block === 'horizontal_rule';
   const align = ctl.currentAlign();
   const color = ctl.markAt('color')?.attrs.color as string | undefined;
   const highlight = ctl.markAt('highlight')?.attrs.color as string | undefined;
@@ -187,6 +188,11 @@ export function DocToolbar({ ctl, onLink, onInsertImage, onEditImage }: { ctl: D
       <Btn title="Insert image" onClick={onInsertImage}>
         {icon(ICONS.image)}
       </Btn>
+      {onInsertVideo && (
+        <Btn title="Insert video" onClick={onInsertVideo}>
+          {icon(ICONS.video)}
+        </Btn>
+      )}
       {onEditImage && block === 'image' && (
         <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={onEditImage} title="Crop, rotate, adjust and draw on the picture (or double-click it)">
           Edit image

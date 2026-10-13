@@ -94,6 +94,12 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const caretRef = useRef<{ x: number; y: number } | null>(null); // where a click-to-edit landed, for the caret
+  // The video playing in place (a double-click on it), for as long as it alone is selected.
+  const [played, setPlaying] = useState<string | null>(null);
+  const playing = played && ctl.selection.length === 1 && ctl.selection[0] === played ? played : null;
+  useEffect(() => {
+    if (played && !playing) setPlaying(null);
+  }, [played, playing]);
 
   // 1 fits the slide to the window. It is how the user looks at the deck, not part of it, so it is not saved.
   const [zoom, setZoom] = useState(1);
@@ -225,7 +231,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     for (const el of slide.elements) {
       if (!ids.includes(el.id)) continue;
       boxes[el.id] = { x: el.x, y: el.y, w: el.w, h: el.h };
-      ratios[el.id] = el.type === 'image' && el.w > 0 ? el.h / el.w : null;
+      ratios[el.id] = (el.type === 'image' || el.type === 'video') && el.w > 0 ? el.h / el.w : null;
     }
     const d: Drag = { kind, handle, arc, startX: e.clientX, startY: e.clientY, boxes, ratios, preview: {}, moved: false };
     dragRef.current = d;
@@ -375,6 +381,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
     const el = through(e, hit);
     if (el.type === 'text' || el.type === 'shape') ctl.startEditing(el.id);
     else if (el.type === 'image') onEditImage?.(el.id);
+    else if (el.type === 'video') setPlaying(el.id);
   };
 
   // The id is captured here, not read at commit time: a click outside the box ends editing first, and the
@@ -475,7 +482,7 @@ export function DeckEditor({ ctl, onImageFiles, onEditImage }: { ctl: DeckContro
         onImageFiles(files);
       }}
     >
-      <SlideView slide={slide} theme={ctl.deck.theme} scale={scale} preview={preview} editing={editing} onElementMouseDown={onElementMouseDown} onElementDoubleClick={onElementDoubleClick} className="deck-canvas-slide">
+      <SlideView slide={slide} theme={ctl.deck.theme} scale={scale} preview={preview} editing={editing} onElementMouseDown={onElementMouseDown} onElementDoubleClick={onElementDoubleClick} playVideo={playing} className="deck-canvas-slide">
         {lineDrag?.mode === 'draw' && (
           <div className="sl-el" style={{ left: lineDrag.line.x, top: lineDrag.line.y, width: lineDrag.line.w, height: lineDrag.line.h, pointerEvents: 'none' }}>
             <LineDrawing el={lineDrag.line} theme={theme} />

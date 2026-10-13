@@ -1,5 +1,6 @@
 // Deck tools the agent calls, run in the browser against the open presentation's live store, so edits render,
 // autosave and undo (as one step per agent request) like the user's own.
+import { videoAddress, youtubeId } from '../../../shared/video.ts';
 import { MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentImage, type ClientToolCall } from '../../../shared/agent/protocol.ts';
 import {
   buildSlide,
@@ -74,7 +75,8 @@ export async function keepDeckPictures(call: ClientToolCall, keep: (url: string)
   if (call.name !== 'add_slides' && call.name !== 'update_slide' && call.name !== 'edit_elements') return call;
   const kept = new Map<string, string>();
   const stored = async (src: unknown): Promise<unknown> => {
-    if (typeof src !== 'string' || !/^https?:\/\/\S+$/i.test(src)) return src;
+    // A YouTube link is a video's address, not a picture to keep.
+    if (typeof src !== 'string' || !/^https?:\/\/\S+$/i.test(src) || youtubeId(src)) return src;
     if (!kept.has(src)) {
       try {
         kept.set(src, await keep(src));
@@ -154,13 +156,13 @@ function applyElementSpec(existing: SlideElement | undefined, s: Input, byId: Ma
     return applyLineSpec(existing?.id ?? newId(), existing as LineElement | undefined, s, byId);
   }
   if (existing?.type === 'line') throw new ToolError(`Element ${existing.id} is a line; its type cannot change. Remove it and add a new one.`);
-  if (!type) throw new ToolError('A new element needs a type: text, image or shape.');
+  if (!type) throw new ToolError('A new element needs a type: text, image, video or shape.');
   if (existing && s.type && s.type !== existing.type) throw new ToolError(`Element ${existing.id} is a ${existing.type}; its type cannot change. Remove it and add a new one.`);
   const box = {
     x: typeof s.x === 'number' ? s.x : (existing?.x ?? 80),
     y: typeof s.y === 'number' ? s.y : (existing?.y ?? 80),
-    w: typeof s.w === 'number' ? s.w : (existing?.w ?? (type === 'text' ? 400 : type === 'image' ? 320 : 200)),
-    h: typeof s.h === 'number' ? s.h : (existing?.h ?? (type === 'text' ? 80 : type === 'image' ? 180 : 120)),
+    w: typeof s.w === 'number' ? s.w : (existing?.w ?? (type === 'text' ? 400 : type === 'image' || type === 'video' ? 320 : 200)),
+    h: typeof s.h === 'number' ? s.h : (existing?.h ?? (type === 'text' ? 80 : type === 'image' || type === 'video' ? 180 : 120)),
   };
   const id = existing?.id ?? newId();
   if (type === 'text') {
@@ -190,6 +192,12 @@ function applyElementSpec(existing: SlideElement | undefined, s: Input, byId: Ma
     if (!src) throw new ToolError('An image element needs src.');
     const fit = (s.fit as 'contain' | 'cover' | undefined) ?? prev?.fit;
     return { id, type: 'image', ...box, src, ...(fit ? { fit } : {}) };
+  }
+  if (type === 'video') {
+    const prev = existing?.type === 'video' ? existing : undefined;
+    const src = s.src !== undefined ? (typeof s.src === 'string' ? videoAddress(s.src) : null) : prev?.src;
+    if (!src) throw new ToolError('A video element needs src: a YouTube link, or the /api/files/... address of a video among the stored files (list_files).');
+    return { id, type: 'video', ...box, src };
   }
   const prev = existing?.type === 'shape' ? existing : undefined;
   const shape = (s.shape as ShapeElement['shape'] | undefined) ?? prev?.shape ?? 'rect';

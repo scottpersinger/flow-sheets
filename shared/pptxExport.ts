@@ -1,6 +1,7 @@
 // Export a deck as a PowerPoint file with pptxgenjs. Our slide is 960×540 points at 96 per inch, which is
 // exactly PowerPoint's 16:9 layout (10 × 5.625 inches), so positions map 1:1. Runs in the browser (File →
 // Download as PowerPoint) and in Node (tests); the caller loads images, since that differs between the two.
+import { youtubeId } from './video.ts';
 import type PptxGenJS from 'pptxgenjs';
 import { fillColor, ROLE_SIZE, THEMES, type ArrowStyle, type Deck, type SlideElement, type TextElement, type TextRun } from './deck.ts';
 
@@ -83,6 +84,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
   const theme = THEMES[deck.theme];
   const warnings: string[] = [];
   let missingImages = 0;
+  let storedVideos = 0;
 
   for (const slide of deck.slides) {
     const s = pres.addSlide();
@@ -92,6 +94,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     if (slide.notes) s.addNotes(slide.notes);
   }
   if (missingImages) warnings.push(`${missingImages} image${missingImages === 1 ? '' : 's'} could not be loaded and ${missingImages === 1 ? 'was' : 'were'} left as a placeholder.`);
+  if (storedVideos) warnings.push(`${storedVideos} video${storedVideos === 1 ? ' is' : 's are'} not in the file: a video from your files stays in Universal Docs, and its place is marked on the slide.`);
   return { pres, warnings };
 
   async function addElement(s: PptxGenJS.Slide, el: SlideElement): Promise<void> {
@@ -131,6 +134,16 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
       } else {
         missingImages++;
         s.addText('Image unavailable', { ...box, shape: pres.ShapeType.rect, line: { color: '9AA0A6', width: 1 }, fill: { type: 'none' }, align: 'center', valign: 'middle', fontSize: 12, color: '9AA0A6' });
+      }
+      return;
+    }
+    if (el.type === 'video') {
+      // A YouTube video plays in PowerPoint too; a stored file is not copied into the presentation.
+      const yt = youtubeId(el.src);
+      if (yt) s.addMedia({ type: 'online', link: `https://www.youtube.com/embed/${yt}`, x: box.x, y: box.y, w: box.w, h: box.h });
+      else {
+        storedVideos++;
+        s.addText('Video', { ...box, shape: pres.ShapeType.rect, line: { color: '9AA0A6', width: 1 }, fill: { color: '202124' }, align: 'center', valign: 'middle', fontSize: 14, color: 'FFFFFF' });
       }
       return;
     }

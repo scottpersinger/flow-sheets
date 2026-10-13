@@ -26,6 +26,7 @@ import { useDeckFonts } from '../deck/fonts.ts';
 import { useFavicon } from '../favicon.ts';
 import { DeckToolbar, LAYOUT_NAMES, shapeMenuItems } from '../deck/DeckToolbar.tsx';
 import { downloadPptx } from '../deck/pptx.ts';
+import { VideoDialog } from '../components/VideoDialog.tsx';
 import { PresentMode } from '../deck/PresentMode.tsx';
 import { checkPptxFile, pickPptxFile } from '../importFile.ts';
 import { SlideView } from '../deck/SlideView.tsx';
@@ -190,6 +191,7 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
   // The picture element open in the image editor. Saving stores the edited picture as a new image and puts it
   // on the slide as one step, so undo brings the picture back as it was.
   const [editingImage, setEditingImage] = useState<string | null>(null);
+  const [insertingVideo, setInsertingVideo] = useState(false);
   const editedPicture = ctl.deck.slides.flatMap((s) => s.elements).find((e) => e.id === editingImage && e.type === 'image');
   const saveEditedImage = async (id: string, image: Blob, sizes: PictureSizes) => {
     const url = await uploadImageFile(image);
@@ -416,6 +418,7 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
         { label: 'Text box', action: () => ctl.addText('body') },
         { label: 'Title', action: () => ctl.addText('title') },
         { label: 'Image…', action: () => void insertImage() },
+        { label: 'Video…', action: () => setInsertingVideo(true) },
         { label: 'Shape', submenu: shapeMenuItems(ctl) },
       ],
     },
@@ -504,7 +507,7 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
               <Account before={() => ctl.saver.flush()} />
             </div>
           </header>
-          <DeckToolbar ctl={ctl} onPresent={() => ctl.setPresenting(true)} onInsertImage={() => void insertImage()} onEditImage={setEditingImage} />
+          <DeckToolbar ctl={ctl} onPresent={() => ctl.setPresenting(true)} onInsertImage={() => void insertImage()} onInsertVideo={() => setInsertingVideo(true)} onEditImage={setEditingImage} />
           {importWarnings.length > 0 && (
             <div className="import-banner" role="status">
               <div>
@@ -548,6 +551,7 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
       )}
 
       {ctl.presenting && <PresentMode ctl={ctl} onExit={() => ctl.setPresenting(false)} />}
+      {insertingVideo && <VideoDialog folder={meta.folder} onInsert={(src) => ctl.addVideo(src)} onClose={() => setInsertingVideo(false)} />}
       {editingImage && editedPicture?.type === 'image' && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editedPicture.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
 
       {dialog?.kind === 'rename' && <PromptModal title="Rename presentation" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}

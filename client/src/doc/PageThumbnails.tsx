@@ -36,6 +36,8 @@ export function PageThumbnails({ ctl, width, scrollRef }: { ctl: DocController; 
         copy.removeAttribute('contenteditable');
         copy.classList.remove('ProseMirror-focused');
         copy.querySelectorAll('.ProseMirror-selectednode').forEach((el) => el.classList.remove('ProseMirror-selectednode'));
+        // A video playing in the page is its still here, not a second player.
+        copy.querySelectorAll('.doc-video-player').forEach((el) => el.remove());
         column.append(copy);
         clip.replaceChildren(column);
       });

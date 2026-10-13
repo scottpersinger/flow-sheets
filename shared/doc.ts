@@ -9,6 +9,7 @@
 import { Node as PMNode, Schema, type DOMOutputSpec, type MarkSpec, type NodeSpec } from 'prosemirror-model';
 import { safeLinkUrl } from './links.ts';
 import { checkCellImage } from './types.ts';
+import { checkVideo, youtubeId, youtubePoster } from './video.ts';
 
 export interface Doc {
   version: 1;
@@ -343,6 +344,35 @@ const nodes: Record<string, NodeSpec> = {
       ['img', { src: node.attrs.src, alt: node.attrs.alt || null, ...(node.attrs.width ? { style: `width: ${node.attrs.width}px` } : {}) }],
     ],
   },
+  // A video that plays in the page (shared/video.ts). Outside the editor, which has its own view of it
+  // (client/src/doc/DocEditor.tsx), it is its still: YouTube's picture, or the stored file's player.
+  video: {
+    group: 'block',
+    draggable: true,
+    selectable: true,
+    attrs: { src: {}, title: { default: '' }, width: { default: null }, align: { default: null } },
+    parseDOM: [
+      {
+        tag: 'figure[data-video]',
+        getAttrs: (dom) => {
+          if (typeof dom === 'string') return false;
+          const src = dom.getAttribute('data-video') ?? '';
+          if (checkVideo(src)) return false;
+          const w = Number.parseInt(dom.getAttribute('data-width') ?? '', 10);
+          return { src, title: dom.getAttribute('data-title') ?? '', width: Number.isFinite(w) && w > 0 ? w : null, align: null };
+        },
+      },
+    ],
+    toDOM: (node) => {
+      const { src, title, width, align } = node.attrs as { src: string; title: string; width: number | null; align: string | null };
+      const yt = youtubeId(src);
+      return [
+        'figure',
+        { class: 'doc-video', 'data-video': src, ...(title ? { 'data-title': title } : {}), ...(width ? { 'data-width': String(width) } : {}), ...(align ? { 'data-align': align } : {}) },
+        ['div', { class: 'doc-video-frame', ...(width ? { style: `width: ${width}px` } : {}) }, yt ? ['img', { src: youtubePoster(yt), alt: title || 'YouTube video' }] : ['video', { src, preload: 'metadata', controls: '' }]],
+      ];
+    },
+  },
   bullet_list: { content: 'list_item+', group: 'block', parseDOM: [{ tag: 'ul' }], toDOM: () => ['ul', 0] },
   ordered_list: {
     content: 'list_item+',
@@ -474,6 +504,12 @@ export function validateDoc(d: unknown): string | null {
       if (p) problem = `Invalid image: ${p}`;
       if (n.attrs.width !== null && (typeof n.attrs.width !== 'number' || n.attrs.width < 1 || n.attrs.width > 10000)) problem = 'Invalid image width';
     }
+    if (n.type.name === 'video') {
+      const p = checkVideo(n.attrs.src);
+      if (p) problem = `Invalid video: ${p}`;
+      if (typeof n.attrs.title !== 'string' || n.attrs.title.length > 300) problem = 'Invalid video title';
+      if (n.attrs.width !== null && (typeof n.attrs.width !== 'number' || n.attrs.width < 1 || n.attrs.width > 10000)) problem = 'Invalid video width';
+    }
     if ((n.attrs.align ?? null) !== null && !ALIGNMENTS.includes(n.attrs.align)) problem = 'Invalid alignment';
     const spacingProblem = n.attrs.spacing !== undefined ? checkSpacing(n.attrs.spacing) : null;
     if (spacingProblem) problem = spacingProblem;
@@ -491,17 +527,18 @@ export function validateDoc(d: unknown): string | null {
 
 /** The plain text of a document, one line per block, for searching and previews. */
 export function docText(node: PMNode): string {
-  return node.textBetween(0, node.content.size, '\n', (leaf) => (leaf.type.name === 'image' ? `[image${leaf.attrs.alt ? `: ${leaf.attrs.alt}` : ''}]` : leaf.type.name === 'hard_break' ? '\n' : ''));
+  return node.textBetween(0, node.content.size, '\n', (leaf) => (leaf.type.name === 'image' ? `[image${leaf.attrs.alt ? `: ${leaf.attrs.alt}` : ''}]` : leaf.type.name === 'video' ? `[video${leaf.attrs.title ? `: ${leaf.attrs.title}` : ''}]` : leaf.type.name === 'hard_break' ? '\n' : ''));
 }
 
 /** The kind of a top-level block as the assistant sees it. */
-export function blockType(node: PMNode): BlockType | 'image' | 'horizontal_rule' | 'page_break' {
+export function blockType(node: PMNode): BlockType | 'image' | 'video' | 'horizontal_rule' | 'page_break' {
   switch (node.type.name) {
     case 'heading':
       return `heading${node.attrs.level as HeadingLevel}`;
     case 'title':
     case 'subtitle':
     case 'image':
+    case 'video':
     case 'horizontal_rule':
     case 'page_break':
     case 'bullet_list':

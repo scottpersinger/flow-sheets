@@ -23,6 +23,13 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   `create_doc`, `read_other_doc`) work on them too, through `client/src/agent/markdownTools.ts` and
   `shared/agent/markdownBlocks.ts` (blocks are the top-level Markdown constructs, edits are text ranges
   applied through the editor so they are undoable); the formatting and page tools do not.
+- A video in a presentation or a document is named by its address (`shared/video.ts`): a stored video
+  file (`/api/files/<id>`) or a YouTube video's watch address. It is a slide element of type `video`
+  (`shared/deck.ts`) and a `video` block in a document (`shared/doc.ts`; in Markdown an image whose address
+  is a video's). `VideoDialog` (`client/src/components/VideoDialog.tsx`: upload, YouTube link, or one of the
+  user's files) inserts one in either editor. It is drawn as its still until played (`VideoPlayer.tsx`; in a
+  document, `VideoView` in `DocEditor.tsx`): a double-click on a slide, the play button in a document, and
+  always in the show.
 - CSV files are spreadsheets stored as CSV text (`shared/csv.ts`; `SheetMeta.format === 'csv'`, the `format`
   column in `server/sheets.ts`). `SheetStore.load` parses the text into a one-tab workbook and `save` writes
   CSV back for as long as the workbook holds only plain values, so everything that reads spreadsheets works

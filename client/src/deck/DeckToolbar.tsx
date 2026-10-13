@@ -1,6 +1,6 @@
 // Toolbar for the deck editor: slides, layout, theme, inserting elements, text styling and arrangement.
 import { useEffect, useState, type ReactNode } from 'react';
-import { LAYOUT_IDS, THEME_IDS, THEMES, type ArrowStyle, type LayoutId, type LineElement, type LineKind, type TextElement, type ThemeId } from '../../../shared/deck.ts';
+import { buildSlide, LAYOUT_IDS, SLIDE_H, SLIDE_W, THEME_IDS, THEMES, type ArrowStyle, type LayoutId, type LineElement, type LineKind, type TextElement, type ThemeId } from '../../../shared/deck.ts';
 import { ARROW_STYLES, DASH_STYLES, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPE_KINDS, SHAPES } from '../../../shared/shapes.ts';
 import { MOD } from '../commands.ts';
@@ -69,6 +69,101 @@ function ShapePicker({ ctl }: { ctl: DeckController }) {
   );
 }
 
+/** Width of a layout's picture in the layout pickers. */
+const LAYOUT_THUMB_W = 132;
+/** Each layout as an empty slide, with the placeholders a new slide of it has. */
+const LAYOUT_SAMPLES = Object.fromEntries(
+  LAYOUT_IDS.map((l) => {
+    let n = 0;
+    return [l, buildSlide(l, {}, () => `layout-${l}-${n++}`)];
+  }),
+) as Record<LayoutId, ReturnType<typeof buildSlide>>;
+
+/**
+ * A layout as a picture frame: the slide in the deck's colors with a bar where each line of text goes and a
+ * box where the picture goes, drawn from the layout's own elements so it is always where they really are.
+ */
+function LayoutThumb({ layout, theme: themeId }: { layout: LayoutId; theme: ThemeId }) {
+  const theme = THEMES[themeId];
+  const marks: ReactNode[] = [];
+  for (const el of LAYOUT_SAMPLES[layout].elements) {
+    if (el.type === 'text') {
+      const role = el.role ?? 'body';
+      const align = el.style?.align ?? 'left';
+      // One bar for a title, subtitle or caption; a few lines for body text.
+      const bar = (key: string, y: number, h: number, share: number, fill: string, opacity = 1) => {
+        const w = el.w * share;
+        const x = align === 'center' ? el.x + (el.w - w) / 2 : el.x;
+        marks.push(<rect key={key} x={x} y={y} width={w} height={h} rx={h / 2} fill={fill} opacity={opacity} />);
+      };
+      if (role === 'body') [0.9, 0.72, 0.84, 0.55].forEach((share, k) => bar(`${el.id}-${k}`, el.y + 14 + k * 52, 20, share, theme.text, 0.35));
+      else if (role === 'title') bar(el.id, el.style?.valign === 'bottom' ? el.y + el.h - 46 : el.y, 40, align === 'center' ? 0.62 : 0.5, theme.heading);
+      else bar(el.id, el.y + 4, 22, 0.36, theme.muted, 0.8);
+    } else if (el.type === 'shape' && el.text) {
+      // The picture's place: a frame with a landscape in it.
+      const cx = el.x + el.w / 2;
+      const cy = el.y + el.h / 2;
+      marks.push(
+        <g key={el.id} fill="none" stroke={theme.muted} strokeWidth={8} strokeLinejoin="round">
+          <rect x={el.x} y={el.y} width={el.w} height={el.h} rx={14} fill={theme.muted} fillOpacity={0.12} />
+          <path d={`M${cx - 110} ${cy + 60}l70 -90 55 60 40 -40 55 70z`} fill={theme.muted} fillOpacity={0.5} stroke="none" />
+          <circle cx={cx + 60} cy={cy - 50} r={20} fill={theme.muted} fillOpacity={0.5} stroke="none" />
+        </g>,
+      );
+    } else if (el.type === 'shape') marks.push(<rect key={el.id} x={el.x} y={el.y} width={el.w} height={Math.max(el.h, 12)} fill={theme.accent} />);
+  }
+  return (
+    <svg className="layout-thumb" width={LAYOUT_THUMB_W} height={(LAYOUT_THUMB_W * SLIDE_H) / SLIDE_W} viewBox={`0 0 ${SLIDE_W} ${SLIDE_H}`} aria-hidden="true">
+      <rect width={SLIDE_W} height={SLIDE_H} fill={theme.bg} />
+      {marks}
+    </svg>
+  );
+}
+
+/** A toolbar menu of the slide layouts, each drawn as a small slide in the deck's theme. */
+function LayoutPicker({ title, label, theme, current, onPick }: { title: string; label: ReactNode; theme: ThemeId; /** The layout to mark as the one in use. */ current?: LayoutId; onPick(layout: LayoutId): void }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [open]);
+  return (
+    <div className="tb-drop" onMouseDown={(e) => e.stopPropagation()}>
+      <Btn title={title} active={open} onClick={() => setOpen(!open)}>
+        {label} <span className="tb-caret">▾</span>
+      </Btn>
+      {open && (
+        <div className="layout-picker" role="menu" aria-label={title}>
+          {LAYOUT_IDS.map((l) => (
+            <button
+              key={l}
+              role="menuitemradio"
+              aria-checked={current === l}
+              className={current === l ? 'current' : undefined}
+              title={LAYOUT_NAMES[l]}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onPick(l);
+                setOpen(false);
+              }}
+            >
+              <LayoutThumb layout={l} theme={theme} />
+              <span className="layout-name">{LAYOUT_NAMES[l]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const LINE_TOOLS: { name: string; kind: LineKind; arrow: boolean; path: string }[] = [
   { name: 'Line', kind: 'straight', arrow: false, path: 'M4 20L20 4' },
   { name: 'Arrow', kind: 'straight', arrow: true, path: 'M4 20L19 5M12 5h7v7' },
@@ -128,7 +223,7 @@ function Drop({ title, label, items, disabled }: { title: string; label: ReactNo
   );
 }
 
-export function DeckToolbar({ ctl, onPresent, onInsertImage, onEditImage }: { ctl: DeckController; onPresent(): void; onInsertImage(): void; /** Open the image editor on a picture element; without it the button is not shown. */ onEditImage?(id: string): void }) {
+export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEditImage }: { ctl: DeckController; onPresent(): void; onInsertImage(): void; /** Open the video dialog; without it the button is not shown. */ onInsertVideo?(): void; /** Open the image editor on a picture element; without it the button is not shown. */ onEditImage?(id: string): void }) {
   const selected = ctl.selected;
   const texts = selected.filter((e): e is TextElement => e.type === 'text');
   const text = texts[0];
@@ -141,14 +236,12 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onEditImage }: { ct
   const bullets = !!text && text.paragraphs.some((p) => p.bullet);
   const size = text?.style?.size ?? (text ? { title: 40, subtitle: 22, body: 18, caption: 14 }[role] : 18);
 
-  const layoutItems: MenuItem[] = LAYOUT_IDS.map((l) => ({ label: LAYOUT_NAMES[l], checked: ctl.slide.layout === l, action: () => ctl.setLayout(l) }));
-  const newSlideItems: MenuItem[] = LAYOUT_IDS.map((l) => ({ label: LAYOUT_NAMES[l], action: () => ctl.addSlide(l) }));
   const themeItems: MenuItem[] = THEME_IDS.map((t: ThemeId) => ({ label: THEMES[t].name, checked: ctl.deck.theme === t, action: () => ctl.setTheme(t) }));
 
   return (
     <div className="toolbar deck-toolbar" role="toolbar" aria-label="Deck toolbar">
-      <Drop title="New slide" label="+ Slide" items={newSlideItems} />
-      <Drop title="Layout" label="Layout" items={layoutItems} />
+      <LayoutPicker title="New slide" label="+ Slide" theme={ctl.deck.theme} onPick={(l) => ctl.addSlide(l)} />
+      <LayoutPicker title="Layout" label="Layout" theme={ctl.deck.theme} current={ctl.slide.layout} onPick={(l) => ctl.setLayout(l)} />
       <Drop title="Theme" label="Theme" items={themeItems} />
       <span className="tb-sep" />
       <Btn title="Text box" onClick={() => ctl.addText('body')}>
@@ -161,6 +254,14 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onEditImage }: { ct
           <path d="M5 18l5-5 3 3 3-3 4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
         </svg>
       </Btn>
+      {onInsertVideo && (
+        <Btn title="Video" onClick={onInsertVideo}>
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M10 9.2v5.6l5-2.8z" fill="currentColor" />
+          </svg>
+        </Btn>
+      )}
       <ShapePicker ctl={ctl} />
       <LinePicker ctl={ctl} />
       {/* The controls for a kind of element are there while one is selected, so the bar holds what can be

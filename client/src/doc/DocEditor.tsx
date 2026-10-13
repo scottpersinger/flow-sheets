@@ -13,6 +13,7 @@ import { InlinePrompt } from '../agent/InlinePrompt.tsx';
 import { ICONS } from './DocToolbar.tsx';
 import { docStyleCss, docStyleOf, PAGE_GAP, pageMetrics, pageText, type PageSetup } from '../../../shared/doc.ts';
 import { CELL_IMAGE_TYPES } from '../../../shared/types.ts';
+import { youtubeEmbedUrl, youtubeId, youtubePoster } from '../../../shared/video.ts';
 import type { DocController } from './controller.ts';
 
 /** Image block with a drag handle to resize it; the new width is stored when the drag ends. */
@@ -105,6 +106,169 @@ class ImageView implements NodeView {
     const move = (ev: MouseEvent) => {
       w = Math.max(40, Math.min(max, Math.round((startW + ev.clientX - startX) / scale)));
       this.img.style.width = `${w}px`;
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      this.dragging = false;
+      const at = this.getPos();
+      if (at === undefined) return;
+      const tr = this.view.state.tr.setNodeMarkup(at, undefined, { ...this.node.attrs, width: w });
+      tr.setSelection(NodeSelection.create(tr.doc, at));
+      this.view.dispatch(tr);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+}
+
+/**
+ * Video block: its still with a play button, which puts the player over the still, and a drag handle to
+ * resize it. A click on the still selects the block; the player takes its own clicks.
+ */
+class VideoView implements NodeView {
+  dom: HTMLElement;
+  private frame: HTMLElement;
+  private still: HTMLImageElement | HTMLVideoElement | null = null;
+  private player: HTMLElement | null = null;
+  private play: HTMLButtonElement;
+  private handle: HTMLElement;
+  private node: PMNode;
+  private view: EditorView;
+  private getPos: () => number | undefined;
+  private dragging = false;
+
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+    this.node = node;
+    this.view = view;
+    this.getPos = getPos;
+    this.dom = document.createElement('figure');
+    this.dom.className = 'doc-video';
+    this.frame = document.createElement('div');
+    this.frame.className = 'doc-video-frame';
+    this.play = document.createElement('button');
+    this.play.type = 'button';
+    this.play.className = 'doc-video-play';
+    this.play.title = 'Play';
+    this.play.setAttribute('aria-label', 'Play video');
+    this.play.addEventListener('click', this.start);
+    this.handle = document.createElement('span');
+    this.handle.className = 'doc-image-handle';
+    this.handle.title = 'Drag to resize';
+    this.handle.addEventListener('mousedown', this.startResize);
+    this.frame.append(this.play, this.handle);
+    this.dom.append(this.frame);
+    this.render(node, null);
+  }
+
+  private render(node: PMNode, before: string | null): void {
+    const { src, title, width, align } = node.attrs as { src: string; title: string; width: number | null; align: string | null };
+    if (src !== before) {
+      this.stop();
+      this.still?.remove();
+      const yt = youtubeId(src);
+      if (yt) {
+        const img = document.createElement('img');
+        img.src = youtubePoster(yt);
+        img.alt = '';
+        this.still = img;
+      } else {
+        const video = document.createElement('video');
+        video.src = `${src}#t=0.1`;
+        video.preload = 'metadata';
+        video.muted = true;
+        video.tabIndex = -1;
+        this.still = video;
+      }
+      this.still.className = 'doc-video-still';
+      this.still.draggable = false;
+      this.frame.prepend(this.still);
+    }
+    this.dom.title = title || '';
+    this.frame.style.width = width ? `${width}px` : '';
+    if (align) this.dom.dataset.align = align;
+    else delete this.dom.dataset.align;
+  }
+
+  private start = (e: MouseEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (this.player) return;
+    const src = String(this.node.attrs.src);
+    const yt = youtubeId(src);
+    if (yt) {
+      const frame = document.createElement('iframe');
+      frame.src = youtubeEmbedUrl(yt, true);
+      frame.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+      frame.allowFullscreen = true;
+      frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      frame.title = String(this.node.attrs.title || 'YouTube video');
+      this.player = frame;
+    } else {
+      const video = document.createElement('video');
+      video.src = src;
+      video.controls = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      this.player = video;
+    }
+    this.player.className = 'doc-video-player';
+    this.frame.append(this.player);
+    this.dom.classList.add('playing');
+  };
+
+  private stop(): void {
+    this.player?.remove();
+    this.player = null;
+    this.dom.classList.remove('playing');
+  }
+
+  update(node: PMNode): boolean {
+    if (node.type !== this.node.type) return false;
+    const before = String(this.node.attrs.src);
+    this.node = node;
+    this.render(node, before);
+    return true;
+  }
+
+  selectNode(): void {
+    this.dom.classList.add('selected');
+  }
+
+  deselectNode(): void {
+    this.dom.classList.remove('selected');
+  }
+
+  stopEvent(e: Event): boolean {
+    const t = e.target as Node | null;
+    return this.dragging || t === this.handle || t === this.play || (!!this.player && this.player.contains(t));
+  }
+
+  ignoreMutation(): boolean {
+    return true;
+  }
+
+  destroy(): void {
+    this.play.removeEventListener('click', this.start);
+    this.handle.removeEventListener('mousedown', this.startResize);
+    this.stop();
+  }
+
+  private startResize = (e: MouseEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    const pos = this.getPos();
+    if (pos === undefined) return;
+    this.dragging = true;
+    this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
+    const startX = e.clientX;
+    const startW = this.frame.getBoundingClientRect().width;
+    const scale = this.view.dom.offsetWidth ? this.view.dom.getBoundingClientRect().width / this.view.dom.offsetWidth : 1;
+    const max = this.view.dom.clientWidth - 2 * Number.parseFloat(getComputedStyle(this.view.dom).paddingLeft || '0');
+    let w = Math.round(startW / scale);
+    const move = (ev: MouseEvent) => {
+      w = Math.max(120, Math.min(max, Math.round((startW + ev.clientX - startX) / scale)));
+      this.frame.style.width = `${w}px`;
     };
     const up = () => {
       window.removeEventListener('mousemove', move);
@@ -238,7 +402,7 @@ export function DocEditor({ ctl, onImageFiles, onScale, onEditImage }: { ctl: Do
       state: ctl.state,
       dispatchTransaction: (tr) => ctl.dispatch(tr),
       plugins: [dropCursor({ color: '#1a73e8', width: 2 }), gapCursor()],
-      nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos, () => editRef.current?.()) },
+      nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos, () => editRef.current?.()), video: (node, v, getPos) => new VideoView(node, v, getPos) },
       // While the prompt to the assistant has the focus the browser draws no cursor or selection here, so draw them.
       decorations: (state) => {
         const sel = state.selection;
@@ -366,6 +530,7 @@ export function DocPrint({ ctl }: { ctl: DocController }) {
       const copy = source.cloneNode(true) as HTMLElement;
       copy.removeAttribute('contenteditable');
       copy.classList.remove('ProseMirror-focused');
+      copy.querySelectorAll('.doc-video-player').forEach((el) => el.remove());
       column.append(copy);
       clip.replaceChildren(column);
     });

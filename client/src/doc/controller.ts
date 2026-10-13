@@ -17,7 +17,7 @@ import { CLOSE_HISTORY_META, DocStore } from './store.ts';
 const s = docSchema;
 const n = s.nodes;
 
-export type CurrentBlock = BlockType | 'image' | 'horizontal_rule';
+export type CurrentBlock = BlockType | 'image' | 'video' | 'horizontal_rule';
 
 export class DocController {
   readonly store: DocStore;
@@ -392,7 +392,7 @@ export class DocController {
       else tr.removeMark(from, to);
       this.state.doc.nodesBetween(from, to, (node, pos) => {
         if (node.type === n.heading || node.type === n.title || node.type === n.subtitle) tr.setNodeMarkup(pos, n.paragraph, { align: node.attrs.align });
-        else if ((node.type === n.paragraph || node.type === n.image) && node.attrs.align) tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: null });
+        else if ((node.type === n.paragraph || node.type === n.image || node.type === n.video) && node.attrs.align) tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: null });
       });
     });
     this.focus();
@@ -422,6 +422,7 @@ export class DocController {
     const sel = this.state.selection;
     if (sel instanceof NodeSelection) {
       if (sel.node.type === n.image) return 'image';
+      if (sel.node.type === n.video) return 'video';
       if (sel.node.type === n.horizontal_rule) return 'horizontal_rule';
     }
     const list = this.listType();
@@ -501,7 +502,7 @@ export class DocController {
     const { from, to } = this.state.selection;
     const ok = this.run((tr) => {
       this.state.doc.nodesBetween(from, to, (node, pos) => {
-        if (node.type === n.paragraph || node.type === n.heading || node.type === n.title || node.type === n.subtitle || node.type === n.image) {
+        if (node.type === n.paragraph || node.type === n.heading || node.type === n.title || node.type === n.subtitle || node.type === n.image || node.type === n.video) {
           const next = align === 'left' ? null : align;
           if ((node.attrs.align ?? null) !== next) tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: next });
         }
@@ -520,6 +521,14 @@ export class DocController {
   /** Add an image block at the cursor (replacing an empty paragraph), with a paragraph after it to type in. */
   insertImage(src: string, attrs: { alt?: string; width?: number | null; align?: Alignment | null } = {}): boolean {
     const node = n.image.create({ src, alt: attrs.alt ?? '', width: attrs.width ?? null, align: attrs.align ?? null });
+    const ok = this.insertBlock(node);
+    this.focus();
+    return ok;
+  }
+
+  /** Add a video block (shared/video.ts) at the cursor, like an image. */
+  insertVideo(src: string, attrs: { title?: string; width?: number | null; align?: Alignment | null } = {}): boolean {
+    const node = n.video.create({ src, title: attrs.title ?? '', width: attrs.width ?? null, align: attrs.align ?? null });
     const ok = this.insertBlock(node);
     this.focus();
     return ok;
