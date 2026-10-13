@@ -3941,6 +3941,37 @@ button.agent-tool-label:hover {
   box-sizing: border-box;
   min-width: 200px;
 }
+/* A ```mermaid block drawn as its diagram (MermaidDiagram.tsx). */
+.markdown-body .md-mermaid {
+  margin: 0 0 16px;
+  overflow-x: auto;
+}
+.md-mermaid-drawing {
+  text-align: center;
+  line-height: 1.2;
+}
+.md-mermaid-drawing svg {
+  max-width: 100%;
+  height: auto;
+}
+.md-mermaid-problem {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fce8e6;
+  color: var(--danger);
+  font-size: 12px;
+  white-space: pre-wrap;
+  font-family: Menlo, Consolas, 'Liberation Mono', monospace;
+}
+.md-mermaid-problem strong {
+  font-family: 'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+}
+.md-mermaid-wait {
+  padding: 24px 0;
+  text-align: center;
+  font-size: 13px;
+}
 .md-preview-empty {
   color: var(--muted);
 }

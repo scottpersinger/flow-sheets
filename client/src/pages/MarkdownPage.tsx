@@ -20,6 +20,9 @@ import { MarkdownEditor, replaceRange, wrapSelection } from '../markdown/Markdow
 import { MarkdownPreview } from '../markdown/MarkdownPreview.tsx';
 import { MARKDOWN_PREVIEW } from '../panelSize.ts';
 
+// Diagrams in the preview: Mermaid is fetched when a document first has one.
+const loadMermaid = () => import('mermaid');
+
 function downloadFile(name: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
   const a = document.createElement('a');
@@ -335,7 +338,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
           <>
             <ResizeHandle panel={preview} side="right" label="Resize preview" className="md-preview-resize" />
             <div className="md-preview" style={{ width: preview.width }} ref={previewRef}>
-              <MarkdownPreview text={ctl.text} />
+              <MarkdownPreview text={ctl.text} loadMermaid={loadMermaid} />
             </div>
           </>
         )}
