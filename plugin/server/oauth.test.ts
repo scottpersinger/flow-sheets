@@ -250,9 +250,13 @@ describe('Device sign-in', () => {
     vi.setSystemTime(Date.now() + 10_000);
     const tokens = await poll(clientId, issued.device_code).then((r) => r.json());
     expect(tokens.token_type).toBe('Bearer');
+    // A week, not the code flow's hour: an agent working by hand may never refresh.
+    expect(tokens.expires_in).toBe(7 * 24 * 60 * 60);
     expect((await mcp(tokens.access_token, list, '/mcp/v2')).status).toBe(200);
-    // Version 1 is what ChatGPT reviewed: a device sign-in never reaches it.
-    expect((await mcp(tokens.access_token, list, '/mcp')).status).toBe(401);
+    // Version 1 is what ChatGPT reviewed: a device sign-in never reaches it, and is told where to go.
+    const v1 = await mcp(tokens.access_token, list, '/mcp');
+    expect(v1.status).toBe(401);
+    expect(await v1.json()).toMatchObject({ error: 'unauthorized', reason: 'wrong_endpoint', error_description: 'This access token is for https://plugin.example/mcp/v2; send your requests there.' });
     // The device code is spent.
     vi.setSystemTime(Date.now() + 10_000);
     expect((await poll(clientId, issued.device_code).then((r) => r.json())).error).toBe('invalid_grant');
@@ -260,6 +264,25 @@ describe('Device sign-in', () => {
     const refreshed = await fetch(`${base}/oauth/token`, form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, resource: V2 })).then((r) => r.json());
     expect((await mcp(refreshed.access_token, list, '/mcp/v2')).status).toBe(200);
     expect((await mcp(refreshed.access_token, list, '/mcp')).status).toBe(401);
+
+    // After the week, the refusal says to refresh (not to sign in again), and refreshing works.
+    vi.setSystemTime(Date.now() + 8 * 24 * 60 * 60 * 1000);
+    const late = await mcp(refreshed.access_token, list, '/mcp/v2');
+    expect(late.status).toBe(401);
+    expect(late.headers.get('www-authenticate')).toContain('error_description="This access token has expired.');
+    const why = await late.json();
+    expect(why.reason).toBe('expired');
+    expect(why.error_description).toContain('POST https://plugin.example/oauth/token as a form with grant_type=refresh_token');
+    const again = await fetch(`${base}/oauth/token`, form({ grant_type: 'refresh_token', refresh_token: refreshed.refresh_token, client_id: clientId })).then((r) => r.json());
+    expect((await mcp(again.access_token, list, '/mcp/v2')).status).toBe(200);
+    // The other refusals name themselves too.
+    const reason = async (token: string | null) => (await (await mcp(token, list, '/mcp/v2')).json()).reason;
+    expect(await reason(null)).toBe('no_token');
+    expect(await reason('nope')).toBe('unknown_token');
+    expect(await reason(again.refresh_token)).toBe('refresh_token_sent');
+    expect(await reason(refreshed.access_token)).toBe('expired');
+    oauth.disconnectAgent('u1', oauth.connectedAgents('u1')[0].id);
+    expect(await reason(again.access_token)).toBe('revoked');
   });
 
   it('refuses /mcp as the resource, and tells the agent when the person declines or the code expires', async () => {

@@ -51,6 +51,9 @@ describe('plugin mounted in the app', () => {
     expect(llms.headers['content-type']).toContain('text/markdown');
     expect(llms.body).toContain('Endpoint: `https://docs.test/mcp/v2`');
     expect(llms.body).toContain('npx -y mcp-remote https://docs.test/mcp/v2 --device-code');
+    // For an agent making the requests itself: the tokens' lifetimes and how to refresh.
+    expect(llms.body).toContain('an `access_token` (good for 7 days) and a `refresh_token` (good for 30 days)');
+    expect(llms.body).toContain('curl -sS -X POST https://docs.test/oauth/token -d grant_type=refresh_token');
   });
 
   it("leaves the app's own routes alone", async () => {

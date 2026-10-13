@@ -1,8 +1,11 @@
+import { DEVICE_ACCESS_TTL_MS, DEVICE_GRANT, REFRESH_TTL_MS } from '../plugin/server/oauth.ts';
+
 // /llms.txt: what the app is and how an agent connects to it, as Markdown. The site itself is a single-page
 // app, so an agent that fetches it without running scripts sees nothing; this is the page it can read.
 
 /** The file for this origin. `mcp` is whether the plugin's MCP server is mounted here (and so worth describing). */
 export function llmsTxt(origin: string, mcp: boolean): string {
+  const days = (ms: number) => Math.round(ms / (24 * 60 * 60 * 1000));
   const about = `# Universal Docs
 
 > Universal Docs is a web app for text documents, Markdown files, spreadsheets and slide presentations, with a place for stored files (PDFs, pictures, videos, web pages). It imports Word, Excel, PowerPoint, CSV and Markdown files.
@@ -45,6 +48,24 @@ Run that once in a terminal. It prints the address ${origin}/oauth/device and a 
 \`\`\`
 
 Do the first sign-in in a terminal before starting the client: a client that launches the command itself usually hides the code and gives up before anyone can enter it. The person can see and disconnect these agents under Settings in the app.
+
+### Connect by hand, over HTTP
+
+An agent that makes the HTTP requests itself (with curl, say) signs in like this. All the token requests are forms (\`application/x-www-form-urlencoded\`).
+
+1. Register once: POST \`${origin}/oauth/register\` with JSON \`{"client_name": "<your name>", "grant_types": ["${DEVICE_GRANT}", "refresh_token"], "token_endpoint_auth_method": "none"}\`. Keep the \`client_id\` it returns.
+2. Ask for a code: POST \`${origin}/oauth/device_authorization\` with \`client_id\` and \`resource=${origin}/mcp/v2\`. It returns \`device_code\`, \`user_code\`, \`verification_uri\` and \`interval\`.
+3. Show the person the \`verification_uri\` and the \`user_code\`, and poll: POST \`${origin}/oauth/token\` with \`grant_type=${DEVICE_GRANT}\`, \`device_code\` and \`client_id\`, every \`interval\` seconds. \`authorization_pending\` means keep polling; \`slow_down\` means wait 5 seconds longer between polls from then on.
+4. Once the person allows it, the response has an \`access_token\` (good for ${days(DEVICE_ACCESS_TTL_MS)} days) and a \`refresh_token\` (good for ${days(REFRESH_TTL_MS)} days). **Save both, and the \`client_id\`, somewhere that outlasts the session** (a file, not a variable): they are what lets you come back without asking the person again.
+5. Call the MCP endpoint: POST \`${origin}/mcp/v2\` with \`Authorization: Bearer <access_token>\`, \`Content-Type: application/json\`, \`Accept: application/json, text/event-stream\` and a JSON-RPC body (\`tools/list\`, \`tools/call\`).
+
+**Do not ask the person for a new code when the access token expires. Refresh instead.** When a request is refused with 401 (its \`reason\` says \`expired\`), or before \`expires_in\` runs out:
+
+\`\`\`sh
+curl -sS -X POST ${origin}/oauth/token -d grant_type=refresh_token -d refresh_token=<refresh_token> -d client_id=<client_id>
+\`\`\`
+
+That returns a new \`access_token\` and a new \`refresh_token\`. Replace the saved ones with them: each refresh token works once, and sending an old one again signs the agent out. Every refresh gives another ${days(REFRESH_TTL_MS)} days. Ask for a new code only if the refresh itself fails with \`invalid_grant\`. A 401 from the endpoint always says why, in \`reason\` and \`error_description\`.
 
 ### What the tools do
 

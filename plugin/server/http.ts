@@ -229,7 +229,12 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
         if (oauth) {
           const who = oauth.authenticate(req.headers.authorization, p);
           if (!who) {
-            res.writeHead(401, { 'www-authenticate': oauth.wwwAuthenticate(req.headers.authorization ? 'invalid_token' : undefined, p), 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
+            // Says why, and how to get going again; logged, since a refusal is otherwise invisible here.
+            const why = oauth.refusal(req.headers.authorization, p);
+            console.log(`${new Date().toISOString().slice(11, 23)} ${req.method} ${p} -> 401 ${why.reason} [${String(req.headers['user-agent'] ?? '').slice(0, 24)}]`);
+            res
+              .writeHead(401, { 'www-authenticate': oauth.wwwAuthenticate(req.headers.authorization ? 'invalid_token' : undefined, p, why.description), 'content-type': 'application/json' })
+              .end(JSON.stringify({ error: 'unauthorized', reason: why.reason, error_description: why.description }));
             return;
           }
           userId = who.userId;

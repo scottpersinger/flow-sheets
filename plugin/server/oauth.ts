@@ -18,6 +18,12 @@ import { GoogleLoginError, type GoogleLogin } from '../../server/googleAuth.ts';
 export const SCOPES = ['files:read', 'files:write'] as const;
 export const ACCESS_TTL_MS = 60 * 60 * 1000;
 export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * How long an access token from a device sign-in works. Much longer than the hour of the code flow's: an agent
+ * that drives the endpoint by hand often never refreshes, and would ask its person for a new code every hour.
+ * The person can cut one off on the Settings page.
+ */
+export const DEVICE_ACCESS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 const PENDING_TTL_MS = 15 * 60 * 1000;
 /** How long a sign-in waits for someone who is creating an account to open the emailed link. */
@@ -182,9 +188,10 @@ export class OAuthServer {
   }
 
   /** The challenge for a 401 on the MCP endpoint, which makes ChatGPT start (or redo) the OAuth flow. */
-  wwwAuthenticate(error?: string, endpoint = '/mcp'): string {
+  wwwAuthenticate(error?: string, endpoint = '/mcp', description?: string): string {
     const parts = [`Bearer resource_metadata="${this.issuer}/.well-known/oauth-protected-resource${endpoint}"`];
     if (error) parts.push(`error="${error}"`);
+    if (error && description) parts.push(`error_description="${description.replace(/["\\]/g, "'")}"`);
     return parts.join(', ');
   }
 
@@ -558,10 +565,12 @@ export class OAuthServer {
     const access = token();
     const refresh = token();
     const t = now();
+    // Only a device sign-in binds its tokens to an endpoint, and its access tokens are the long ones.
+    const accessTtl = resource ? DEVICE_ACCESS_TTL_MS : ACCESS_TTL_MS;
     const ins = this.db.prepare('INSERT INTO oauth_tokens (hash, kind, client_id, user_id, scope, family, expires_at, created_at, resource) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-    ins.run(sha(access), 'access', clientId, userId, scope, family, iso(t + ACCESS_TTL_MS), iso(t), resource);
+    ins.run(sha(access), 'access', clientId, userId, scope, family, iso(t + accessTtl), iso(t), resource);
     ins.run(sha(refresh), 'refresh', clientId, userId, scope, family, iso(t + REFRESH_TTL_MS), iso(t), resource);
-    return { access_token: access, token_type: 'Bearer', expires_in: Math.floor(ACCESS_TTL_MS / 1000), refresh_token: refresh, scope };
+    return { access_token: access, token_type: 'Bearer', expires_in: Math.floor(accessTtl / 1000), refresh_token: refresh, scope };
   }
 
   /** RFC 7009: the client gives a token back. Revoking a refresh token ends its whole family. */
@@ -582,6 +591,22 @@ export class OAuthServer {
     if (!row || row.revoked_at) return null;
     if (row.resource && row.resource !== this.resourceAt(endpoint)) return null;
     return { userId: row.user_id, scope: row.scope };
+  }
+
+  /**
+   * Why authenticate refused a request, as a word for the log and a sentence for the agent holding the token:
+   * one that drives the endpoint by hand has nothing else to tell it to refresh rather than sign in again.
+   */
+  refusal(authorization: string | undefined, endpoint = '/mcp'): { reason: string; description: string } {
+    const refresh = `POST ${this.issuer}/oauth/token as a form with grant_type=refresh_token, refresh_token=<the refresh token from your sign-in> and client_id=<your client id>. Keep the refresh token it returns in place of the old one: each works once.`;
+    const m = /^Bearer\s+(\S+)$/i.exec(authorization ?? '');
+    if (!m) return { reason: 'no_token', description: `Send an access token as "Authorization: Bearer <token>". How to sign in: ${this.issuer}/llms.txt` };
+    const row = this.db.prepare('SELECT kind, resource, expires_at, revoked_at FROM oauth_tokens WHERE hash = ?').get(sha(m[1])) as { kind: string; resource: string | null; expires_at: string; revoked_at: string | null } | undefined;
+    if (!row) return { reason: 'unknown_token', description: `This access token is not known here; it may have expired some time ago. If you have a refresh token, get a new access token without signing in again: ${refresh} Otherwise sign in again.` };
+    if (row.kind === 'refresh') return { reason: 'refresh_token_sent', description: `That is a refresh token, not an access token. Exchange it for an access token: ${refresh}` };
+    if (row.revoked_at) return { reason: 'revoked', description: 'This sign-in was disconnected or replaced, so its tokens no longer work. Sign in again.' };
+    if (row.expires_at < iso(now())) return { reason: 'expired', description: `This access token has expired. Get a new one without signing in again: ${refresh}` };
+    return { reason: 'wrong_endpoint', description: `This access token is for ${row.resource}; send your requests there.` };
   }
 
   private tokenRow(raw: string, kind: 'access' | 'refresh') {
