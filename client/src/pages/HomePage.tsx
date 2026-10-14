@@ -12,7 +12,7 @@ import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
 import { useFavicon } from '../favicon.ts';
-import { RECENTS_PARAM, rememberListing } from '../listing.ts';
+import { RECENTS_PARAM, rememberListing, useListingScroll } from '../listing.ts';
 import { openFromRecents } from './OpenLocalFile.tsx';
 import { FilePreviewFrame } from '../components/FilePreviewFrame.tsx';
 import { checkImportFile, imageTypeOf, isKnownImport, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, titleFromFileName } from '../importFile.ts';
@@ -98,6 +98,8 @@ export function HomePage() {
     }
   };
   const [items, setItems] = useState<LibraryItem[] | null>(null);
+  // The folder the rows are of: for a moment after another folder is opened they are still the last one's.
+  const [listed, setListed] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [moving, setMoving] = useState<LibraryItem | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +203,7 @@ export function HomePage() {
         if (shown.current !== folder) return; // Another folder was opened meanwhile.
         setFolders(r.folders);
         setItems([...r.docs, ...r.files.map(fileItem)]);
+        setListed(folder);
         setError(null);
       })
       .catch((e: Error) => {
@@ -208,6 +211,7 @@ export function HomePage() {
         // Nothing to list, and the reason: not a list that looks empty or one still loading.
         setFolders([]);
         setItems([]);
+        setListed(folder);
         setError(e.message);
       });
   };
@@ -238,6 +242,8 @@ export function HomePage() {
     arrived.current = true;
   }, [agentRunning, folder]);
   useEffect(() => setItems(null), [folder]);
+  // Back at a list, it is where it was scrolled to.
+  useListingScroll(query, recents ? recentFiles !== null : items !== null && listed === folder);
 
   useEffect(() => {
     document.title = 'Universal Docs';

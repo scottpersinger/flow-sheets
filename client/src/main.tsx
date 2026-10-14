@@ -19,6 +19,7 @@ import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
 import { VerifyEmailPage } from './pages/VerifyEmailPage.tsx';
 import './styles.css';
 import { isPreview } from './components/FilePreviewFrame.tsx';
+import { useHistoryKeys } from './historyKeys.ts';
 
 // A file's preview in the file list: the same page with only the file showing (styles.css, .file-preview-page).
 const PREVIEW = isPreview();
@@ -40,8 +41,9 @@ function GuestOnly({ children }: { children: ReactElement }) {
 
 /** The pages, with the assistant panel docked on the right when it is open. */
 function AppShell() {
-  const { user } = useAuth();
+  const { user, local } = useAuth();
   const { open } = useAgent();
+  useHistoryKeys(!!local && !PREVIEW);
   return (
     <div className="app-shell">
       <div className="app-main">

@@ -384,7 +384,7 @@ function DocInlinePrompt({ ctl }: { ctl: DocController }) {
   );
 }
 
-export function DocEditor({ ctl, onImageFiles, onScale, onEditImage }: { ctl: DocController; onImageFiles(files: File[]): void; /** Open the image editor on the selected picture (a double-click on it). */ onEditImage?(): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
+export function DocEditor({ ctl, onImageFiles, onScale, onEditImage, readOnly = false }: { ctl: DocController; onImageFiles(files: File[]): void; /** Shown, not edited (a document inside a zip file). */ readOnly?: boolean; /** Open the image editor on the selected picture (a double-click on it). */ onEditImage?(): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const filesRef = useRef(onImageFiles);
@@ -400,6 +400,7 @@ export function DocEditor({ ctl, onImageFiles, onScale, onEditImage }: { ctl: Do
   useEffect(() => {
     const view = new EditorView(ref.current!, {
       state: ctl.state,
+      editable: () => !readOnly,
       dispatchTransaction: (tr) => ctl.dispatch(tr),
       plugins: [dropCursor({ color: '#1a73e8', width: 2 }), gapCursor()],
       nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos, () => editRef.current?.()), video: (node, v, getPos) => new VideoView(node, v, getPos) },

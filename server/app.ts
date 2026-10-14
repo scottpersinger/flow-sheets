@@ -48,6 +48,8 @@ import { RevisionFeed } from './revisionFeed.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
+import { MAX_OFFICE_ENTRY_BYTES, openZip, ZipError, zipEntries, zipEntryBytes, zipOfficeView } from './zipView.ts';
+import { isZipName } from '../shared/zip.ts';
 
 const SESSION_COOKIE = 'sid';
 /** Carries the desktop app's per-launch token (see AppOptions.local). */
@@ -963,6 +965,66 @@ export async function buildApp(opts: AppOptions) {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
       return attachment(reply, f.meta.filename, f.meta.type || 'application/octet-stream').send(createReadStream(f.file));
+    });
+
+    // --- A zip file's contents (server/zipView.ts): listed, and each file in it opened read-only ------
+    const storedZip = async (req: FastifyRequest, reply: FastifyReply) => {
+      const f = storedFile(req);
+      if (!f || !isZipName(f.meta.filename)) return void reply.code(404).send({ error: 'Zip file not found' });
+      return openZip(f.file);
+    };
+    const zipFailed = (req: FastifyRequest, reply: FastifyReply, e: unknown) => {
+      if (e instanceof ZipError || e instanceof ImportError) return reply.code(400).send({ error: e.message });
+      req.log.warn({ err: e }, 'zip view failed');
+      return reply.code(400).send({ error: 'This file could not be read from the zip.' });
+    };
+    const entryPath = (req: FastifyRequest) => String((req.query as { path?: unknown }).path ?? '');
+
+    r.get('/api/files/:id/zip', async (req, reply) => {
+      try {
+        const zip = await storedZip(req, reply);
+        return zip && { entries: zipEntries(zip) };
+      } catch (e) {
+        return zipFailed(req, reply, e);
+      }
+    });
+
+    // One file in the zip (?path=), served as a stored file is: a PDF, picture or video inline, anything else
+    // as plain bytes (a web page is shown from its text in a sandboxed frame). &download=1 saves it.
+    r.get('/api/files/:id/zip/entry', async (req, reply) => {
+      try {
+        const zip = await storedZip(req, reply);
+        if (!zip) return;
+        const path = entryPath(req);
+        const bytes = await zipEntryBytes(zip, path);
+        if (!bytes) return reply.code(404).send({ error: 'That file is not in the zip.' });
+        const name = path.split('/').pop() || 'file';
+        const type = videoTypeOf(name) ?? fileTypeOf(name) ?? 'application/octet-stream';
+        if ((req.query as { download?: string }).download === '1') return attachment(reply, name, type).send(bytes);
+        if (!PREVIEW_FILE_TYPES.includes(type)) return attachment(reply, name, 'application/octet-stream').send(bytes);
+        return reply
+          .header('Content-Type', type === 'video/quicktime' ? 'video/mp4' : type)
+          .header('Content-Disposition', 'inline')
+          .header('Cache-Control', 'private, no-cache')
+          .header('X-Content-Type-Options', 'nosniff')
+          .send(bytes);
+      } catch (e) {
+        return zipFailed(req, reply, e);
+      }
+    });
+
+    // A Word, Excel or PowerPoint file in the zip (?path=), converted to be shown read-only.
+    r.get('/api/files/:id/zip/view', async (req, reply) => {
+      try {
+        const zip = await storedZip(req, reply);
+        if (!zip) return;
+        const path = entryPath(req);
+        const bytes = await zipEntryBytes(zip, path, MAX_OFFICE_ENTRY_BYTES);
+        if (!bytes) return reply.code(404).send({ error: 'That file is not in the zip.' });
+        return { view: await zipOfficeView(path, bytes) };
+      } catch (e) {
+        return zipFailed(req, reply, e);
+      }
     });
 
     // Rewrite a text file (the assistant's edit_file) or a picture (the image editor), keeping the version

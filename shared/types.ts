@@ -249,7 +249,7 @@ const KNOWN_FILE_TYPES: Record<string, string> = {
 };
 
 /** Whether a stored file has a page in the app (a viewer, or a copy to edit); any other is only listed, to download, move or delete. */
-export const opensInApp = (filename: string): boolean => /\.(pdf|html?|png|jpe?g|gif|webp|mp4|m4v|mov|webm|ogv|xlsx|xls|docx|pptx)$/i.test(filename);
+export const opensInApp = (filename: string): boolean => /\.(pdf|html?|png|jpe?g|gif|webp|mp4|m4v|mov|webm|ogv|xlsx|xls|docx|pptx|zip)$/i.test(filename);
 
 /** The type a web page (.html, .htm) is stored as. It is only ever shown inside a sandboxed frame, never served as a page. */
 export const HTML_TYPE = 'text/html';

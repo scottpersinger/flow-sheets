@@ -5,6 +5,7 @@ import type { Doc } from '../../shared/doc.ts';
 import type { MarkdownDoc } from '../../shared/markdown.ts';
 import type { FilePreview } from '../../shared/preview.ts';
 import { CELL_IMAGE_TOO_LARGE, type ConnectedAgent, type DeletedFile, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import type { ZipEntry, ZipOfficeView } from '../../shared/zip.ts';
 
 export interface User {
   id: string;
@@ -133,6 +134,10 @@ export const api = {
   editImage: (id: string, prompt: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/edit-image`, { prompt }),
   revertFile: (id: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/revert`),
   getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
+  /** What a stored zip file holds (shared/zip.ts). */
+  zipEntries: (id: string) => request<{ entries: ZipEntry[] }>('GET', `/api/files/${encodeURIComponent(id)}/zip`),
+  /** A Word, Excel or PowerPoint file in a zip, converted to be shown read-only. */
+  zipOfficeView: (id: string, path: string) => request<{ view: ZipOfficeView }>('GET', `/api/files/${encodeURIComponent(id)}/zip/view?path=${encodeURIComponent(path)}`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
   me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string; recents?: boolean } }>('GET', '/api/auth/me'),
   /** The desktop app: the files last opened on this computer, in any app (server/recents.ts). */

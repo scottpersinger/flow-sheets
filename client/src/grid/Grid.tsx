@@ -1009,6 +1009,8 @@ export function Grid({ ctl, notify }: { ctl: SheetController; notify?: (msg: str
       <textarea
         ref={taRef}
         className="cell-editor"
+        // Holds the focus while the grid is selected; only typing in a cell is text being typed (historyKeys.ts).
+        data-typing={edit ? '' : undefined}
         style={editorStyle}
         value={edit?.text ?? ''}
         spellCheck={false}

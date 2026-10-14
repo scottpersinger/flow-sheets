@@ -70,6 +70,13 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   Excel, CSV or Markdown file becomes a file the app edits, a Markdown file staying Markdown; a PDF, video, picture or web page is stored as
   it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
   with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
+- A zip file's page lists what it holds and opens each file in it read-only (`client/src/components/ZipBrowser.tsx`,
+  the folder and file in the address as `?dir=` / `?entry=`). The server never unpacks to disk
+  (`server/zipView.ts`): `GET /api/files/:id/zip` lists the files, `/zip/entry?path=` sends one (inline only
+  for PDFs, pictures and videos, as stored files are), and `/zip/view?path=` converts a Word, Excel or
+  PowerPoint file with the importers, its pictures inline as `data:` addresses. The browser shows text,
+  Markdown, CSV and web pages from the bytes; a spreadsheet is the `Grid` with a store guard that refuses
+  every change, a document the `DocEditor` with `readOnly`.
 - Open editors (spreadsheets, documents, Markdown, presentations) keep to the latest revision of their file: saves name the
   revision loaded and the server answers 409 when it changed, and `GET /api/revisions/:id` (server-sent events,
   `server/revisionFeed.ts`, fed by `SheetStore.onRevision`) announces each new one so an editor with nothing

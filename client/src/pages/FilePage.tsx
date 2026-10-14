@@ -4,6 +4,8 @@ import { EDITABLE_IMAGE_TYPES, HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } 
 import { HtmlEditor } from '../components/HtmlEditor.tsx';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
 import { TextFileEditor } from '../components/TextFileEditor.tsx';
+import { ZipBrowser } from '../components/ZipBrowser.tsx';
+import { isZipName } from '../../../shared/zip.ts';
 import { ImageFileEditor } from '../image/ImageFileEditor.tsx';
 import { ImageSelector } from '../components/ImageSelector.tsx';
 import type { ImageRegion } from '../../../shared/agent/protocol.ts';
@@ -147,6 +149,8 @@ export function FilePage() {
           <div className="form-error">{error}</div>
         ) : !file ? (
           <div className="muted">Loading…</div>
+        ) : isZipName(file.filename) ? (
+          <ZipBrowser file={file} />
         ) : file.type === 'application/pdf' ? (
           <iframe className="file-preview" src={file.url} title={file.filename} />
         ) : file.type === HTML_TYPE && editing ? (
