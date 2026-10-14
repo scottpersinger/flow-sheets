@@ -46,6 +46,12 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   override the on-disk hooks of `SheetStore` and `FileStore`: real `.md`/`.csv` files, `.ffsheet`/`.ffslides`/
   `.ffdoc` for the JSON formats, the tables synced with the folder on every list) and makes every request
   the one local user. The client learns it is local from `useAuth().local`.
+  On macOS it has Recents, a tab beside the open folder's name on the home page (`/?recents=1`, `FileLibrary`'s
+  `otherList`): the files last opened on the machine in any app, as Finder's Recents lists them, read from
+  Spotlight (`server/recents.ts`, `GET /api/local/recents`). Opening one outside the open folder
+  (`POST /api/local/open`) has the server ask `main.js` (a message to its parent) to open the file's own
+  folder instead; the new window starts at `/open?file=…&from=recents` (`pages/OpenLocalFile.tsx`), which
+  finds the file (`GET /api/local/resolve`) and makes Recents the first breadcrumb (`client/src/listing.ts`).
 - The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
   (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
   `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;

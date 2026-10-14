@@ -55,6 +55,10 @@ function startServer(dir) {
   });
   return new Promise((resolve, reject) => {
     child.once('message', (msg) => resolve({ child, dir, token, origin: `http://127.0.0.1:${msg.port}` }));
+    // Later the server asks for a file outside its folder to be shown (one of Recents).
+    child.on('message', (msg) => {
+      if (msg && typeof msg.openFile === 'string') void openFile(msg.openFile).catch((e) => dialog.showErrorBox('Universal Docs', String(e.message ?? e)));
+    });
     child.once('error', reject);
     child.once('exit', (code) => reject(new Error(`The server stopped while starting (exit code ${code}).`)));
   });
@@ -90,8 +94,8 @@ app.on('web-contents-created', (_e, contents) => {
   });
 });
 
-/** Serve `dir` and show it, replacing the folder that was open. */
-async function openFolder(dir) {
+/** Serve `dir` and show it, replacing the folder that was open. `landing` is the page the window starts on. */
+async function openFolder(dir, landing = '/') {
   const windows = BrowserWindow.getAllWindows();
   stopServer();
   current = await startServer(dir);
@@ -102,8 +106,14 @@ async function openFolder(dir) {
   });
   // Only this app's windows hold the token, so nothing else on the machine can use the server.
   await session.defaultSession.cookies.set({ url: current.origin, name: 'local', value: current.token, httpOnly: true, sameSite: 'strict' });
-  createWindow(`${current.origin}/`);
+  createWindow(`${current.origin}${landing}`);
   for (const w of windows) w.destroy();
+}
+
+/** Show a file that is not in the open folder: its own folder becomes the open one, and the window starts on the file. */
+async function openFile(file) {
+  if (!isDir(path.dirname(file))) throw new Error(`"${file}" is no longer there.`);
+  await openFolder(path.dirname(file), `/open?file=${encodeURIComponent(path.basename(file))}&from=recents`);
 }
 
 async function chooseFolder() {

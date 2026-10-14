@@ -1,0 +1,96 @@
+// The desktop app's "Recents": the files the person last opened on this Mac, in any app and any folder,
+// as Finder's Recents shows them. Spotlight keeps a "last used" date for a file each time it is opened;
+// this asks it for the files used lately (mdfind) and keeps the kinds the app can show. macOS only.
+import { execFile } from 'node:child_process';
+import { readdir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import path from 'node:path';
+
+export interface RecentFile {
+  /** Absolute path. */
+  path: string;
+  name: string;
+  /** The folder it is in, with the home directory written "~". */
+  where: string;
+  /** When it was last opened. */
+  lastUsed: string;
+  size: number;
+}
+
+export interface Recents {
+  files: RecentFile[];
+  /** Folders of the home directory ("Downloads") the system does not let this app read, whose files are therefore missing. */
+  blocked: string[];
+}
+
+/** The folders macOS asks about before an app may read them. Most of what was opened lately is in them. */
+const GUARDED = ['Desktop', 'Documents', 'Downloads'];
+const refused = (e: unknown): boolean => ['EPERM', 'EACCES'].includes((e as NodeJS.ErrnoException)?.code ?? '');
+
+/** How far back to look, and how many files to show. */
+const DAYS = 90;
+const LIMIT = 60;
+
+export const recentsAvailable = (): boolean => process.platform === 'darwin';
+
+/** The files and their last-used dates in mdfind's output ("<path>   kMDItemLastUsedDate = 2026-10-13 21:04:18 +0000"), newest first. */
+export function parseRecents(output: string): { path: string; lastUsed: string }[] {
+  const out: { path: string; lastUsed: string }[] = [];
+  for (const line of output.split('\n')) {
+    const m = /^(.+?)\s+kMDItemLastUsedDate = (\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d) ([+-]\d\d)(\d\d)$/.exec(line);
+    if (!m) continue;
+    const when = new Date(`${m[2]}T${m[3]}${m[4]}:${m[5]}`);
+    if (!Number.isNaN(when.getTime())) out.push({ path: m[1], lastUsed: when.toISOString() });
+  }
+  return out.sort((a, b) => (a.lastUsed < b.lastUsed ? 1 : a.lastUsed > b.lastUsed ? -1 : 0));
+}
+
+/** Whether a recently used file is one to list: a kind the app shows, and not something hidden or the system's. */
+export function listable(file: string, exts: ReadonlySet<string>, home = homedir()): boolean {
+  if (!path.isAbsolute(file) || !exts.has(path.extname(file).toLowerCase())) return false;
+  const rel = path.relative(home, file);
+  const parts = (rel.startsWith('..') ? file : rel).split(path.sep);
+  if (!rel.startsWith('..') && parts[0] === 'Library') return false;
+  return !parts.some((p) => p.startsWith('.') || p === 'node_modules');
+}
+
+const whereOf = (file: string, home: string): string => {
+  const dir = path.dirname(file);
+  const rel = path.relative(home, dir);
+  return rel === '' ? '~' : rel.startsWith('..') ? dir : `~/${rel}`;
+};
+
+/** Finder's Recents is the files with a last-used date that the system knows as content (documents, pictures, video), which leaves out files of a type no app has described, such as source files. */
+function mdfind(home: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('/usr/bin/mdfind', ['-onlyin', home, '-attr', 'kMDItemLastUsedDate', `kMDItemLastUsedDate >= $time.today(-${DAYS}) && kMDItemContentTypeTree == "public.content"`], { maxBuffer: 16 * 1024 * 1024, timeout: 15_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+  });
+}
+
+/**
+ * The recently used files with one of the extensions, newest first. `run` stands in for Spotlight in tests.
+ * Reading each guarded folder first is what makes macOS ask the person, the first time, whether the app may;
+ * one it refuses is reported, since its files cannot be listed or opened.
+ */
+export async function recentFiles(exts: ReadonlySet<string>, run: (home: string) => Promise<string> = mdfind, home = homedir()): Promise<Recents> {
+  const blocked: string[] = [];
+  for (const name of GUARDED) {
+    try {
+      await readdir(path.join(home, name));
+    } catch (e) {
+      if (refused(e)) blocked.push(name);
+    }
+  }
+  const out: RecentFile[] = [];
+  for (const f of parseRecents(await run(home))) {
+    if (out.length >= LIMIT) break;
+    if (!listable(f.path, exts, home)) continue;
+    try {
+      const st = await stat(f.path);
+      if (st.isFile()) out.push({ path: f.path, name: path.basename(f.path), where: whereOf(f.path, home), lastUsed: f.lastUsed, size: st.size });
+    } catch {
+      // Moved or deleted since it was used.
+    }
+  }
+  return { files: out, blocked };
+}

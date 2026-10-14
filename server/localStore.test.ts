@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SheetMeta, StoredFile, Workbook } from '../shared/types.ts';
 import { buildApp, LOCAL_COOKIE } from './app.ts';
+import { LISTED_EXTS } from './localStore.ts';
+import { listable, parseRecents, recentFiles } from './recents.ts';
 
 // The desktop app's storage: a folder of real files instead of the data directory (server/localStore.ts).
 let folder: string;
@@ -234,6 +236,103 @@ describe('the desktop token', () => {
       expect((await guarded.inject({ method: 'GET', url: '/api/markdown', cookies: { [LOCAL_COOKIE]: 'secret' } })).statusCode).toBe(200);
     } finally {
       await guarded.close();
+      rmSync(data, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('recents: the files last opened on the machine', () => {
+  it('reads the files and their dates from Spotlight, newest first, and keeps the ones to list', () => {
+    const out = [
+      '/Users/me/Downloads/b report.pdf   kMDItemLastUsedDate = 2026-10-13 21:04:18 +0000',
+      '/Users/me/Documents/a.md   kMDItemLastUsedDate = 2026-10-14 02:00:00 +0200',
+      '/Users/me/Applications/Thing.app   kMDItemLastUsedDate = (null)',
+      'garbage',
+    ].join('\n');
+    expect(parseRecents(out)).toEqual([
+      { path: '/Users/me/Documents/a.md', lastUsed: '2026-10-14T00:00:00.000Z' },
+      { path: '/Users/me/Downloads/b report.pdf', lastUsed: '2026-10-13T21:04:18.000Z' },
+    ]);
+    const exts = new Set(['.md', '.pdf']);
+    expect(listable('/Users/me/Documents/a.md', exts, '/Users/me')).toBe(true);
+    expect(listable('/Volumes/Disk/a.PDF', exts, '/Users/me')).toBe(true);
+    expect(listable('/Users/me/Documents/a.txt', exts, '/Users/me')).toBe(false);
+    expect(listable('/Users/me/Library/Caches/a.md', exts, '/Users/me')).toBe(false);
+    expect(listable('/Users/me/.config/a.md', exts, '/Users/me')).toBe(false);
+    expect(listable('/Users/me/src/app/node_modules/pkg/README.md', exts, '/Users/me')).toBe(false);
+    expect(listable('a.md', exts, '/Users/me')).toBe(false);
+  });
+
+  it('lists them, opens one in the folder by its path there, and hands one outside it to the app', async () => {
+    const elsewhere = mkdtempSync(path.join(tmpdir(), 'sheetsweb-elsewhere-'));
+    const data = mkdtempSync(path.join(tmpdir(), 'sheetsweb-localdata-'));
+    writeFileSync(path.join(elsewhere, 'plan.md'), '# Plan\n');
+    mkdirSync(at('recent'), { recursive: true });
+    writeFileSync(at('recent', 'costs.csv'), 'a,b\n1,2\n');
+    writeFileSync(at('recent', 'paper.pdf'), '%PDF-1.4 test');
+    writeFileSync(path.join(elsewhere, 'tool.py'), 'print(1)');
+    const spotlight = async () =>
+      [
+        `${at('recent', 'costs.csv')}   kMDItemLastUsedDate = 2026-10-13 10:00:00 +0000`,
+        `${path.join(elsewhere, 'plan.md')}   kMDItemLastUsedDate = 2026-10-13 12:00:00 +0000`,
+        `${path.join(elsewhere, 'tool.py')}   kMDItemLastUsedDate = 2026-10-13 13:00:00 +0000`,
+        `${path.join(elsewhere, 'gone.pdf')}   kMDItemLastUsedDate = 2026-10-13 14:00:00 +0000`,
+      ].join('\n');
+    const asked: string[] = [];
+    const recent = await buildApp({ dataDir: data, local: { dir: folder, openFile: (f) => asked.push(f), recents: () => recentFiles(LISTED_EXTS, spotlight, elsewhere) } });
+    const req = async <T>(method: 'GET' | 'POST', url: string, payload?: object) => {
+      const res = await recent.inject({ method, url, payload });
+      return { status: res.statusCode, body: res.json() as T };
+    };
+    try {
+      expect((await req<{ local: { recents: boolean } }>('GET', '/api/auth/me')).body.local.recents).toBe(true);
+      const list = await req<{ files: { path: string; name: string; kind: string; lastUsed: string }[]; blocked: string[] }>('GET', '/api/local/recents');
+      expect(list.body.blocked).toEqual([]);
+      // Newest first; what the app cannot show and what is gone are left out.
+      expect(list.body.files.map((f) => [f.name, f.kind])).toEqual([
+        ['plan.md', 'markdown'],
+        ['costs.csv', 'sheet'],
+      ]);
+
+      // In the open folder: its path there, which resolves to the library's file.
+      const here = await req<{ file?: string; switching?: boolean }>('POST', '/api/local/open', { path: at('recent', 'costs.csv') });
+      expect(here.body).toEqual({ file: 'recent/costs.csv' });
+      const found = await req<{ kind: string; id: string }>('GET', `/api/local/resolve?file=${encodeURIComponent('recent/costs.csv')}`);
+      expect(found.body.kind).toBe('sheet');
+      expect((await recent.inject({ method: 'GET', url: `/api/sheets/${found.body.id}` })).statusCode).toBe(200);
+      const pdf = await req<{ kind: string; id: string }>('GET', `/api/local/resolve?file=${encodeURIComponent('recent/paper.pdf')}`);
+      expect(pdf.body.kind).toBe('file');
+      expect((await recent.inject({ method: 'GET', url: `/api/files/${pdf.body.id}` })).statusCode).toBe(200);
+      expect(asked).toEqual([]);
+
+      // Outside it: the app is asked to open the file's folder.
+      const out = await req<{ switching?: boolean }>('POST', '/api/local/open', { path: path.join(elsewhere, 'plan.md') });
+      expect(out.body).toEqual({ switching: true });
+      expect(asked).toEqual([path.join(elsewhere, 'plan.md')]);
+
+      // Not a file the app shows, not there, not a path inside the folder.
+      expect((await req('POST', '/api/local/open', { path: path.join(elsewhere, 'tool.py') })).status).toBe(400);
+      expect((await req('POST', '/api/local/open', { path: path.join(elsewhere, 'gone.pdf') })).status).toBe(404);
+      expect((await req('POST', '/api/local/open', { path: 'plan.md' })).status).toBe(400);
+      expect((await req('GET', `/api/local/resolve?file=${encodeURIComponent('../plan.md')}`)).status).toBe(404);
+      expect((await req('GET', `/api/local/resolve?file=${encodeURIComponent('.git/hidden.md')}`)).status).toBe(404);
+      expect((await req('GET', '/api/local/resolve?file=nope.md')).status).toBe(404);
+      expect(asked).toHaveLength(1);
+    } finally {
+      await recent.close();
+      rmSync(data, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('is not there without a source for it, or outside the desktop app', async () => {
+    const data = mkdtempSync(path.join(tmpdir(), 'sheetsweb-localdata-'));
+    const none = await buildApp({ dataDir: data, local: { dir: folder, recents: null } });
+    try {
+      expect(((await none.inject({ method: 'GET', url: '/api/auth/me' })).json() as { local: { recents: boolean } }).local.recents).toBe(false);
+      expect((await none.inject({ method: 'GET', url: '/api/local/recents' })).statusCode).toBe(404);
+    } finally {
+      await none.close();
       rmSync(data, { recursive: true, force: true });
     }
   });

@@ -4061,6 +4061,32 @@ button.agent-tool-label:hover {
   outline-offset: -2px;
 }
 
+/* The folder's files and a second list (the desktop app's Recents) as tabs over the list. */
+.list-tabs {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 22px;
+  min-width: 0;
+}
+.list-tabs.has-tabs h2 {
+  padding-bottom: 5px;
+  border-bottom: 2px solid transparent;
+}
+.list-tabs.has-tabs h2.active {
+  border-bottom-color: var(--blue);
+}
+.list-tabs.has-tabs h2.list-tab:not(.active),
+.list-tabs.has-tabs h2.list-tab:not(.active) .crumb {
+  color: var(--muted);
+}
+.list-tabs.has-tabs h2.list-tab:not(.active) .crumb:hover {
+  color: var(--blue);
+}
+.sheet-list .list-where {
+  overflow-wrap: anywhere;
+}
+
 /* An open file's place in the library, before its name in the page header. */
 .folder-crumbs {
   display: inline-flex;

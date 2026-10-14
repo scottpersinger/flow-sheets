@@ -44,6 +44,11 @@ const FILE_TYPES: Record<string, string> = {
   ...Object.fromEntries(Object.entries(VIDEO_TYPES).map(([ext, type]) => [`.${ext}`, type])),
 };
 
+/** The extensions of the files the desktop app lists. */
+export const LISTED_EXTS: ReadonlySet<string> = new Set([...Object.keys(DOC_TYPES), ...Object.keys(FILE_TYPES)]);
+/** What a listed file is in the library: a document of some kind, or a stored file. */
+export const listedKind = (file: string): DocKind | 'file' => DOC_TYPES[extOf(file)]?.kind ?? 'file';
+
 const MAX_DEPTH = 8;
 const MAX_FILES = 5000;
 const SKIP_DIRS = new Set(['node_modules']);
@@ -359,6 +364,12 @@ export class LocalSheetStore extends SheetStore {
     return super.listIn(ownerId, folder);
   }
 
+  /** The id of the document that is the file at `rel` (a path inside the mounted folder), which is listed first if it never was. */
+  idOf(ownerId: string, rel: string): string | null {
+    this.listIn(ownerId, parentFolder(rel));
+    return (this.db.prepare('SELECT id FROM sheets WHERE owner_id = ? AND file = ?').get(ownerId, rel) as { id: string } | undefined)?.id ?? null;
+  }
+
   /** A row is only as good as its file: one that was removed is gone, one that was edited has a new time. */
   protected override row(ownerId: string, id: string, kind?: DocKind): SheetRow | undefined {
     const r = super.row(ownerId, id, kind);
@@ -526,6 +537,12 @@ export class LocalFileStore extends FileStore {
   override listIn(ownerId: string, folder: string): StoredFile[] {
     this.sync(ownerId, this.folder.scanDir(folder).files, folder);
     return super.listIn(ownerId, folder);
+  }
+
+  /** The id of the stored file at `rel` (a path inside the mounted folder), which is listed first if it never was. */
+  idOf(ownerId: string, rel: string): string | null {
+    const folder = parentFolder(rel);
+    return this.listIn(ownerId, folder).find((f) => f.filename === path.posix.basename(rel))?.id ?? null;
   }
 
   override get(ownerId: string, id: string): { meta: StoredFile; file: string } | null {

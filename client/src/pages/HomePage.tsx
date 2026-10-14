@@ -12,7 +12,8 @@ import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
 import { useFavicon } from '../favicon.ts';
-import { rememberListing } from '../listing.ts';
+import { RECENTS_PARAM, rememberListing } from '../listing.ts';
+import { openFromRecents } from './OpenLocalFile.tsx';
 import { checkImportFile, CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, HTML_ACCEPT, IMAGE_ACCEPT, imageTypeOf, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName, VIDEO_ACCEPT } from '../importFile.ts';
 import { csvTitle } from '../../../shared/csv.ts';
 import { cleanFolderPath, folderTrail } from '../../../shared/folders.ts';
@@ -52,6 +53,49 @@ export function HomePage() {
       },
       { replace: true },
     );
+  // The desktop app's Recents (&recents=1): the files last opened on this computer, in any app, listed in
+  // place of the folder's. Opening one that is in another folder makes that folder the open one.
+  const recents = !!local?.recents && params.get(RECENTS_PARAM) === '1';
+  const showRecents = (on: boolean) =>
+    setParams((cur) => {
+      const next = new URLSearchParams(cur);
+      if (on) next.set(RECENTS_PARAM, '1');
+      else next.delete(RECENTS_PARAM);
+      return next;
+    });
+  const [recentFiles, setRecentFiles] = useState<{ items: LibraryItem[]; where: Map<string, string>; blocked: string[] } | null>(null);
+  const [recentsError, setRecentsError] = useState<string | null>(null);
+  const [openingRecent, setOpeningRecent] = useState<string | null>(null);
+  useEffect(() => {
+    if (!recents) return;
+    let gone = false;
+    setRecentsError(null);
+    api
+      .localRecents()
+      .then((r) => {
+        if (gone) return;
+        // A file of Recents is named by its path: it has no id here until its folder is the open one.
+        const items = r.files.map((f): LibraryItem => ({ id: f.path, kind: f.kind, ...(/\.csv$/i.test(f.name) ? { format: 'csv' as const } : {}), title: f.name, updatedAt: f.lastUsed, createdAt: f.lastUsed }));
+        setRecentFiles({ items, where: new Map(r.files.map((f) => [f.path, f.where])), blocked: r.blocked });
+      })
+      .catch((e: unknown) => !gone && (setRecentFiles({ items: [], where: new Map(), blocked: [] }), setRecentsError(e instanceof Error ? e.message : String(e))));
+    return () => {
+      gone = true;
+    };
+  }, [recents]);
+  const openRecent = async (s: LibraryItem) => {
+    if (openingRecent) return;
+    setOpeningRecent(s.title);
+    setRecentsError(null);
+    try {
+      const res = await api.openLocal(s.id);
+      // In the open folder already: shown here. Otherwise the app is switching folders and this window is about to be replaced.
+      if (res.file) navigate(openFromRecents(res.file));
+    } catch (e) {
+      setRecentsError(e instanceof Error ? e.message : String(e));
+      setOpeningRecent(null);
+    }
+  };
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [moving, setMoving] = useState<LibraryItem | null>(null);
@@ -215,13 +259,42 @@ export function HomePage() {
       }
       listTitle={local ? <span title={local.dir}>{dirName(local.dir)}</span> : undefined}
       folder={folderTrail(folder)}
-      folders={folders}
+      folders={recents ? [] : folders}
       onOpenFolder={openFolder}
-      thumbnail={(s) => <FileThumb item={s} />}
+      otherList={
+        local?.recents
+          ? {
+              label: 'Recents',
+              active: recents,
+              onSelect: showRecents,
+              where: (s) => recentFiles?.where.get(s.id) ?? '',
+              when: 'Last opened',
+              empty: 'No file this app can show was opened lately.',
+              notice: (
+                <>
+                  {openingRecent && (
+                    <div className="import-banner" role="status">
+                      Opening “{openingRecent}” and its folder…
+                    </div>
+                  )}
+                  {!!recentFiles?.blocked.length && (
+                    <div className="import-banner" role="status">
+                      <div>
+                        <strong>Files in {recentFiles.blocked.join(', ').replace(/, ([^,]*)$/, ' and $1')} are not listed.</strong> macOS has not let this app read {recentFiles.blocked.length === 1 ? 'that folder' : 'those folders'}. Allow it in System Settings › Privacy &amp; Security › Files and Folders, then open Recents again.
+                      </div>
+                    </div>
+                  )}
+                </>
+              ),
+            }
+          : undefined
+      }
+      // A file of Recents is somewhere else: no thumbnail, folder or row menu until its folder is open.
+      thumbnail={recents ? undefined : (s) => <FileThumb item={s} />}
       onGettingStarted={() => void openGuide()}
       search={search}
       onSearchChange={setSearch}
-      onFind={async (q) => {
+      onFind={recents ? undefined : async (q) => {
         // Coming back to results that were just shown does not search again; a change to the list does.
         if (lastFind?.text !== q) lastFind = { text: q, result: api.searchLibrary(q).then((r) => ({ folders: r.folders, items: [...r.docs, ...r.files.map(fileItem)], truncated: r.truncated })) };
         const mine = lastFind;
@@ -230,7 +303,7 @@ export function HomePage() {
           throw e;
         });
       }}
-      onCreateFolder={async (name) => {
+      onCreateFolder={recents ? undefined : async (name) => {
         await api.createFolder(folder, name);
         await load();
       }}
@@ -239,7 +312,7 @@ export function HomePage() {
         await load();
       }}
       onDownloadFolder={(path) => window.location.assign(`/api/folders/download?folder=${encodeURIComponent(path)}`)}
-      onMove={async (s, to) => {
+      onMove={recents ? undefined : async (s, to) => {
         await api.moveToFolder(s.kind, s.id, to);
         await load();
       }}
@@ -295,8 +368,8 @@ export function HomePage() {
           <Account />
         </>
       }
-      items={items}
-      error={error}
+      items={recents ? (recentFiles?.items ?? null) : items}
+      error={recents ? recentsError : error}
       onCreate={async (kind, title) => {
         if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title, folder)).sheet.id}`);
         else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title, undefined, folder)).deck.id}`);
@@ -308,9 +381,9 @@ export function HomePage() {
       importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md), CSV (.csv), web page (.html), picture (.png, .jpg, .gif, .webp) or video (.mp4, .mov, .webm) file anywhere on this page, or paste a picture or text to make a file of it."
       importing={importing}
       onImport={(file) => void importFile(file)}
-      onOpen={(s) => navigate(pathOf(s))}
-      onOpenInNewTab={(s) => void window.open(pathOf(s), '_blank')}
-      titleLink={(s, children) => (
+      onOpen={(s) => (recents ? void openRecent(s) : navigate(pathOf(s)))}
+      onOpenInNewTab={recents ? undefined : (s) => void window.open(pathOf(s), '_blank')}
+      titleLink={recents ? undefined : (s, children) => (
         <Link to={pathOf(s)} className="sheet-title" onClick={(e) => e.stopPropagation()}>
           {children}
         </Link>

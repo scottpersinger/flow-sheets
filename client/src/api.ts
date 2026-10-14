@@ -87,6 +87,17 @@ export interface FolderInfo {
 /** `&folder=...` (or `?folder=...`) for an upload that goes into a folder; nothing at the top. */
 const inFolder = (folder: string | undefined, first = false) => (folder ? `${first ? '?' : '&'}folder=${encodeURIComponent(folder)}` : '');
 
+/** A file of the desktop app's Recents list. */
+export interface RecentFile {
+  path: string;
+  name: string;
+  /** The folder it is in, with the home directory written "~". */
+  where: string;
+  lastUsed: string;
+  size: number;
+  kind: SheetMeta['kind'] | 'file';
+}
+
 export const api = {
   /** What is in a folder ('' is the top): its folders, documents of every kind and stored files. */
   library: (folder = '') => request<{ folder: string; folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[] }>('GET', `/api/library${inFolder(folder, true)}`),
@@ -123,7 +134,13 @@ export const api = {
   revertFile: (id: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/revert`),
   getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
-  me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string } }>('GET', '/api/auth/me'),
+  me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string; recents?: boolean } }>('GET', '/api/auth/me'),
+  /** The desktop app: the files last opened on this computer, in any app (server/recents.ts). */
+  localRecents: () => request<{ files: RecentFile[]; /** Folders macOS does not let the app read. */ blocked: string[] }>('GET', '/api/local/recents'),
+  /** Open one of them: answers with its path in the open folder, or that the app is switching to the file's folder. */
+  openLocal: (path: string) => request<{ file?: string; switching?: true }>('POST', '/api/local/open', { path }),
+  /** The library's file at a path inside the open folder. */
+  resolveLocal: (file: string) => request<{ kind: SheetMeta['kind'] | 'file'; id: string }>('GET', `/api/local/resolve?file=${encodeURIComponent(file)}`),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),
   register: (email: string, password: string) => request<{ pending: true; email: string }>('POST', '/api/auth/register', { email, password }),
   verifyEmail: (token: string) => request<{ user: User }>('POST', '/api/auth/verify', { token }),

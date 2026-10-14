@@ -158,6 +158,24 @@ export interface FileLibraryProps {
   onOpenFolder?(path: string): void;
   onCreateFolder?(name: string): Promise<void>;
   onDeleteFolder?(path: string): Promise<void>;
+  /**
+   * A second list beside the folder's, chosen with a tab next to the folder's name (the desktop app's
+   * Recents). While it is the one shown, `items` are its files: each is listed with where it is and when,
+   * and can only be opened.
+   */
+  otherList?: {
+    label: string;
+    active: boolean;
+    onSelect(active: boolean): void;
+    /** Where a file of it is, for the column that replaces "Created". */
+    where(item: LibraryItem): string;
+    /** The heading of its date column ("Last opened"). */
+    when: string;
+    /** What to say when it has nothing. */
+    empty: string;
+    /** Shown over the list (what could not be listed, what is being opened). */
+    notice?: ReactNode;
+  };
   /** Download a folder and everything in it. Adds "Download" to a folder's menu. */
   onDownloadFolder?(path: string): void;
   /** Put a file in another folder. Lets a file be dragged onto a folder in the list or in the breadcrumbs. */
@@ -235,6 +253,8 @@ function pickFile(accept: string): Promise<File | null> {
 
 export function FileLibrary(props: FileLibraryProps) {
   const { items, error, importing, onOpen } = props;
+  const other = props.otherList;
+  const otherShown = !!other?.active;
   const createKinds = props.createKinds ?? ALL_KINDS;
   // The box shows what was typed right away; a page that keeps the search hears of each change, and its
   // own changes (another address: Back, a folder opened) replace the text. What the page says back about a
@@ -490,7 +510,8 @@ export function FileLibrary(props: FileLibraryProps) {
       )}
     </>
   );
-  const itemActions = (s: LibraryItem) => (
+  const itemActions = (s: LibraryItem) =>
+    otherShown ? null : (
     <>
       {props.onOpenInNewTab && (
         <button className="btn open-tab-btn" title="Open in a new tab" aria-label={`Open ${s.title} in a new tab`} onClick={() => props.onOpenInNewTab!(s)}>
@@ -522,7 +543,7 @@ export function FileLibrary(props: FileLibraryProps) {
         </div>
       )}
     </>
-  );
+    );
 
   const titleLink = props.titleLink ?? ((_item: LibraryItem, children: ReactNode) => <span className="sheet-title">{children}</span>);
   const canRename = props.canRename ?? (() => true);
@@ -635,6 +656,7 @@ export function FileLibrary(props: FileLibraryProps) {
 
       <section className="home-inner">
         <div className="list-heading">
+          <div className={`list-tabs${other ? ' has-tabs' : ''}`}>
           {results ? (
             <h2>
               Found “{filter.trim()}” in all folders
@@ -643,14 +665,15 @@ export function FileLibrary(props: FileLibraryProps) {
               </button>
             </h2>
           ) : trail ? (
-            <h2 className="breadcrumbs" aria-label="Folder">
+            <h2 className={`breadcrumbs${other ? (otherShown ? ' list-tab' : ' list-tab active') : ''}`} aria-label="Folder">
               {[{ name: '', path: '' }, ...trail].map((f, i, all) => (
                 <span key={f.path}>
                   {i > 0 && <span className="crumb-sep">/</span>}
-                  {i === all.length - 1 ? (
+                  {i === all.length - 1 && !otherShown ? (
                     <span aria-current="page">{i === 0 ? (props.listTitle ?? 'Your files') : f.name}</span>
                   ) : (
-                    <button className={`crumb${dropClass(f.path)}`} onClick={() => openFolder(f.path)} {...dropTarget(f.path)}>
+                    // While the other list is shown, the folder's own name leads back to its files.
+                    <button className={`crumb${dropClass(f.path)}`} onClick={() => (i === all.length - 1 ? other!.onSelect(false) : openFolder(f.path))} {...dropTarget(f.path)}>
                       {i === 0 ? (props.listTitle ?? 'Your files') : f.name}
                     </button>
                   )}
@@ -660,6 +683,12 @@ export function FileLibrary(props: FileLibraryProps) {
           ) : (
             <h2>{props.listTitle ?? 'Your files'}</h2>
           )}
+          {other && !results && (
+            <h2 className={`list-tab${otherShown ? ' active' : ''}`}>
+              {otherShown ? <span aria-current="page">{other.label}</span> : <button className="crumb" onClick={() => other.onSelect(true)}>{other.label}</button>}
+            </h2>
+          )}
+          </div>
           <div className="list-tools">
             {(typeOptions.length > 1 || typeFilter !== 'all') && (
               <select className="grid-sort" aria-label="File type" title="Show one type of file" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as TypeGroup | 'all')}>
@@ -701,12 +730,13 @@ export function FileLibrary(props: FileLibraryProps) {
             )}
           </div>
         </div>
+        {otherShown && other!.notice}
         {error && <div className="form-error">{error}</div>}
         {moveError && <div className="form-error">{moveError}</div>}
         {items === null ? (
           <div className="muted">Loading…</div>
         ) : visible.length === 0 && folders.length === 0 && error ? null : visible.length === 0 && folders.length === 0 ? (
-          <div className="empty-state">{typeFilter !== 'all' ? `No ${TYPE_GROUPS.find(([g]) => g === typeFilter)![1].toLowerCase().replace('pdfs', 'PDFs')} ${results ? 'found' : q ? 'match your search' : 'here'}.` : results ? 'Nothing found in any folder.' : q ? (props.onFind ? 'Nothing here matches your search.' : 'Nothing matches your search.') : trail?.length ? 'This folder is empty.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
+          <div className="empty-state">{otherShown && typeFilter === 'all' && !q ? other!.empty : typeFilter !== 'all' ? `No ${TYPE_GROUPS.find(([g]) => g === typeFilter)![1].toLowerCase().replace('pdfs', 'PDFs')} ${results ? 'found' : q ? 'match your search' : 'here'}.` : results ? 'Nothing found in any folder.' : q ? (props.onFind ? 'Nothing here matches your search.' : 'Nothing matches your search.') : trail?.length ? 'This folder is empty.' : 'No files yet. Create a spreadsheet, presentation or document to get started.'}</div>
         ) : view === 'grid' ? (
           <div className="file-grid">
             {folders.map((f) => (
@@ -752,8 +782,8 @@ export function FileLibrary(props: FileLibraryProps) {
                   [
                     ['title', 'Name'],
                     ['kind', 'Type'],
-                    ['updatedAt', 'Last modified'],
-                    ['createdAt', 'Created'],
+                    ['updatedAt', otherShown ? other!.when : 'Last modified'],
+                    ...(otherShown ? [] : [['createdAt', 'Created']]),
                   ] as [SortKey, string][]
                 ).map(([key, label]) => (
                   <th key={key} className={key === 'kind' ? 'col-type' : undefined} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
@@ -765,6 +795,7 @@ export function FileLibrary(props: FileLibraryProps) {
                     </button>
                   </th>
                 ))}
+                {otherShown && <th>Where</th>}
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -801,7 +832,7 @@ export function FileLibrary(props: FileLibraryProps) {
                   </td>
                   <td className="col-type">{kindLabel(s)}</td>
                   <td>{formatWhen(s.updatedAt)}</td>
-                  <td>{formatWhen(s.createdAt)}</td>
+                  <td className={otherShown ? 'list-where' : undefined}>{otherShown ? other!.where(s) : formatWhen(s.createdAt)}</td>
                   <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                     {itemActions(s)}
                   </td>

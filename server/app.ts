@@ -39,7 +39,8 @@ import { ImageStore } from './images.ts';
 import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder } from '../shared/folders.ts';
 import { FolderStore, type Folders } from './folders.ts';
-import { LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore } from './localStore.ts';
+import { LISTED_EXTS, listedKind, LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore } from './localStore.ts';
+import { recentFiles, recentsAvailable, type Recents } from './recents.ts';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mountPlugin } from '../plugin/server/mount.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
@@ -110,7 +111,17 @@ export interface AppOptions {
    * are no accounts, every request is the one local user. With a token, only requests carrying it in the
    * "local" cookie are that user, which keeps other programs and web pages on this machine out.
    */
-  local?: { dir: string; token?: string };
+  local?: {
+    dir: string;
+    token?: string;
+    /**
+     * Show a file that is outside the folder: the desktop app (desktop/main.js) opens the file's own folder
+     * in place of this one. Without it only files inside the folder can be opened from Recents.
+     */
+    openFile?: (file: string) => void;
+    /** The files last opened on this machine (server/recents.ts); null where there is no such list. Tests give their own. */
+    recents?: (() => Promise<Recents>) | null;
+  };
 }
 
 function cleanTitle(t: unknown): string | null {
@@ -376,7 +387,9 @@ export async function buildApp(opts: AppOptions) {
     return { ok: true };
   });
 
-  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !!google, ...(folder && req.user ? { local: { dir: folder.root } } : {}) }));
+  // The desktop app's Recents: asked of the system unless the options say otherwise.
+  const recents = opts.local ? (opts.local.recents === undefined ? (recentsAvailable() ? () => recentFiles(LISTED_EXTS) : null) : opts.local.recents) : null;
+  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !!google, ...(folder && req.user ? { local: { dir: folder.root, recents: !!recents } } : {}) }));
 
   // Google sign-in: send the browser to Google; it comes back to the callback, which signs the user in.
   app.get('/api/auth/google/start', async (req, reply) => {
@@ -1053,6 +1066,43 @@ export async function buildApp(opts: AppOptions) {
         // Set when a very large folder could not be searched to the end.
         truncated: folder ? (await folder.find(q)).truncated : false,
       };
+    });
+
+    // --- The desktop app's Recents: the files last opened on this machine, wherever they are ----------
+    r.get('/api/local/recents', async (_req, reply) => {
+      if (!folder || !recents) return reply.code(404).send({ error: 'There is no list of recent files here.' });
+      const { files, blocked } = await recents();
+      return { files: files.map((f) => ({ ...f, kind: listedKind(f.path) })), blocked };
+    });
+
+    // Open one of them. A file in the open folder is named by its path there; for any other, the app is
+    // asked to open the file's own folder, and this server ends.
+    r.post('/api/local/open', async (req, reply) => {
+      const file = (req.body as { path?: unknown } | undefined)?.path;
+      if (!folder || typeof file !== 'string' || !path.isAbsolute(file) || !LISTED_EXTS.has(path.extname(file).toLowerCase())) return reply.code(400).send({ error: 'This file cannot be opened here.' });
+      let isFile = false;
+      try {
+        isFile = statSync(file).isFile();
+      } catch {
+        // Gone: answered below.
+      }
+      if (!isFile) return reply.code(404).send({ error: 'This file is no longer there.' });
+      const rel = path.relative(folder.root, file);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return { file: rel.split(path.sep).join('/') };
+      if (!opts.local?.openFile) return reply.code(400).send({ error: 'This file is outside the open folder. Open its folder to see it.' });
+      opts.local.openFile(file);
+      return { switching: true };
+    });
+
+    // The library's file at a path inside the open folder: what to show for it.
+    r.get('/api/local/resolve', async (req, reply) => {
+      const rel = (req.query as { file?: unknown }).file;
+      // A path inside the folder: no part of it may lead out, or be hidden.
+      if (!folder || typeof rel !== 'string' || !rel || rel.split('/').some((p) => !p || p.startsWith('.') || p.includes('\\'))) return reply.code(404).send({ error: 'File not found' });
+      const kind = listedKind(rel);
+      const id = kind === 'file' ? (storedFiles as LocalFileStore).idOf(req.user!.id, rel) : (sheets as LocalSheetStore).idOf(req.user!.id, rel);
+      if (!id) return reply.code(404).send({ error: 'File not found' });
+      return { kind, id };
     });
 
     // Create a folder called `name` inside the request's folder.

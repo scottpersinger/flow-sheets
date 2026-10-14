@@ -19,7 +19,8 @@ mkdirSync(dataDir, { recursive: true });
 const app = await buildApp({
   dataDir,
   staticDir: path.join(root, 'dist', 'client'),
-  local: { dir, token: process.env.LOCAL_TOKEN || undefined },
+  // A file outside the folder (one of Recents) is opened by the app, which serves its folder instead.
+  local: { dir, token: process.env.LOCAL_TOKEN || undefined, openFile: (file) => process.send?.({ openFile: file }) },
   blob: null,
 });
 // Loopback only, on a port the system picks unless one is given.
