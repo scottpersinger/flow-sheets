@@ -53,7 +53,7 @@ export async function mountLocalMcp(app: FastifyInstance, opts: LocalMcpOptions)
   hub.onShow = (_userId, file) => opts.show(pathOfFile(file.kind, file.id));
   hub.onFileChanged = (_userId, id) => opts.changed?.(id);
   // The model's tools only: none of the parts for ChatGPT's own app (its UI resource and app-only tools).
-  const handler = createPluginHandler({ hub, oauth: null, devUserId: opts.userId, publicUrl: opts.publicUrl, webDir: '', production: true, mcp: { level: 'tools' } });
+  const handler = createPluginHandler({ hub, oauth: null, devUserId: opts.userId, publicUrl: opts.publicUrl, webDir: '', production: true, mcp: { level: 'tools', local: true } });
   app.addHook('onRequest', (req, reply, done) => {
     const pathname = (req.raw.url ?? '/').split('?')[0];
     // Uploads and file links carry their own one-time tickets and tokens; OAuth is not served here.

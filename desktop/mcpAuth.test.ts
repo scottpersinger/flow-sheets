@@ -40,7 +40,7 @@ const REDIRECT = 'http://localhost:7777/callback';
 const VERIFIER = 'a-verifier-of-enough-length-0123456789-abcdefghij';
 const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
 
-async function register(body: unknown = { client_name: 'Claude Code (freeflow-docs)', redirect_uris: [REDIRECT] }) {
+async function register(body: unknown = { client_name: 'Claude Code (universal-local)', redirect_uris: [REDIRECT] }) {
   return fetch(`${origin}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }
 
@@ -70,7 +70,7 @@ describe('signing in agents to the desktop app', () => {
   it('gives an agent the person approves its own token, which can be refreshed and revoked', async () => {
     const { client_id } = await (await register()).json();
     const back = await authorize(client_id);
-    expect(asked).toEqual(['Claude Code (freeflow-docs)']);
+    expect(asked).toEqual(['Claude Code (universal-local)']);
     expect(back.origin + back.pathname).toBe(REDIRECT);
     expect(back.searchParams.get('state')).toBe('xyz');
     const code = back.searchParams.get('code')!;
@@ -78,21 +78,21 @@ describe('signing in agents to the desktop app', () => {
     const res = await token({ grant_type: 'authorization_code', code, code_verifier: VERIFIER, client_id, redirect_uri: REDIRECT });
     expect(res.status).toBe(200);
     const t = await res.json();
-    expect(auth.verify(`Bearer ${t.access_token}`)).toBe('Claude Code (freeflow-docs)');
+    expect(auth.verify(`Bearer ${t.access_token}`)).toBe('Claude Code (universal-local)');
     expect(auth.verify('Bearer nope')).toBeNull();
     // A code works once.
     expect((await token({ grant_type: 'authorization_code', code, code_verifier: VERIFIER, client_id })).status).toBe(400);
 
     const refreshed = await (await token({ grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id })).json();
-    expect(auth.verify(`Bearer ${refreshed.access_token}`)).toBe('Claude Code (freeflow-docs)');
-    expect(auth.clients().map((c) => c.name)).toEqual(['Claude Code (freeflow-docs)']);
+    expect(auth.verify(`Bearer ${refreshed.access_token}`)).toBe('Claude Code (universal-local)');
+    expect(auth.clients().map((c) => c.name)).toEqual(['Claude Code (universal-local)']);
 
     // Kept across restarts, in a file only the user can read, with no token in it as it was given.
     const file = path.join(dir, 'mcp-auth.json');
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(readFileSync(file, 'utf8')).not.toContain(refreshed.access_token);
     const again = new LocalOAuth({ file, issuer: origin, approve: async () => true });
-    expect(again.verify(`Bearer ${refreshed.access_token}`)).toBe('Claude Code (freeflow-docs)');
+    expect(again.verify(`Bearer ${refreshed.access_token}`)).toBe('Claude Code (universal-local)');
 
     auth.revokeAll();
     expect(auth.verify(`Bearer ${refreshed.access_token}`)).toBeNull();

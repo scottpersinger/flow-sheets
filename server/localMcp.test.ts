@@ -54,6 +54,8 @@ describe("the desktop app's MCP server", () => {
     // Only the model's tools: none of the parts for ChatGPT's own app.
     expect(tools.map((t) => t.name)).not.toContain('app_state');
 
+    // It is Universal Local, not the hosted Universal Docs.
+    expect(client.getServerVersion()).toMatchObject({ name: 'universal-local', title: 'Universal Local' });
     const list = JSON.parse(text(await client.callTool({ name: 'list_files', arguments: {} })));
     const notes = (list.files as { id: string; kind: string; title: string }[]).find((f) => f.kind === 'markdown');
     expect(notes).toBeTruthy();

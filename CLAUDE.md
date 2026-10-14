@@ -52,15 +52,16 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   (`POST /api/local/open`) has the server ask `main.js` (a message to its parent) to open the file's own
   folder instead; the new window starts at `/open?file=…&from=recents` (`pages/OpenLocalFile.tsx`), which
   finds the file (`GET /api/local/resolve`) and makes Recents the first breadcrumb (`client/src/listing.ts`).
-  The desktop app is also an MCP server for agents on the same machine (Claude Code, say): `server/localMcp.ts`
+  The desktop app is also an MCP server for agents on the same machine (Claude Code, say), named Universal Local
+  (`universal-local`; the hosted one is Universal Docs, `universal-docs`, from version 2): `server/localMcp.ts`
   serves the ChatGPT plugin's model tools (`plugin/server`, the newest version, no UI parts) over the open
-  folder's stores at `/mcp`. `main.js` serves it on a fixed port (127.0.0.1:39217, `FREEFLOW_MCP_PORT`),
+  folder's stores at `/mcp`. `main.js` serves it on a fixed port (127.0.0.1:39217, `UNIVERSAL_MCP_PORT`),
   passing requests to whichever folder's server is running with a secret made for each run. Agents sign in
   with OAuth 2.1 (`desktop/mcpAuth.js`: registration, PKCE, refresh; the person allows each agent in a native
   dialog, not on the web page; tokens hashed in `mcp-auth.json` in the app's data folder), and File › Connect
   an Agent (MCP)… shows the `claude mcp add` command and disconnects them. A file
   the model opens, creates or imports is shown in the window (`FileHub.onShow`, a `show` message to `main.js`,
-  a `freeflow-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
+  a `universal-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
   `client/src/desktopBridge.ts`), which the tools act on when no id is given.
 - The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
   (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.

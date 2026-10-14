@@ -1,6 +1,6 @@
 // The desktop app's window and its MCP server (server/localMcp.ts): the window tells the server which file
 // it shows, so an agent's tools act on it when no id is given, and goes to a file an agent opened
-// (desktop/main.js sends a freeflow-show event with its address).
+// (desktop/main.js sends a universal-show event with its address).
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from './api.ts';
@@ -32,7 +32,7 @@ export function useDesktopBridge(on: boolean): void {
       const page = (e as CustomEvent<unknown>).detail;
       if (typeof page === 'string' && page.startsWith('/') && page !== location.pathname) navigate(page);
     };
-    window.addEventListener('freeflow-show', show);
-    return () => window.removeEventListener('freeflow-show', show);
+    window.addEventListener('universal-show', show);
+    return () => window.removeEventListener('universal-show', show);
   }, [on, navigate]);
 }

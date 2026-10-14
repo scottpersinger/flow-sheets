@@ -9,7 +9,7 @@ import { FileHub, type FileService } from './files.ts';
 import { buildSlide, newId } from '../../shared/deck.ts';
 import { buildPptx } from '../../shared/pptxExport.ts';
 import { buildDocx } from '../../server/testing.ts';
-import { appHtml, appUri, createMcpServer, type McpVersion } from './mcp.ts';
+import { appHtml, appUri, createMcpServer, serverInfo, type McpVersion } from './mcp.ts';
 import { readFileSync } from 'node:fs';
 import { resolver } from '../../server/webFetch.ts';
 import { closePdfReaders } from '../../server/pdfMarkdown.ts';
@@ -175,6 +175,8 @@ describe('MCP server', () => {
 
   it('names the app resource after the bundle hash', () => {
     expect(appUri('h1')).toBe('ui://freeflow-docs/app-h1.html');
+    // Universal Docs from version 2; version 1 keeps the name it was submitted under. The desktop app's is Universal Local.
+    expect([serverInfo(1).name, serverInfo(2).name, serverInfo(2, true).name]).toEqual(['freeflow-docs', 'universal-docs', 'universal-local']);
     expect(appUri('h2')).not.toBe(appUri('h1'));
   });
 

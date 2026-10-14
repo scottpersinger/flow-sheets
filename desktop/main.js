@@ -4,7 +4,7 @@
 import { app, BrowserWindow, clipboard, dialog, Menu, session, shell } from 'electron';
 import { execFile, fork } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { LocalOAuth } from './mcpAuth.js';
@@ -12,7 +12,7 @@ import { LocalOAuth } from './mcpAuth.js';
 const root = path.resolve(import.meta.dirname, '..');
 // Also names the app's data directory, which would otherwise be the generic "Electron" one.
 // The name the app's data folder is kept under (last folder, each folder's database): changing it would lose them.
-app.setName('FreeFlow Docs');
+app.setName('Universal Docs');
 const isDir = (p) => {
   try {
     return statSync(p).isDirectory();
@@ -20,6 +20,15 @@ const isDir = (p) => {
     return false;
   }
 };
+// The app was called FreeFlow Docs: the first time it starts under its new name, its data folder moves over.
+const legacyData = path.join(app.getPath('appData'), 'FreeFlow Docs');
+if (!existsSync(app.getPath('userData')) && isDir(legacyData)) {
+  try {
+    renameSync(legacyData, app.getPath('userData'));
+  } catch (e) {
+    console.error(`Could not move ${legacyData}: ${e.message}`);
+  }
+}
 
 // The installed app is started from a menu or an icon, where the current directory means nothing: it
 // reopens the folder it showed last, or asks for one the first time.
@@ -50,7 +59,7 @@ let current = null;
 // An agent signs in with OAuth (mcpAuth.js): the person allows it in a dialog of the app, and it gets a token
 // of its own. Requests it makes with that token are passed on with a secret the folder's server knows, made
 // for each run of the app, which no agent ever sees.
-const MCP_PORT = Number(process.env.FREEFLOW_MCP_PORT) || 39217;
+const MCP_PORT = Number(process.env.UNIVERSAL_MCP_PORT) || 39217;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}`;
 const MCP_SECRET = randomBytes(32).toString('base64url');
 /** False until the port is ours: another copy of the app may hold it. */
@@ -65,7 +74,7 @@ async function approveAgent(name) {
   const options = {
     type: 'question',
     title: 'Connect an Agent',
-    message: `Allow “${name}” to use FreeFlow Docs?`,
+    message: `Allow “${name}” to use Universal Docs?`,
     detail:
       'It will be able to read, change, create and delete the files in the folders you open in the app, and show them in this window, until you disconnect it (File › Connect an Agent).\n\nAllow it only if you just asked an agent on this computer to connect. The name is the one the agent gave itself.',
     buttons: ['Allow', 'Don’t Allow'],
@@ -131,7 +140,7 @@ function startMcpProxy() {
  */
 function bringToFront() {
   if (process.platform !== 'darwin') return app.focus();
-  // .../FreeFlow Docs.app/Contents/MacOS/FreeFlow Docs (or Electron.app in development).
+  // .../Universal Docs.app/Contents/MacOS/Universal Docs (or Electron.app in development).
   const bundle = path.resolve(process.execPath, '..', '..', '..');
   if (!bundle.endsWith('.app')) return app.focus({ steal: true });
   execFile('open', ['-a', bundle], (e) => e && app.focus({ steal: true }));
@@ -149,7 +158,7 @@ function showPage(page) {
   win.focus();
   bringToFront();
   // The client's router goes there (main.tsx), as a link in the app would.
-  void win.webContents.executeJavaScript(`dispatchEvent(new CustomEvent('freeflow-show', { detail: ${JSON.stringify(page)} }))`).catch(() => {});
+  void win.webContents.executeJavaScript(`dispatchEvent(new CustomEvent('universal-show', { detail: ${JSON.stringify(page)} }))`).catch(() => {});
 }
 
 /** An agent rewrote a stored file: a window showing it loads it again (FilePage listens for this, as for the app's own assistant). */
@@ -160,14 +169,14 @@ function fileChanged(id) {
 }
 
 async function connectAgent() {
-  const command = `claude mcp add --scope user --transport http freeflow-docs ${MCP_URL}/mcp`;
+  const command = `claude mcp add --scope user --transport http universal-local ${MCP_URL}/mcp`;
   const agents = mcpAuth?.clients() ?? [];
   const connected = agents.length ? `Connected now: ${agents.map((a) => a.name).join(', ')}.` : 'No agent is connected yet.';
   const res = await dialog.showMessageBox({
     type: 'info',
     title: 'Connect an Agent',
     message: mcpListening ? 'Agents on this computer can read and edit the open folder’s files, and the app shows what they open.' : `The MCP server is not running: port ${MCP_PORT} is in use, probably by another copy of the app.`,
-    detail: `MCP server: ${MCP_URL}/mcp\n\nTo add it to Claude Code, run the command below, then /mcp in Claude Code to sign in. The app asks you to allow each agent that connects.\n\n${command}\n\n${connected}`,
+    detail: `MCP server (Universal Local): ${MCP_URL}/mcp\n\nTo add it to Claude Code, run the command below, then /mcp in Claude Code to sign in. The app asks you to allow each agent that connects.\n\n${command}\n\n${connected}`,
     buttons: agents.length ? ['Copy Command', 'Disconnect All Agents', 'Close'] : ['Copy Command', 'Close'],
     defaultId: 0,
     cancelId: agents.length ? 2 : 1,

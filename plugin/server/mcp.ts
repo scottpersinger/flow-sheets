@@ -29,7 +29,14 @@ export const appUri = (hash: string): string => `ui://freeflow-docs/app-${hash}.
 export const MCP_VERSIONS = [1, 2] as const;
 export type McpVersion = (typeof MCP_VERSIONS)[number];
 const SERVER_VERSIONS: Record<McpVersion, string> = { 1: '0.2.0', 2: '0.3.0' };
-export const serverInfo = (version: McpVersion = 1) => ({ name: 'freeflow-docs', version: SERVER_VERSIONS[version] });
+/**
+ * Who the server says it is: Universal Docs on the web, Universal Local in the desktop app (for agents on the
+ * same machine). Version 1 keeps the name it was submitted under.
+ */
+export const serverInfo = (version: McpVersion = 1, local = false) => ({
+  ...(local ? { name: 'universal-local', title: 'Universal Local' } : version === 1 ? { name: 'freeflow-docs' } : { name: 'universal-docs', title: 'Universal Docs' }),
+  version: SERVER_VERSIONS[version],
+});
 /** Version 1's server info. */
 export const SERVER_INFO = serverInfo(1);
 /** What the server advertises: tools, resources, and MCP Apps UI resources. */
@@ -67,6 +74,8 @@ export interface McpOptions {
   level?: 'minimal' | 'tools' | 'render' | 'app' | 'full';
   /** Which version of the tools to serve (MCP_VERSIONS); 1 when not given. */
   version?: McpVersion;
+  /** The desktop app's server, for agents on the same machine: it is named Universal Local. */
+  local?: boolean;
   /** Fetches files ChatGPT hands to import_file (tests pass a fake). */
   fetchFn?: typeof fetch;
 }
@@ -263,7 +272,7 @@ export function arcsAsEllipseBoxes(input: Record<string, unknown>): Record<strin
 
 export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
   const version = opts.version ?? 1;
-  const server = new McpServer({ ...serverInfo(version), icons: [DOC_ICON] }, { instructions: instructionsFor(version) });
+  const server = new McpServer({ ...serverInfo(version, opts.local), icons: [DOC_ICON] }, { instructions: instructionsFor(version) });
   // What a tool returns to the model holds only what a request needs: revisions and dates are for the app's
   // own tools, which keep them.
   const register = server.registerTool.bind(server) as (name: string, config: { _meta?: Record<string, unknown> }, handler: (...args: unknown[]) => Promise<CallToolResult> | CallToolResult) => unknown;
