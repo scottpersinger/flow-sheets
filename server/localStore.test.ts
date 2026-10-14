@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SheetMeta, StoredFile, Workbook } from '../shared/types.ts';
 import { buildApp, LOCAL_COOKIE } from './app.ts';
+import { DatabaseSync } from 'node:sqlite';
 import { LISTED_EXTS } from './localStore.ts';
 import { listable, parseRecents, recentFiles } from './recents.ts';
 
@@ -223,6 +224,34 @@ describe('a mounted folder', () => {
     expect(await rename('taken.PNG')).toBe('taken 2.png');
     expect(readFileSync(at('taken.png'), 'utf8')).toBe('other');
     expect((await library()).files.filter((f) => f.id === photo.id).map((f) => f.filename)).toEqual(['taken 2.png']);
+  });
+});
+
+describe('a folder opened before it had folders', () => {
+  it('puts each file listed at the top with its whole path back in its own folder', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-folder-'));
+    const data = mkdtempSync(path.join(tmpdir(), 'sheetsweb-localdata-'));
+    mkdirSync(path.join(dir, 'vault', 'people'), { recursive: true });
+    writeFileSync(path.join(dir, 'vault', 'people', 'Kate.md'), '# Kate\n');
+    writeFileSync(path.join(dir, 'top.md'), '# Top\n');
+    let first = await buildApp({ dataDir: data, local: { dir } });
+    const id = ((await first.inject({ method: 'GET', url: '/api/library?folder=vault/people' })).json() as Library).docs[0].id;
+    await first.close();
+    // How such a folder's rows were left: at the top, named by their path.
+    const db = new DatabaseSync(path.join(data, 'app.db'));
+    db.prepare("UPDATE sheets SET folder = '', title = 'vault/people/Kate' WHERE id = ?").run(id);
+    db.close();
+    first = await buildApp({ dataDir: data, local: { dir } });
+    try {
+      const top = (await first.inject({ method: 'GET', url: '/api/library' })).json() as Library;
+      expect(top.docs.map((d) => d.title)).toEqual(['top']);
+      const people = (await first.inject({ method: 'GET', url: '/api/library?folder=vault/people' })).json() as Library;
+      expect(people.docs.map((d) => [d.id, d.title])).toEqual([[id, 'Kate']]);
+    } finally {
+      await first.close();
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(data, { recursive: true, force: true });
+    }
   });
 });
 

@@ -304,6 +304,14 @@ export class LocalSheetStore extends SheetStore {
 
   override async init(): Promise<void> {
     await mkdir(this.baseDir, { recursive: true });
+    // Rows from before folders (the folder column came later, empty) put a file in a subfolder at the top
+    // of the library, named by its whole path. A row's folder and name follow from its file.
+    const rows = this.db.prepare('SELECT id, file, title, folder FROM sheets').all() as unknown as Pick<SheetRow, 'id' | 'file' | 'title' | 'folder'>[];
+    for (const r of rows) {
+      const folder = parentFolder(r.file);
+      const title = titleOf(r.file);
+      if (r.folder !== folder || r.title !== title) this.db.prepare('UPDATE sheets SET folder = ?, title = ? WHERE id = ?').run(folder, title, r.id);
+    }
   }
 
   /**
