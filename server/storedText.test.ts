@@ -1,11 +1,15 @@
-import { deflateSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { closePdfReaders } from './pdfMarkdown.ts';
 import type { StoredFile } from '../shared/types.ts';
 import { htmlToText, NoTextError, storedFileText, textBlocks, textOutline } from './storedText.ts';
 
 const meta = (filename: string, type: string): StoredFile => ({ id: 'f', filename, type, size: 0, createdAt: '', url: '', downloadUrl: '' });
 
 describe('stored file text', () => {
+  afterAll(closePdfReaders);
+
   it('reads a web page as what a reader sees', () => {
     const html =
       '<html><head><title>Multi-TMC &amp; you</title><style>p{color:red}</style><script>alert(1)</script></head><body>' +
@@ -16,14 +20,13 @@ describe('stored file text', () => {
     expect(text).not.toMatch(/alert|color|hidden/);
   });
 
-  it('reads a PDF, a text file and nothing from a picture or video', () => {
-    const stream = deflateSync(Buffer.from('BT /F1 12 Tf 72 700 Td (Hello from a PDF) Tj ET', 'latin1'));
-    const pdf = Buffer.concat([Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Length ${stream.length} /Filter /FlateDecode >>\nstream\n`), stream, Buffer.from('\nendstream\nendobj\n%%EOF')]);
-    expect(storedFileText(meta('a.pdf', 'application/pdf'), pdf)).toBe('Hello from a PDF');
-    expect(() => storedFileText(meta('scan.pdf', 'application/pdf'), Buffer.from('%PDF-1.7\n%%EOF'))).toThrow(/scanned image/);
-    expect(storedFileText(meta('a.json', 'application/json'), Buffer.from('﻿{"a":1}'))).toBe('{"a":1}');
-    expect(() => storedFileText(meta('p.png', 'image/png'), Buffer.from('x'))).toThrow(/view_image/);
-    expect(() => storedFileText(meta('v.mp4', 'video/mp4'), Buffer.from('x'))).toThrow(NoTextError);
+  it('reads a PDF, a text file and nothing from a picture or video', async () => {
+    const pdf = readFileSync(path.join(import.meta.dirname, 'fixtures', 'report.pdf'));
+    expect(await storedFileText(meta('a.pdf', 'application/pdf'), pdf)).toMatch(/^# Quarterly Report\n/);
+    await expect(storedFileText(meta('bad.pdf', 'application/pdf'), Buffer.from('%PDF-1.7\n%%EOF'))).rejects.toThrow(NoTextError);
+    expect(await storedFileText(meta('a.json', 'application/json'), Buffer.from('\uFEFF{"a":1}'))).toBe('{"a":1}');
+    await expect(storedFileText(meta('p.png', 'image/png'), Buffer.from('x'))).rejects.toThrow(/view_image/);
+    await expect(storedFileText(meta('v.mp4', 'video/mp4'), Buffer.from('x'))).rejects.toThrow(NoTextError);
   });
 
   it('splits text into blocks of a bounded size and reads them in parts', () => {

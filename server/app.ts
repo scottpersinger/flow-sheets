@@ -16,7 +16,7 @@ import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
 import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
-import { isPdf } from './pdfImport.ts';
+import { closePdfReaders, isPdf, PdfError, pdfToMarkdownFile } from './pdfMarkdown.ts';
 import { FileStore, isImageOfType } from './files.ts';
 import { checkImageEditRate, editedImageName, EDITABLE_IMAGE_TYPES, ImageEditError, MAX_EDIT_IMAGE_BYTES, MAX_EDIT_PROMPT_CHARS, openaiImageEditor, type ImageEditor } from './imageEdit.ts';
 import { CELL_IMAGE_TYPES, fileTypeOf, HTML_TYPE, isHtmlName, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
@@ -48,6 +48,7 @@ import { RevisionFeed } from './revisionFeed.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
+import { mountLocalMcp } from './localMcp.ts';
 import { MAX_OFFICE_ENTRY_BYTES, openZip, ZipError, zipEntries, zipEntryBytes, zipOfficeView } from './zipView.ts';
 import { isZipName } from '../shared/zip.ts';
 
@@ -123,6 +124,11 @@ export interface AppOptions {
     openFile?: (file: string) => void;
     /** The files last opened on this machine (server/recents.ts); null where there is no such list. Tests give their own. */
     recents?: (() => Promise<Recents>) | null;
+    /**
+     * An MCP server for agents on this machine (server/localMcp.ts) at /mcp, for requests with this bearer
+     * token. `url` is where agents reach it (desktop/main.js's fixed port); `show` puts a page in the window.
+     */
+    mcp?: { token: string; url?: string; show(path: string): void; changed?(id: string): void };
   };
 }
 
@@ -229,11 +235,16 @@ export async function buildApp(opts: AppOptions) {
   // The desktop app has one user, who owns the mounted folder's files and is never asked to sign in.
   const localUser: User | null = opts.local ? { id: 'local', email: 'local' } : null;
   if (localUser) db.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES (?, ?, '', ?)").run(localUser.id, localUser.email, new Date().toISOString());
+  // The desktop app's MCP server, and the file its window shows (the one the tools act on by default).
+  const localMcp = opts.local?.mcp
+    ? await mountLocalMcp(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, folders, userId: localUser!.id, token: opts.local.mcp.token, publicUrl: opts.local.mcp.url ?? null, show: opts.local.mcp.show, changed: opts.local.mcp.changed })
+    : null;
   app.addHook('onRequest', async (req) => {
     if (localUser) req.user = !opts.local!.token || req.cookies[LOCAL_COOKIE] === opts.local!.token ? localUser : null;
     else req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
   });
   app.addHook('onClose', async () => {
+    await closePdfReaders();
     if (backup) {
       backup.stop();
       // Let queued uploads finish before the database closes (a redeploy gives 15 s).
@@ -967,6 +978,18 @@ export async function buildApp(opts: AppOptions) {
       return attachment(reply, f.meta.filename, f.meta.type || 'application/octet-stream').send(createReadStream(f.file));
     });
 
+    // A PDF's text as a new Markdown file beside it (server/pdfMarkdown.ts); the PDF stays as it is.
+    r.post('/api/files/:id/markdown', async (req, reply) => {
+      try {
+        const made = await pdfToMarkdownFile({ sheets, files: storedFiles }, req.user!.id, (req.params as { id: string }).id);
+        if (!made) return reply.code(404).send({ error: 'File not found' });
+        return { doc: made.sheet, pages: made.pageCount, ocrPages: made.ocrPages, warnings: made.warnings };
+      } catch (e) {
+        if (e instanceof PdfError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
+    });
+
     // --- A zip file's contents (server/zipView.ts): listed, and each file in it opened read-only ------
     const storedZip = async (req: FastifyRequest, reply: FastifyReply) => {
       const f = storedFile(req);
@@ -1136,6 +1159,19 @@ export async function buildApp(opts: AppOptions) {
       if (!folder || !recents) return reply.code(404).send({ error: 'There is no list of recent files here.' });
       const { files, blocked } = await recents();
       return { files: files.map((f) => ({ ...f, kind: listedKind(f.path) })), blocked };
+    });
+
+    // The file the window shows ({kind, id}, or nothing): what the MCP tools act on when no id is given.
+    r.post('/api/local/showing', async (req) => {
+      const { kind, id } = (req.body ?? {}) as { kind?: unknown; id?: unknown };
+      const shown = typeof id === 'string' && (['doc', 'deck', 'sheet', 'markdown', 'file'] as const).find((k) => k === kind);
+      try {
+        localMcp?.setOpen(shown ? { kind: shown, id } : null);
+      } catch {
+        // Not a file of this folder (any more): nothing is open.
+        localMcp?.setOpen(null);
+      }
+      return { ok: true };
     });
 
     // Open one of them. A file in the open folder is named by its path there; for any other, the app is

@@ -1,6 +1,7 @@
 // Sheet tools the agent calls, run in the browser against the open spreadsheet's live store.
 // Edits go through SheetController.runAgent, so they recalculate, render and autosave like the user's
 // own edits, and everything from one agent request undoes as a single step.
+import { applyTextEdits, TextEditError } from '../../../shared/textEdits.ts';
 import { MAX_COLS, colToName, nameToCol, rangeToString, type Range } from '../../../shared/cellref.ts';
 import { IMAGE_MEDIA_TYPES, MAX_IMAGES_PER_MESSAGE, type AgentImage, type ClientToolCall } from '../../../shared/agent/protocol.ts';
 import { toCellInput, type FetchResult } from '../../../shared/connectors.ts';
@@ -269,16 +270,14 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     const { file, data } = await env.readFile(id);
     const bytes = new Uint8Array(data);
     if (!isTextFileType(file.type) || bytes.subarray(0, 8000).includes(0)) throw new ToolError(`${file.filename} is not a text file, so it cannot be edited.`);
-    let text = new TextDecoder('utf-8').decode(bytes);
+    let text = typeof i.content === 'string' ? i.content : new TextDecoder('utf-8').decode(bytes);
     let replacements = 0;
-    if (typeof i.content === 'string') text = i.content;
-    edits.forEach((e, k) => {
-      const count = text.split(e.find).length - 1;
-      if (count === 0) throw new ToolError(`Edit ${k + 1}: the text to find is not in the file. Nothing was changed. Read that part with read_file and copy it exactly.`);
-      if (count > 1 && !e.all) throw new ToolError(`Edit ${k + 1}: the text to find occurs ${count} times. Nothing was changed. Include more of the text around it, or set all to replace every one.`);
-      text = text.split(e.find).join(e.replace);
-      replacements += count;
-    });
+    try {
+      ({ text, replacements } = applyTextEdits(text, edits));
+    } catch (e) {
+      if (e instanceof TextEditError) throw new ToolError(e.message.replace('Read that part', 'Read that part with read_file'));
+      throw e;
+    }
     const saved = await env.writeFile(id, text);
     return JSON.stringify({ edited: true, file_id: saved.id, filename: saved.filename, ...(edits.length ? { replacements } : {}), total_chars: text.length });
   }

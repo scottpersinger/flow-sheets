@@ -1,0 +1,38 @@
+// The desktop app's window and its MCP server (server/localMcp.ts): the window tells the server which file
+// it shows, so an agent's tools act on it when no id is given, and goes to a file an agent opened
+// (desktop/main.js sends a freeflow-show event with its address).
+import { useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { api } from './api.ts';
+
+const KINDS = { doc: 'doc', d: 'deck', s: 'sheet', md: 'markdown', f: 'file' } as const;
+
+/** The file at an address of the app (/doc/<id>, /d/<id>, ...), or null for any other page. */
+export function fileAt(pathname: string): { kind: (typeof KINDS)[keyof typeof KINDS]; id: string } | null {
+  const m = /^\/(doc|d|s|md|f)\/([^/]+)$/.exec(pathname);
+  return m ? { kind: KINDS[m[1] as keyof typeof KINDS], id: decodeURIComponent(m[2]) } : null;
+}
+
+export function useDesktopBridge(on: boolean): void {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (on) api.localShowing(fileAt(pathname)).catch(() => {});
+  }, [on, pathname]);
+  // The page reports itself again when it is brought forward: of several windows, the one in front is shown.
+  useEffect(() => {
+    if (!on) return;
+    const report = () => document.visibilityState === 'visible' && document.hasFocus() && api.localShowing(fileAt(location.pathname)).catch(() => {});
+    window.addEventListener('focus', report);
+    return () => window.removeEventListener('focus', report);
+  }, [on]);
+  useEffect(() => {
+    if (!on) return;
+    const show = (e: Event) => {
+      const page = (e as CustomEvent<unknown>).detail;
+      if (typeof page === 'string' && page.startsWith('/') && page !== location.pathname) navigate(page);
+    };
+    window.addEventListener('freeflow-show', show);
+    return () => window.removeEventListener('freeflow-show', show);
+  }, [on, navigate]);
+}

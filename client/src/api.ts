@@ -133,6 +133,8 @@ export const api = {
   /** Make an edited copy of a stored picture with the image model; resolves with the new file. */
   editImage: (id: string, prompt: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/edit-image`, { prompt }),
   revertFile: (id: string) => request<{ file: StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/revert`),
+  /** A new Markdown file of a PDF's text, beside it. */
+  pdfToMarkdown: (id: string) => request<{ doc: SheetMeta; pages: number; ocrPages: number[]; warnings: string[] }>('POST', `/api/files/${encodeURIComponent(id)}/markdown`),
   getFile: (id: string) => request<{ file: StoredFile }>('GET', `/api/files/${encodeURIComponent(id)}/meta`),
   /** What a stored zip file holds (shared/zip.ts). */
   zipEntries: (id: string) => request<{ entries: ZipEntry[] }>('GET', `/api/files/${encodeURIComponent(id)}/zip`),
@@ -143,6 +145,8 @@ export const api = {
   /** The desktop app: the files last opened on this computer, in any app (server/recents.ts). */
   localRecents: () => request<{ files: RecentFile[]; /** Folders macOS does not let the app read. */ blocked: string[] }>('GET', '/api/local/recents'),
   /** Open one of them: answers with its path in the open folder, or that the app is switching to the file's folder. */
+  /** The desktop app: the file the window shows, for the MCP tools to act on (server/localMcp.ts); null for none. */
+  localShowing: (file: { kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file'; id: string } | null) => request<{ ok: true }>('POST', '/api/local/showing', file ?? {}),
   openLocal: (path: string) => request<{ file?: string; switching?: true }>('POST', '/api/local/open', { path }),
   /** The library's file at a path inside the open folder. */
   resolveLocal: (file: string) => request<{ kind: SheetMeta['kind'] | 'file'; id: string }>('GET', `/api/local/resolve?file=${encodeURIComponent(file)}`),

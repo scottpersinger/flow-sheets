@@ -3,7 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../server/db.ts';
 import { FileHub, type FileService } from './files.ts';
 import { buildSlide, newId } from '../../shared/deck.ts';
@@ -12,6 +12,9 @@ import { buildDocx } from '../../server/testing.ts';
 import { appHtml, appUri, createMcpServer, type McpVersion } from './mcp.ts';
 import { readFileSync } from 'node:fs';
 import { resolver } from '../../server/webFetch.ts';
+import { closePdfReaders } from '../../server/pdfMarkdown.ts';
+
+afterAll(closePdfReaders);
 
 const APP_URI = appUri('abc');
 
@@ -76,7 +79,7 @@ describe('MCP server', () => {
     const newer = (await v2.listTools()).tools;
     expect(v2.getServerVersion()?.version).toBe('0.3.0');
     expect(v2.getInstructions()).toContain('read_file');
-    const added = ['create_folder', 'move_file', 'upload_file', 'read_file'];
+    const added = ['search_files', 'create_folder', 'move_file', 'upload_file', 'read_file', 'edit_file', 'convert_pdf_to_markdown'];
     expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(added);
     // Besides those, two tools differ: list_files knows about folders, and edit_elements places an arc by its own box or its center and radius.
     expect(newer.filter((t) => !added.includes(t.name) && JSON.stringify(t) !== JSON.stringify(tools.find((o) => o.name === t.name))).map((t) => t.name)).toEqual(['list_files', 'edit_elements']);
@@ -97,7 +100,9 @@ describe('MCP server', () => {
     expect(missing.text).toContain('create_folder');
 
     const all = (await call('list_files', {}, v2)).data!;
-    expect(all.folders).toEqual(['Reports', 'Reports/2026']);
+    // The folders listed are those directly in the one asked about (the top, here), not every folder.
+    expect(all.folders).toEqual(['Reports']);
+    expect((await call('list_files', { folder: 'Reports' }, v2)).data!.folders).toEqual(['Reports/2026']);
     expect((all.files as { title: string; folder: string }[]).map((f) => [f.title, f.folder]).sort()).toEqual([['Budget', ''], ['Plan', 'Reports/2026']]);
     const titles = async (folder: string) => ((await call('list_files', { folder }, v2)).data!.files as { title: string }[]).map((f) => f.title);
     expect(await titles('Reports/2026')).toEqual(['Plan']);
@@ -106,6 +111,14 @@ describe('MCP server', () => {
     // Back to the top level.
     await call('move_file', { kind: 'doc', id: doc.id, folder: '' }, v2);
     expect((await titles('')).sort()).toEqual(['Budget', 'Plan']);
+    // search_files finds by name in any folder, or under one folder.
+    await call('move_file', { kind: 'doc', id: doc.id, folder: 'Reports/2026' }, v2);
+    const found = (await call('search_files', { query: 'PLA' }, v2)).data!;
+    expect((found.files as { title: string; folder: string }[]).map((f) => [f.title, f.folder])).toEqual([['Plan', 'Reports/2026']]);
+    expect((await call('search_files', { query: 'report' }, v2)).data!.folders).toEqual(['Reports']);
+    expect((await call('search_files', { query: 'Plan', folder: 'Reports' }, v2)).data!.files).toHaveLength(1);
+    expect((await call('search_files', { query: 'Budget', folder: 'Reports' }, v2)).data!.files).toHaveLength(0);
+    expect((await call('search_files', { query: 'Plan', kind: 'sheet' }, v2)).data!.files).toHaveLength(0);
     // Version 1 says nothing of folders, and this server has no public address to upload to.
     expect((await call('list_files')).data).not.toHaveProperty('folders');
     expect((await call('upload_file', { file_name: 'a.pdf' }, v2)).text).toContain('no public address');
@@ -232,17 +245,72 @@ describe('MCP server', () => {
     expect((await call('app_state')).data?.open).toBeNull();
   });
 
+  it('edits a stored text file in version 2: find and replace, a whole new text, undo; not a picture', async () => {
+    const v2 = await connect(2);
+    const changed: string[] = [];
+    svc.hub.onFileChanged = (_u, id) => changed.push(id);
+    const notes = await svc.hub.files.create('u1', 'LICENSE', 'application/octet-stream', Buffer.from('MIT License\n\nCopyright (c) 2025 Someone\n'));
+    expect((await call('read_doc', { doc_id: notes.id }, v2)).data).toMatchObject({ editable: true });
+
+    const r = await call('edit_file', { file_id: notes.id, edits: [{ find: '2025 Someone', replace: '2026 Scott' }] }, v2);
+    expect(r.data).toMatchObject({ edited: true, replacements: 1 });
+    expect((await call('read_file', { file_id: notes.id }, v2)).data?.text).toBe('MIT License\n\nCopyright (c) 2026 Scott\n');
+    expect(changed).toEqual([notes.id]);
+
+    // All or nothing: one edit that does not match changes nothing.
+    const missing = await call('edit_file', { file_id: notes.id, edits: [{ find: 'MIT', replace: 'BSD' }, { find: 'nowhere', replace: 'x' }] }, v2);
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toContain('read_doc');
+    expect((await call('read_file', { file_id: notes.id }, v2)).data?.text).toContain('MIT License');
+    expect((await call('edit_file', { file_id: notes.id, edits: [{ find: 'i', replace: 'I' }] }, v2)).text).toContain('occurs');
+
+    await call('edit_file', { file_id: notes.id, content: 'Replaced.' }, v2);
+    expect((await call('read_file', { file_id: notes.id }, v2)).data?.text).toBe('Replaced.');
+    expect((await call('edit_file', { file_id: notes.id, undo: true }, v2)).data).toMatchObject({ undone: true });
+    expect((await call('read_file', { file_id: notes.id }, v2)).data?.text).toContain('2026 Scott');
+    expect((await call('edit_file', { file_id: notes.id }, v2)).text).toContain('exactly one');
+
+    const picture = await svc.hub.files.create('u1', 'dot.png', 'image/png', Buffer.from(PNG_1X1, 'base64'));
+    expect((await call('edit_file', { file_id: picture.id, content: 'x' }, v2)).text).toContain('not a text file');
+    // Version 1 has no edit_file.
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('edit_file');
+    await v2.close();
+  });
+
+  it('makes a Markdown document of a PDF in version 2, beside it, and shows it', async () => {
+    const v2 = await connect(2);
+    const shown: string[] = [];
+    svc.hub.onShow = (_u, page) => shown.push(page.id);
+    svc.createFolder('Reports');
+    const pdf = await svc.hub.files.create('u1', 'Q3 Report.pdf', 'application/pdf', readFileSync(path.join(import.meta.dirname, '../../server/fixtures/report.pdf')), 'Reports');
+    const r = await call('convert_pdf_to_markdown', { file_id: pdf.id }, v2);
+    expect(r.data).toMatchObject({ file: { kind: 'markdown', title: 'Q3 Report', folder: 'Reports' }, pdf: { id: pdf.id }, pages: 2, ocr_pages: [] });
+    expect(r.data?.warnings).toBeUndefined();
+    const doc = r.data?.file as { id: string };
+    expect(shown).toEqual([doc.id]);
+    expect(((await call('read_doc', { doc_id: doc.id }, v2)).data?.blocks as { markdown: string }[])[0].markdown).toBe('# Quarterly Report');
+    // The open file when none is named; only PDFs.
+    await call('open_file', { kind: 'file', id: pdf.id }, v2);
+    const again = (await call('convert_pdf_to_markdown', {}, v2)).data?.file as { id: string; kind: string };
+    expect(again.kind).toBe('markdown');
+    expect(again.id).not.toBe(doc.id);
+    const notes = await svc.hub.files.create('u1', 'notes.txt', 'text/plain', Buffer.from('hi'));
+    expect((await call('convert_pdf_to_markdown', { file_id: notes.id }, v2)).text).toContain('not a PDF');
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('convert_pdf_to_markdown');
+    await v2.close();
+  });
+
   it('reads stored files from version 2 on, and leaves version 1 as it was', async () => {
     const v2 = await connect(2);
     attachments.set('https://files.example/plan.html', Buffer.from('<html><head><title>Plan</title></head><body><p>Ship it.</p><script>x()</script></body></html>'));
     const imported = await call('import_file', { file: { download_url: 'https://files.example/plan.html', file_name: 'plan.html', file_id: 'f-plan' } });
     const id = (imported.data?.file as { id: string }).id;
     const opened = await call('open_file', { kind: 'file', id }, v2);
-    expect(opened.data?.text_content).toMatchObject({ filename: 'plan.html', read_only: true, block_count: 2, blocks: [{ n: 1, markdown: '# Plan' }, { n: 2, markdown: 'Ship it.' }] });
+    expect(opened.data?.text_content).toMatchObject({ filename: 'plan.html', editable: true, block_count: 2, blocks: [{ n: 1, markdown: '# Plan' }, { n: 2, markdown: 'Ship it.' }] });
     // The open file, or one named by id.
     expect(((await call('read_doc', { from: 2 }, v2)).data?.blocks as { markdown: string }[]).map((b) => b.markdown)).toEqual(['Ship it.']);
     expect((await call('read_doc', { doc_id: id }, v2)).data?.block_count).toBe(2);
-    expect((await call('insert_content', { markdown: 'More' }, v2)).text).toMatch(/cannot be changed/);
+    expect((await call('insert_content', { markdown: 'More' }, v2)).text).toMatch(/changed with edit_file/);
     // read_file returns the file as it is: a web page's source, in parts when asked.
     const raw = await call('read_file', { file_id: id }, v2);
     const source = '<html><head><title>Plan</title></head><body><p>Ship it.</p><script>x()</script></body></html>';
@@ -252,7 +320,7 @@ describe('MCP server', () => {
     // A file with no text says why, and open_file still opens it.
     attachments.set('https://files.example/scan.pdf', Buffer.from('%PDF-1.7\n%%EOF'));
     const scan = (((await call('import_file', { file: { download_url: 'https://files.example/scan.pdf', file_name: 'scan.pdf', file_id: 'f-scan' } })).data?.file) as { id: string }).id;
-    expect((await call('read_doc', { doc_id: scan }, v2)).text).toMatch(/scanned image/);
+    expect((await call('read_doc', { doc_id: scan }, v2)).text).toMatch(/could not be read/);
     // A PDF comes back whole, as an embedded resource with its bytes.
     const pdf = await v2.callTool({ name: 'read_file', arguments: { file_id: scan } });
     const parts = pdf.content as { type: string; resource?: { mimeType: string; blob: string; uri: string } }[];

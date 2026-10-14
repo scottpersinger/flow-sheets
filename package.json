@@ -35,6 +35,7 @@
     "@fastify/cookie": "^11.1.2",
     "@fastify/static": "^10.1.5",
     "@imgly/background-removal": "^1.7.0",
+    "@llamaindex/liteparse": "^2.15.1",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@openai/mcp-extensions": "^0.1.0",
@@ -118,7 +119,9 @@
       "!server/scripts/**",
       "!node_modules/@anthropic-ai/claude-agent-sdk*/**",
       "!node_modules/pdfjs-dist/**",
-      "!node_modules/@napi-rs/**"
+      "!node_modules/@napi-rs/**",
+      "!node_modules/@llamaindex/liteparse/*.node",
+      "!node_modules/@llamaindex/liteparse/*.so"
     ],
     "win": {
       "target": [

@@ -52,6 +52,16 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   (`POST /api/local/open`) has the server ask `main.js` (a message to its parent) to open the file's own
   folder instead; the new window starts at `/open?file=…&from=recents` (`pages/OpenLocalFile.tsx`), which
   finds the file (`GET /api/local/resolve`) and makes Recents the first breadcrumb (`client/src/listing.ts`).
+  The desktop app is also an MCP server for agents on the same machine (Claude Code, say): `server/localMcp.ts`
+  serves the ChatGPT plugin's model tools (`plugin/server`, the newest version, no UI parts) over the open
+  folder's stores at `/mcp`. `main.js` serves it on a fixed port (127.0.0.1:39217, `FREEFLOW_MCP_PORT`),
+  passing requests to whichever folder's server is running with a secret made for each run. Agents sign in
+  with OAuth 2.1 (`desktop/mcpAuth.js`: registration, PKCE, refresh; the person allows each agent in a native
+  dialog, not on the web page; tokens hashed in `mcp-auth.json` in the app's data folder), and File › Connect
+  an Agent (MCP)… shows the `claude mcp add` command and disconnects them. A file
+  the model opens, creates or imports is shown in the window (`FileHub.onShow`, a `show` message to `main.js`,
+  a `freeflow-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
+  `client/src/desktopBridge.ts`), which the tools act on when no id is given.
 - The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
   (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
   `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;
@@ -70,6 +80,11 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   Excel, CSV or Markdown file becomes a file the app edits, a Markdown file staying Markdown; a PDF, video, picture or web page is stored as
   it is). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
   with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
+- A PDF's text is read as Markdown by `server/pdfMarkdown.ts` (`pdfToMarkdown`, on LiteParse: PDFium for the text and
+  layout, Tesseract OCR for the pages that are scans, in worker processes with a deadline; pictures are left out).
+  `read_doc` on a stored PDF reads it, and Convert to Markdown (the PDF's page and its menu in the list,
+  `POST /api/files/:id/markdown`), the assistant's `convert_pdf` and the MCP `convert_pdf_to_markdown` (version 2)
+  make a Markdown file of it beside the PDF (`pdfToMarkdownFile`).
 - A zip file's page lists what it holds and opens each file in it read-only (`client/src/components/ZipBrowser.tsx`,
   the folder and file in the address as `?dir=` / `?entry=`). The server never unpacks to disk
   (`server/zipView.ts`): `GET /api/files/:id/zip` lists the files, `/zip/entry?path=` sends one (inline only

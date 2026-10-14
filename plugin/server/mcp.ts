@@ -7,7 +7,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { EXTENSION_ID, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
-import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType, MAX_VIDEO_BYTES } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType, MAX_TEXT_EDIT_BYTES, MAX_VIDEO_BYTES } from '../../shared/types.ts';
 import { editElementsV1, schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
@@ -76,13 +76,13 @@ export const INSTRUCTIONS = `Universal Docs: the user's text documents, slide pr
 Document tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. A Markdown document (kind markdown) is a plain Markdown file, kept exactly as written: read_doc, insert_content, replace_blocks, delete_blocks and replace_text work on it, and its formatting is its text. After editing, the open file updates in the app by itself; do not call open_file again.`;
 
 const V2_INSTRUCTIONS =
-  'A file on your own computer (one you can read from disk, not an attachment or a web address) is uploaded with upload_file: it returns an address, and you send the file\'s bytes there yourself, with curl for example. Files can be kept in folders, named by their path ("Reports/2026"): list_files shows each file\'s folder and the folders there are, create_folder makes one, move_file puts a file in one, and upload_file can upload straight into one.';
+  'A file on your own computer (one you can read from disk, not an attachment or a web address) is uploaded with upload_file: it returns an address, and you send the file\'s bytes there yourself, with curl for example. Files can be kept in folders, named by their path ("Reports/2026"): list_files lists one folder (its files and the folders in it; the top when none is given), search_files finds files and folders by name in any folder, create_folder makes one, move_file puts a file in one, and upload_file can upload straight into one.';
 
 /** The instructions a version of the server gives; version 2 adds how to read stored files, upload local ones and use folders. */
 export const instructionsFor = (version: McpVersion = 1): string =>
   version === 1
     ? INSTRUCTIONS
-    : `${INSTRUCTIONS}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks.`;
+    : `${INSTRUCTIONS}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks. convert_pdf_to_markdown makes a Markdown document of a PDF's text, to edit.`;
 
 const DOC_ICON = {
   src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
@@ -286,19 +286,54 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   const appTools = level === 'app' || level === 'full';
   const entrypoint = level === 'full';
 
+  /** Most files or folders one listing or search returns: a folder on disk can hold thousands. */
+  const MAX_LISTED = 200;
   const listFiles = { title: 'List files', description: "The user's documents, Markdown documents, presentations, spreadsheets and stored files (PDFs, web pages, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.", inputSchema: { kind: anyKind.optional(), query: z.string().max(200).optional().describe('Only files whose title contains this text.') }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } };
   // Version 2 knows about folders: each file's folder, the folders there are, and a listing of one folder.
   if (version === 1) server.registerTool('list_files', listFiles, async ({ kind: k, query }) => guard(() => ok({ files: service.list(k, query).slice(0, 50), ...service.state() })));
-  else
+  else {
     server.registerTool(
       'list_files',
       {
         ...listFiles,
-        description: `${listFiles.description} Each file has the path of the folder it is in, which is empty at the top. The result also lists every folder. Give folder to list only the files in one.`,
+        description: `${listFiles.description} Each file has the path of the folder it is in, which is empty at the top. Give folder to list one folder: its files and the folders directly in it. Without folder, the most recently edited files anywhere and the folders at the top. To find a file or folder by name wherever it is, use search_files.`,
         inputSchema: { ...listFiles.inputSchema, folder: z.string().max(1000).optional().describe('Only the files in this folder, by its path, such as "Reports/2026". An empty string means the top level. Leave out to list files in every folder.') },
       },
-      async ({ kind: k, query, folder }) => guard(() => ok({ files: service.listWithFolders(k, query, folder === undefined ? undefined : service.folderPath(folder)).slice(0, folder === undefined ? 50 : 200), folders: service.folders(), ...service.state() })),
+      async ({ kind: k, query, folder }) =>
+        guard(() => {
+          const path = folder === undefined ? undefined : service.folderPath(folder);
+          const files = service.listWithFolders(k, query, path);
+          const limit = path === undefined ? 50 : MAX_LISTED;
+          const folders = service.subfolders(path ?? '');
+          return ok({
+            files: files.slice(0, limit),
+            folders: folders.slice(0, MAX_LISTED),
+            ...(files.length > limit || folders.length > MAX_LISTED ? { truncated: true, note: 'Not everything is listed: narrow it with query or kind, or use search_files.' } : {}),
+            ...service.state(),
+          });
+        }),
     );
+    server.registerTool(
+      'search_files',
+      {
+        title: 'Search files',
+        description:
+          'Find documents, Markdown documents, presentations, spreadsheets, stored files and folders whose name contains the text, in every folder (or only in one folder and the folders under it), most recently edited first. Each file has its id and the path of its folder. Names are matched, not what the files say.',
+        inputSchema: {
+          query: z.string().trim().min(1).max(200).describe('Text the name contains, such as "budget" or "MULTI_TMC". Case does not matter.'),
+          kind: anyKind.optional(),
+          folder: z.string().max(1000).optional().describe('Only look in this folder and the folders under it, by its path, such as "Reports". Leave out to look everywhere.'),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ query, kind: k, folder }) =>
+        guard(async () => {
+          const found = await service.search(query, k, folder === undefined ? undefined : service.folderPath(folder));
+          const truncated = found.files.length > MAX_LISTED || found.folders.length > MAX_LISTED;
+          return ok({ files: found.files.slice(0, MAX_LISTED), folders: found.folders.slice(0, MAX_LISTED), ...(truncated ? { truncated: true, note: 'More match: use a longer query, a kind or a folder.' } : {}), ...service.state() });
+        }),
+    );
+  }
   if (level === 'minimal') return server;
 
   if (ui) server.server.registerCapabilities(SERVER_CAPABILITIES);
@@ -378,7 +413,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     async ({ title, markdown, kind: k }) =>
       guard(async () => {
         const file = await service.createDoc(title, markdown, k ?? 'doc');
-        service.setOpen({ kind: k ?? 'doc', id: file.id });
+        service.show({ kind: k ?? 'doc', id: file.id });
         return ok({ file, ...service.state() });
       }),
   );
@@ -394,7 +429,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     async ({ title, theme, slides }) =>
       guard(async () => {
         const file = await service.createDeck(title, theme as ThemeId | undefined, (slides ?? []) as SlideSpec[]);
-        service.setOpen({ kind: 'deck', id: file.id });
+        service.show({ kind: 'deck', id: file.id });
         return ok({ file, ...service.state() });
       }),
   );
@@ -410,7 +445,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     async ({ title }) =>
       guard(async () => {
         const file = await service.createSheet(title);
-        service.setOpen({ kind: 'sheet', id: file.id });
+        service.show({ kind: 'sheet', id: file.id });
         return ok({ file, ...service.state() });
       }),
   );
@@ -436,7 +471,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         // An attachment brings its name; a web address gives one in its last part or its headers.
         const got = file ? await download(file.download_url, opts.fetchFn ?? fetch, importLimit(file.file_name)) : await download(url!, opts.fetchFn ?? fetch, importLimit);
         const r = await service.importFile(got.bytes, file ? file.file_name : webImportName(got.name, title), title);
-        service.setOpen({ kind: r.file.kind, id: r.file.id });
+        service.show({ kind: r.file.kind, id: r.file.id });
         return ok({ ...r, ...service.state() });
       }),
   );
@@ -453,12 +488,12 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     },
     async ({ kind: k, id }) =>
       guard(async () => {
-        service.setOpen({ kind: k, id });
+        service.show({ kind: k, id });
         if (k === 'file' && version === 1) return ok({ file: service.storedFile(id), ...service.state() });
         if (k === 'file') {
           // Its text comes back too, when it has any (a PDF, a web page, a text file), and a picture is shown.
           const file = service.storedFile(id);
-          const read = await service.readStored(id).catch((e: unknown) => (e instanceof ToolError ? null : Promise.reject(e)));
+          const read = await service.readStored(id, undefined, undefined, version >= 2).catch((e: unknown) => (e instanceof ToolError ? null : Promise.reject(e)));
           const f = service.hub.files.get(service.userId, id);
           const picture = f && f.meta.type.startsWith('image/') ? await shownImage(f.file, f.meta.type, f.meta.size) : [];
           const result = ok({ file, ...(read ? { text_content: read, note: 'Read more of it with read_doc and this id as doc_id (from, to).' } : {}), ...service.state() });
@@ -601,6 +636,54 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         return { content: [{ type: 'text', text: JSON.stringify(data) }, ...raw], structuredContent: data };
       }),
   );
+
+  if (version >= 2)
+    server.registerTool(
+      'edit_file',
+      {
+        title: 'Edit a stored text file',
+        description:
+          'Change a stored text file (anything list_files lists as kind file that read_file returns as text: .txt, .json, .html, .svg, .xml, a LICENSE or config file, source code, ...): find-and-replace edits, its whole new text, or undo of the last change. Read the part you change with read_file first, so find matches exactly. Give exactly one of edits, content or undo. PDFs, pictures and videos cannot be edited, and documents, presentations, spreadsheets and Markdown documents have their own tools. The app shows the new text by itself.',
+        inputSchema: {
+          file_id: fileId,
+          edits: z
+            .array(
+              z.object({
+                find: z.string().min(1).describe('Text to find, exactly as it is in the file (including spaces and line breaks). Include enough around it to match one place only.'),
+                replace: z.string().describe('What to put there instead; an empty string deletes the text.'),
+                all: z.boolean().optional().describe('Replace every occurrence instead of requiring exactly one.'),
+              }),
+            )
+            .max(100)
+            .optional()
+            .describe('Replacements, made in order. Nothing is saved if any of them does not match.'),
+          content: z.string().max(MAX_TEXT_EDIT_BYTES).optional().describe('Instead of edits: the whole new text of the file. Only for a short file or a full rewrite.'),
+          undo: z.boolean().optional().describe('Instead of edits: put back the version from before the last change, where one is kept.'),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ file_id, edits, content, undo }) => guard(async () => ok(await service.editStored(file_id, { edits, content, undo }))),
+    );
+
+  if (version >= 2)
+    server.registerTool(
+      'convert_pdf_to_markdown',
+      {
+        title: 'Convert a PDF to Markdown',
+        description:
+          "Make a Markdown document of a stored PDF's text, next to the PDF (in the same folder, with the same name), and show it in the app. The PDF does not change. Headings, lists, tables and links are kept, running headers and footers dropped, pictures left out, and scanned pages read with OCR (the result says which). Use it when the user wants a PDF as Markdown or as text to edit; the new document is then read and edited with read_doc, replace_blocks and the other document tools. Only to read a PDF, read_doc with its id is enough: it reads the same text without making a file.",
+        inputSchema: { file_id: fileId.optional().describe('The PDF (kind file). Defaults to the file open in the app.') },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ file_id }) =>
+        guard(async () => {
+          const id = file_id ?? (service.open?.kind === 'file' ? service.open.id : undefined);
+          if (!id) throw new ToolError('Give file_id: no file is open in the app. Use list_files or search_files to find ids.');
+          const { warnings, ...made } = await service.convertPdf(id);
+          service.show({ kind: 'markdown', id: made.file.id });
+          return ok({ ...made, ...(warnings.length ? { warnings } : {}), ...service.state() });
+        }),
+    );
 
   // One edit of a picture, said as what the picture should become: each change is a field of its own, typed for
   // what it takes. (The app's assistant gives a list of operations instead; this is turned into one.)
@@ -804,8 +887,13 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           // A stored file (a PDF, a web page, a text file) is read like a document, and is not changed.
           const stored = version >= 2 ? service.storedTarget(doc_id) : null;
           if (stored) {
-            if (name !== 'read_doc') return fail('This is a stored file (a PDF, web page, picture or other upload), not a document: read_doc reads its text, but it cannot be changed. To edit its content, import it as a document with import_file.');
-            return ok(await service.readStored(stored, typeof input.from === 'number' ? input.from : undefined, typeof input.to === 'number' ? input.to : undefined));
+            if (name !== 'read_doc')
+              return fail(
+                version >= 2
+                  ? 'This is a stored file (a PDF, web page, picture or other upload), not a document: read_doc reads its text, but the document tools cannot change it. A text file is changed with edit_file; a PDF, picture or video cannot be changed (import it as a document with import_file to edit its content).'
+                  : 'This is a stored file (a PDF, web page, picture or other upload), not a document: read_doc reads its text, but it cannot be changed. To edit its content, import it as a document with import_file.',
+              );
+            return ok(await service.readStored(stored, typeof input.from === 'number' ? input.from : undefined, typeof input.to === 'number' ? input.to : undefined, version >= 2));
           }
           const target = service.docTarget(doc_id);
           if (!target) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');

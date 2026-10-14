@@ -1,8 +1,7 @@
 // The text of a stored file, for an assistant to read: a PDF's extracted text, a web page's visible text
 // (as light Markdown) and any other text file as it is. Pictures, videos and other binary files have none.
 import { HTML_TYPE, isTextFileType, type StoredFile } from '../shared/types.ts';
-import { pdfText } from './pdfImport.ts';
-import { ImportError } from './xlsxImport.ts';
+import { PdfError, pdfToMarkdown } from './pdfMarkdown.ts';
 
 /** A stored file that has no text to read, with what to tell the model. */
 export class NoTextError extends Error {}
@@ -41,17 +40,17 @@ export function htmlToText(html: string): string {
   return t && !s.startsWith(`# ${t}`) ? `# ${t}\n\n${s}` : s;
 }
 
-/** The text of a stored file. Throws NoTextError for a file that has none (a picture, a video, a scan). */
-export function storedFileText(meta: StoredFile, data: Buffer): string {
+/** The text of a stored file. Throws NoTextError for a file that has none (a picture, a video, a blank PDF). */
+export async function storedFileText(meta: StoredFile, data: Buffer): Promise<string> {
   if (meta.type === 'application/pdf') {
     let text: string;
     try {
-      text = pdfText(data);
+      text = (await pdfToMarkdown(data)).markdown;
     } catch (e) {
-      if (e instanceof ImportError) throw new NoTextError(e.message);
+      if (e instanceof PdfError) throw new NoTextError(e.message);
       throw e;
     }
-    if (!text.trim()) throw new NoTextError(`No text could be extracted from ${meta.filename}. It may be a scanned image.`);
+    if (!text.trim()) throw new NoTextError(`No text could be read from ${meta.filename}, even with OCR.`);
     return text;
   }
   if (meta.type.startsWith('image/') && meta.type !== 'image/svg+xml') throw new NoTextError(`${meta.filename} is a picture, so it has no text to read. view_image shows it to you.`);

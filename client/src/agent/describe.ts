@@ -113,6 +113,8 @@ export function toolLabel(name: string, i: Input): string {
       const n = Array.isArray(i.operations) ? i.operations.length : 0;
       return `Edited a picture (${n} ${n === 1 ? 'change' : 'changes'})`;
     }
+    case 'convert_pdf':
+      return 'Made a Markdown copy of a PDF';
     case 'read_file':
       return i.offset ? 'Read more of a file' : 'Read a file';
     case 'render_slide':

@@ -24,12 +24,14 @@ import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideCo
 import { docFromNode, newDoc, validateDoc, type Doc } from '../../shared/doc.ts';
 import { markdownToDoc } from '../../shared/docMarkdown.ts';
 import { newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../../shared/markdown.ts';
-import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, MAX_CELL_IMAGE_BYTES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
+import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_TEXT_EDIT_BYTES, PREVIEW_FILE_TYPES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import { FileStore, isImageOfType } from '../../server/files.ts';
 import { imageSize } from '../../server/imageSize.ts';
 import { open } from 'node:fs/promises';
 import { importBytes, ImportFileError } from '../../server/importFile.ts';
 import { NoTextError, storedFileText, textOutline } from '../../server/storedText.ts';
+import { PdfError, pdfToMarkdownFile } from '../../server/pdfMarkdown.ts';
+import { applyTextEdits, TextEditError, type TextEdit } from '../../shared/textEdits.ts';
 import { readFile } from 'node:fs/promises';
 
 export { ToolError };
@@ -214,6 +216,11 @@ function mapImages<T extends FileData>(kind: FileKind, data: T, fn: (src: string
   return mapWorkbookImages(data as Workbook, fn) as T;
 }
 
+/** Whether a stored file is text the model may rewrite: what the app's own editors rewrite (not a PDF, picture or video), with no NUL bytes. */
+function editableText(meta: StoredFile, data: Buffer): boolean {
+  return isTextFileType(meta.type) && !PREVIEW_FILE_TYPES.includes(meta.type) && !data.subarray(0, 8000).includes(0);
+}
+
 /** The app's storage, shared by every account the plugin serves. */
 export class FileHub {
   readonly db: DB;
@@ -223,6 +230,13 @@ export class FileHub {
   readonly folders: Folders;
   readonly publicUrl: string | null;
   private readonly byUser = new Map<string, FileService>();
+  /**
+   * Told when the model opens a file (open_file, or a file it created or imported), for a host that shows
+   * it itself: the desktop app's window goes to it. ChatGPT's app follows app_state instead.
+   */
+  onShow: ((userId: string, file: { kind: LibraryKind; id: string }) => void) | null = null;
+  /** Told when the model rewrote a stored file (edit_file), for a host showing it to load it again. */
+  onFileChanged: ((userId: string, id: string) => void) | null = null;
   /** Links to stored files' bytes: the app's iframe has no credentials, so the address carries a token. */
   private readonly fileLinks = new Map<string, { userId: string; id: string; expires: number }>();
   /** One-time tickets letting the app upload a file for import without a bearer token (it has none). */
@@ -360,13 +374,48 @@ export class FileService {
   listWithFolders(kind?: LibraryKind, query?: string, folder?: string): FileSummary[] {
     const q = query?.trim().toLowerCase();
     const kinds = kind ? [kind] : LIBRARY_KINDS;
-    return kinds
-      .flatMap((k) => (k === 'file' ? this.hub.files.list(this.userId).map((f) => ({ ...fileSummary(f), folder: f.folder ?? '' })) : this.sheets.list(this.userId, k).map((m) => ({ ...summary(m), folder: m.folder ?? '' }))))
-      .filter((m) => (!q || m.title.toLowerCase().includes(q)) && (folder === undefined || m.folder === folder))
-      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+    // One folder is read on its own: in the desktop app a whole-library list walks every folder on disk.
+    const all =
+      folder === undefined
+        ? kinds.flatMap((k) => (k === 'file' ? this.hub.files.list(this.userId).map((f) => this.fileRow(f)) : this.sheets.list(this.userId, k).map((m) => this.docRow(m))))
+        : [
+            ...(kinds.includes('file') ? this.hub.files.listIn(this.userId, folder).map((f) => this.fileRow(f)) : []),
+            ...this.sheets
+              .listIn(this.userId, folder)
+              .filter((m) => kinds.includes(m.kind as LibraryKind))
+              .map((m) => this.docRow(m)),
+          ];
+    return all.filter((m) => (!q || m.title.toLowerCase().includes(q)) && (folder === undefined || m.folder === folder)).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+  }
+
+  private fileRow(f: StoredFile): FileSummary {
+    return { ...fileSummary(f), folder: f.folder ?? '' };
+  }
+
+  private docRow(m: SheetMeta): FileSummary {
+    return { ...summary(m), folder: m.folder ?? '' };
+  }
+
+  /**
+   * Files and folders whose name contains the text, in any folder (or only in `within` and the folders
+   * under it), most recently edited first; the app's Find files.
+   */
+  async search(text: string, kind?: LibraryKind, within?: string): Promise<{ files: FileSummary[]; folders: string[] }> {
+    const inside = (path: string) => within === undefined || within === '' || path === within || path.startsWith(`${within}/`);
+    const [docs, files, folders] = await Promise.all([this.sheets.search(this.userId, text), this.hub.files.search(this.userId, text), this.hub.folders.search(this.userId, text)]);
+    const found = [...(!kind || kind === 'file' ? files.map((f) => this.fileRow(f)) : []), ...docs.filter((m) => !kind || m.kind === kind).map((m) => this.docRow(m))];
+    return {
+      files: found.filter((f) => inside(f.folder ?? '')).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1)),
+      folders: kind ? [] : folders.filter((p) => p !== within && inside(p)),
+    };
   }
 
   // --- Folders: a folder is its path ("Reports/2026"); '' is the top -------------------
+
+  /** The folders directly in one ('' for the top), as paths. */
+  subfolders(parent: string): string[] {
+    return this.hub.folders.children(this.userId, parent);
+  }
 
   /** Every folder of the account, as paths. */
   folders(): string[] {
@@ -473,17 +522,66 @@ export class FileService {
     return this.open?.kind === 'file' ? this.open.id : null;
   }
 
-  /** A stored file's text as numbered blocks, read like a document (a PDF's text, a web page's, a text file). */
-  async readStored(id: string, from?: number, to?: number): Promise<Record<string, unknown>> {
+  /**
+   * A stored file's text as numbered blocks, read like a document (a PDF's text, a web page's, a text file).
+   * With canEdit (a version of the tools that has edit_file), a text file is said to be editable.
+   */
+  async readStored(id: string, from?: number, to?: number, canEdit = false): Promise<Record<string, unknown>> {
     const f = this.hub.files.get(this.userId, id);
     if (!f) throw new ToolError(`There is no file ${id}.`);
     try {
-      const text = storedFileText(f.meta, await readFile(f.file));
-      return { file_id: id, filename: f.meta.filename, type: f.meta.type, read_only: true, ...textOutline(text, from, to) };
+      const data = await readFile(f.file);
+      const text = await storedFileText(f.meta, data);
+      const access = canEdit && editableText(f.meta, data) ? { editable: true, note: 'A text file: change it with edit_file (find and replace).' } : { read_only: true };
+      return { file_id: id, filename: f.meta.filename, type: f.meta.type, ...access, ...textOutline(text, from, to) };
     } catch (e) {
       if (e instanceof NoTextError) throw new ToolError(e.message);
       throw e;
     }
+  }
+
+  /** A Markdown file of a stored PDF's text, made beside the PDF (server/pdfMarkdown.ts). */
+  async convertPdf(id: string): Promise<{ file: FileSummary; pdf: FileSummary; pages: number; ocr_pages: number[]; warnings: string[] }> {
+    try {
+      const made = await pdfToMarkdownFile({ sheets: this.sheets, files: this.hub.files }, this.userId, id);
+      if (!made) throw new ToolError(`There is no file ${id}. Use list_files or search_files to find ids.`);
+      return { file: { ...summary(made.sheet), folder: made.sheet.folder ?? '' }, pdf: fileSummary(made.pdf), pages: made.pageCount, ocr_pages: made.ocrPages, warnings: made.warnings };
+    } catch (e) {
+      if (e instanceof PdfError) throw new ToolError(e.message);
+      throw e;
+    }
+  }
+
+  /**
+   * Change a stored text file: find-and-replace edits, its whole new text, or undo of the last change (where
+   * the store keeps the version before). Saved as the app's text editor saves it.
+   */
+  async editStored(id: string, change: { edits?: TextEdit[]; content?: string; undo?: boolean }): Promise<Record<string, unknown>> {
+    const f = this.hub.files.get(this.userId, id);
+    if (!f) throw new ToolError(`There is no file ${id}. Use list_files or search_files to find ids.`);
+    const modes = Number(!!change.edits?.length) + Number(typeof change.content === 'string') + Number(change.undo === true);
+    if (modes !== 1) throw new ToolError('Give exactly one of edits, content or undo.');
+    if (change.undo) {
+      const back = await this.hub.files.revert(this.userId, id);
+      if (!back) throw new ToolError(`${f.meta.filename} has no earlier version to put back. Make the change back with edits instead.`);
+      this.hub.onFileChanged?.(this.userId, id);
+      return { undone: true, file_id: id, filename: back.filename, size: back.size };
+    }
+    const data = await readFile(f.file);
+    if (!editableText(f.meta, data)) throw new ToolError(`${f.meta.filename} is not a text file, so it cannot be edited.`);
+    if (f.meta.size > MAX_TEXT_EDIT_BYTES) throw new ToolError(`${f.meta.filename} is too large to edit here (over ${MAX_TEXT_EDIT_BYTES / 1024 / 1024} MB).`);
+    let text = typeof change.content === 'string' ? change.content : data.toString('utf8');
+    let replacements = 0;
+    try {
+      ({ text, replacements } = applyTextEdits(text, change.edits ?? []));
+    } catch (e) {
+      if (e instanceof TextEditError) throw new ToolError(e.message.replace('Read that part', 'Read that part with read_doc'));
+      throw e;
+    }
+    const saved = await this.hub.files.update(this.userId, id, Buffer.from(text, 'utf8'));
+    if (!saved) throw new ToolError(`There is no file ${id}.`);
+    this.hub.onFileChanged?.(this.userId, id);
+    return { edited: true, file_id: id, filename: saved.filename, ...(change.edits?.length ? { replacements } : {}), total_chars: text.length };
   }
 
   // --- Pictures: the image editor runs in the app (a browser), so the model's edits are jobs the app takes ---
@@ -571,6 +669,12 @@ export class FileService {
   fileLink(id: string): { file: FileSummary; url: string } {
     const file = this.storedFile(id);
     return { file, url: `${this.publicUrl ?? ''}/plugin/file/${id}?t=${this.hub.issueFileLink(this.userId, id)}` };
+  }
+
+  /** Open a file for the model (setOpen) and have the host show it (FileHub.onShow). */
+  show(file: { kind: LibraryKind; id: string }): void {
+    this.setOpen(file);
+    this.hub.onShow?.(this.userId, file);
   }
 
   setOpen(file: { kind: LibraryKind; id: string } | null, cursor: Cursor = {}): void {

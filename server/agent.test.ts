@@ -15,6 +15,7 @@ import type { FileStore } from './files.ts';
 import type { ImageStore } from './images.ts';
 import { resolver } from './webFetch.ts';
 import { webImportName } from './importFile.ts';
+import { closePdfReaders } from './pdfMarkdown.ts';
 
 type Params = Parameters<ModelCall>[0];
 type Block = Anthropic.Beta.BetaContentBlock;
@@ -464,6 +465,28 @@ describe('web and image search tools', () => {
     expect(validateToolInput('web_search', { query: 'x', max_results: 11 }).ok).toBe(false);
     expect(validateToolInput('image_search', { query: '' }).ok).toBe(false);
     expect(validateToolInput('image_search', { query: 'x', max_results: 10 }).ok).toBe(true);
+  });
+});
+
+describe('convert_pdf tool', () => {
+  afterAll(closePdfReaders);
+
+  it('makes a Markdown document of the open PDF, beside it', async () => {
+    const report = path.join(import.meta.dirname, 'fixtures', 'report.pdf');
+    const stored = (id: string, filename: string, type: string) => ({ meta: { id, filename, type, folder: 'Reports', size: 1, createdAt: '', url: '', downloadUrl: '' }, file: report });
+    const files = { get: (owner: string, id: string) => (owner !== 'pdf-user' ? null : id === 'p1' ? stored('p1', 'Q3 Report.pdf', 'application/pdf') : id === 'h1' ? stored('h1', 'page.html', 'text/html') : null) } as unknown as FileStore;
+    const made: { title: string; text: string; folder: string }[] = [];
+    const sheets = { createMarkdown: async (_owner: string, title: string, doc: { text: string }, folder: string) => (made.push({ title, text: doc.text, folder }), { id: 'm1', kind: 'markdown', title, folder, updatedAt: '', createdAt: '' }) } as unknown as SheetStore;
+    const onFile: AgentContext = { page: 'file', fileId: 'p1', filename: 'Q3 Report.pdf', type: 'application/pdf', size: 1 };
+    const env = { userId: 'pdf-user', sheets, files, context: onFile };
+
+    const out = JSON.parse(await runServerTool('convert_pdf', {}, env));
+    expect(out).toMatchObject({ converted: true, doc_id: 'm1', kind: 'markdown', title: 'Q3 Report', pages: 2 });
+    expect(made).toEqual([{ title: 'Q3 Report', text: expect.stringMatching(/^# Quarterly Report\n/), folder: 'Reports' }]);
+    await expect(runServerTool('convert_pdf', { file_id: 'h1' }, env)).rejects.toThrow(/not a PDF/);
+    await expect(runServerTool('convert_pdf', { file_id: 'nope' }, env)).rejects.toThrow(/no file nope/);
+    await expect(runServerTool('convert_pdf', {}, { ...env, context: home })).rejects.toThrow(/Give file_id/);
+    await expect(runServerTool('convert_pdf', {}, { ...env, files: undefined })).rejects.toThrow(/cannot be converted here/);
   });
 });
 

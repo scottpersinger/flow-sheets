@@ -10,7 +10,7 @@ import { HTML_TYPE, isHtmlName, MAX_VIDEO_BYTES, videoTypeOf, type SheetMeta, ty
 import { importDocx, isDocx } from './docxImport.ts';
 import type { FileStore } from './files.ts';
 import type { ImageStore } from './images.ts';
-import { isPdf } from './pdfImport.ts';
+import { isPdf, MAX_PDF_BYTES } from './pdfMarkdown.ts';
 import { importPptx, isPptx } from './pptxImport.ts';
 import { validateWorkbook, type SheetStore } from './sheets.ts';
 import { importExcel, ImportError } from './xlsxImport.ts';
@@ -20,7 +20,7 @@ export class ImportFileError extends Error {}
 
 /** The largest file that can be imported: videos and PDFs are stored as they are, so they may be bigger. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
-export const MAX_PDF_BYTES = 50 * 1024 * 1024;
+export { MAX_PDF_BYTES };
 export function importLimit(name: string | undefined): number {
   if (name && videoTypeOf(name)) return MAX_VIDEO_BYTES;
   return /\.pdf$/i.test(name ?? '') ? MAX_PDF_BYTES : MAX_IMPORT_BYTES;

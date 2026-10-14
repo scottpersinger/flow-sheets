@@ -18,6 +18,7 @@ import { ConnectorError } from '../connectors/types.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import { importBytes, ImportFileError, importLimit, webImportName } from '../importFile.ts';
+import { PdfError, pdfToMarkdownFile } from '../pdfMarkdown.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { fetchPublicFile, WebFetchError } from '../webFetch.ts';
@@ -300,7 +301,12 @@ export const schemas = {
       max_chars: z.number().int().min(1).max(60_000).optional().describe('How many characters to return. Defaults to 30000.'),
     })
     .describe(
-      "Read the text of a stored file: a web page (.html), or any other text file such as .txt, .json, .svg or .xml. Returns the text from offset, total_chars and whether more follows (read on with offset). It cannot read PDFs, images or videos, and it does not change the file. Find ids with list_files.",
+      "Read the text of a stored file: a web page (.html), or any other text file such as .txt, .json, .svg or .xml. Returns the text from offset, total_chars and whether more follows (read on with offset). It cannot read PDFs (convert_pdf makes a Markdown document of a PDF's text), images or videos, and it does not change the file. Find ids with list_files.",
+    ),
+  convert_pdf: z
+    .object({ file_id: z.string().optional().describe('The PDF among the stored files. Defaults to the file the user has open.') })
+    .describe(
+      "Make a Markdown document of a stored PDF's text, next to the PDF (same folder, same name); the PDF does not change. Headings, lists, tables and links are kept, pictures are left out, and scanned pages are read with OCR. Use it when the user wants a PDF as Markdown or as text they can edit, or when you need to read a PDF: then read_doc on the new document. Returns doc_id; open_doc opens it.",
     ),
   edit_file: z
     .object({
@@ -782,6 +788,27 @@ export async function runServerTool(name: string, input: Record<string, unknown>
         });
       } catch (e) {
         if (e instanceof ConnectorError) throw new ToolFailure(e.message);
+        throw e;
+      }
+    }
+    case 'convert_pdf': {
+      if (!env.files) throw new ToolFailure('Files cannot be converted here.');
+      const id = typeof input.file_id === 'string' && input.file_id ? input.file_id : env.context.page === 'file' ? env.context.fileId : null;
+      if (!id) throw new ToolFailure('Give file_id: the user has no file open. Find ids with list_files.');
+      try {
+        const made = await pdfToMarkdownFile({ sheets: env.sheets, files: env.files }, env.userId, id);
+        if (!made) throw new ToolFailure(`There is no file ${id}. Find ids with list_files.`);
+        return JSON.stringify({
+          converted: true,
+          doc_id: made.sheet.id,
+          kind: 'markdown',
+          title: made.sheet.title,
+          pages: made.pageCount,
+          ...(made.warnings.length ? { warnings: made.warnings } : {}),
+          note: 'A new Markdown document next to the PDF. open_doc shows it to the user; read_doc reads it.',
+        });
+      } catch (e) {
+        if (e instanceof PdfError) throw new ToolFailure(e.message);
         throw e;
       }
     }

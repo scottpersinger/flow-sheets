@@ -20,7 +20,14 @@ const app = await buildApp({
   dataDir,
   staticDir: path.join(root, 'dist', 'client'),
   // A file outside the folder (one of Recents) is opened by the app, which serves its folder instead.
-  local: { dir, token: process.env.LOCAL_TOKEN || undefined, openFile: (file) => process.send?.({ openFile: file }) },
+  local: {
+    dir,
+    token: process.env.LOCAL_TOKEN || undefined,
+    openFile: (file) => process.send?.({ openFile: file }),
+    // The MCP server for agents on this machine (MCP_TOKEN; MCP_URL is main.js's fixed port in front of it).
+    // What the model opens is shown in the window, which main.js does.
+    ...(process.env.MCP_TOKEN ? { mcp: { token: process.env.MCP_TOKEN, url: process.env.MCP_URL || undefined, show: (page: string) => process.send?.({ show: page }), changed: (id: string) => process.send?.({ fileChanged: id }) } } : {}),
+  },
   blob: null,
 });
 // Loopback only, on a port the system picks unless one is given.

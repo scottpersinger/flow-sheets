@@ -417,6 +417,9 @@ export function HomePage() {
         },
         ...(s.kind === 'sheet' && s.format !== 'csv' ? [{ label: 'Download as CSV', onClick: () => window.location.assign(`/api/files/${s.id}/export?format=csv`) }] : []),
         ...(s.kind === 'sheet' ? [{ label: 'Create branch', onClick: () => setBranching(s) }] : []),
+        ...(s.kind === 'file' && /\.pdf$/i.test(s.title)
+          ? [{ label: 'Convert to Markdown', onClick: () => api.pdfToMarkdown(s.id).then(({ doc, warnings }) => navigate(`/md/${doc.id}`, { state: { importWarnings: warnings } }), (e: Error) => setError(e.message)) }]
+          : []),
         { label: 'Move to…', onClick: () => setMoving(s) },
       ]}
       onRename={async (s, title) => {

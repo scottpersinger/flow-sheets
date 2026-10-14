@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
 import { markdownTitle, type MarkdownDoc } from '../../../shared/markdown.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
@@ -116,6 +116,13 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
   useMarkdownController(ctl);
   useFavicon('markdown');
   const navigate = useNavigate();
+  const location = useLocation();
+  // Notes from making the file of a PDF's text (FilePage), which arrive in the navigation state.
+  const [importWarnings, setImportWarnings] = useState<string[]>(() => (location.state as { importWarnings?: string[] } | null)?.importWarnings ?? []);
+  const dismissImportWarnings = () => {
+    setImportWarnings([]);
+    if (location.state) navigate(location.pathname, { replace: true, state: null });
+  };
   const { open: agentOpen } = useAgent();
   const [meta, setMeta] = useState(initialMeta);
   useRegisterMarkdown(ctl, meta);
@@ -330,6 +337,21 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
           <Account before={() => ctl.saver.flush()} />
         </div>
       </header>
+      {importWarnings.length > 0 && (
+        <div className="import-banner" role="status">
+          <div>
+            <strong>Converted with some notes:</strong>
+            <ul>
+              {importWarnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+          <button className="link" onClick={dismissImportWarnings}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="md-body-row" ref={rowRef}>
         <div className="md-editor-col">
           <MarkdownEditor ctl={ctl} editorRef={editorRef} previewRef={previewRef} />

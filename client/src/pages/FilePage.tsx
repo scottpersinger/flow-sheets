@@ -64,6 +64,18 @@ export function FilePage() {
     }
   };
 
+  // A PDF's text becomes a Markdown file next to it, which opens.
+  const toMarkdown = async (stored: StoredFile) => {
+    setConverting(true);
+    try {
+      const { doc, warnings } = await api.pdfToMarkdown(stored.id);
+      navigate(`/md/${doc.id}`, { state: { importWarnings: warnings } });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setConverting(false);
+    }
+  };
+
   // Counts the assistant's changes to this file, so the preview shows each new version.
   const [version, setVersion] = useState(0);
   // A web page opens as a working page; Edit makes it editable in place instead (the element selected in it is
@@ -134,6 +146,11 @@ export function FilePage() {
           {editableImage && !editing && (
             <button className="btn" onClick={() => setEditing(true)} title="Crop, rotate, adjust and draw on the picture">
               Edit
+            </button>
+          )}
+          {file?.type === 'application/pdf' && (
+            <button className="btn" disabled={converting} onClick={() => void toMarkdown(file)} title="Make a Markdown file of the PDF's text next to it; the PDF stays as it is">
+              {converting ? 'Converting…' : 'Convert to Markdown'}
             </button>
           )}
           {file && (
