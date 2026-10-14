@@ -15,7 +15,7 @@ import { useFavicon } from '../favicon.ts';
 import { RECENTS_PARAM, rememberListing } from '../listing.ts';
 import { openFromRecents } from './OpenLocalFile.tsx';
 import { FilePreviewFrame } from '../components/FilePreviewFrame.tsx';
-import { checkImportFile, CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, HTML_ACCEPT, IMAGE_ACCEPT, imageTypeOf, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName, VIDEO_ACCEPT } from '../importFile.ts';
+import { checkImportFile, imageTypeOf, isKnownImport, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, titleFromFileName } from '../importFile.ts';
 import { csvTitle } from '../../../shared/csv.ts';
 import { cleanFolderPath, folderTrail } from '../../../shared/folders.ts';
 import { markdownTitle } from '../../../shared/markdown.ts';
@@ -26,7 +26,7 @@ const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind ==
 let lastFind: { text: string; result: Promise<{ folders: FolderInfo[]; items: LibraryItem[]; truncated: boolean }> } | null = null;
 
 /** A stored file as a row of the list. */
-const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, createdAt: x.createdAt, updatedAt: x.createdAt });
+const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, ...(x.text ? { text: true } : {}), createdAt: x.createdAt, updatedAt: x.createdAt });
 
 /** The last part of a directory's path, to name the desktop app's mounted folder. */
 const dirName = (dir: string) => dir.split(/[\\/]/).filter(Boolean).pop() ?? dir;
@@ -174,6 +174,13 @@ export function HomePage() {
         navigate(`/s/${sheet.id}`);
         return;
       }
+      if (!isKnownImport(file)) {
+        // Any other file is kept as it is: it is listed here, to download, move or delete, but not opened.
+        await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), folder);
+        setImporting(null);
+        await load();
+        return;
+      }
       const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), folder);
       navigate(`/s/${sheet.id}`, { state: { importWarnings: warnings } });
     } catch (e) {
@@ -297,7 +304,7 @@ export function HomePage() {
       preview={
         recents
           ? undefined
-          : (s) => (s.kind === 'file' && !isHtmlName(s.title) ? <FileThumb item={s} /> : <FilePreviewFrame href={pathOf(s)} title={s.title} text={s.kind === 'doc' || s.kind === 'markdown' || s.kind === 'sheet'} />)
+          : (s) => (s.kind === 'file' && !isHtmlName(s.title) && !s.text ? <FileThumb item={s} /> : <FilePreviewFrame href={pathOf(s)} title={s.title} text={s.kind === 'doc' || s.kind === 'markdown' || s.kind === 'sheet' || !!s.text} />)
       }
       onGettingStarted={() => void openGuide()}
       search={search}
@@ -384,9 +391,10 @@ export function HomePage() {
         else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', folder)).doc.id}`);
         else navigate(`/doc/${(await api.createDoc(title, undefined, folder)).doc.id}`);
       }}
-      importAccept={`${EXCEL_ACCEPT},${PPTX_ACCEPT},${DOCX_ACCEPT},${PDF_ACCEPT},${MARKDOWN_ACCEPT},${CSV_ACCEPT},${HTML_ACCEPT},${IMAGE_ACCEPT},${VIDEO_ACCEPT}`}
-      importLabel="Import Excel, PowerPoint, Word, PDF, Markdown, CSV, HTML or video"
-      importHint="You can also drop an Excel (.xlsx, .xls), PowerPoint (.pptx), Word (.docx), PDF (.pdf), Markdown (.md), CSV (.csv), web page (.html), picture (.png, .jpg, .gif, .webp) or video (.mp4, .mov, .webm) file anywhere on this page, or paste a picture or text to make a file of it."
+      // Any file can be added: the kinds the app knows open in it, the rest are kept to download, move or delete.
+      importAccept=""
+      importLabel="Import a file: Excel, PowerPoint, Word, PDF, Markdown, CSV, HTML, video or anything else"
+      importHint="You can also drop any file anywhere on this page, or paste a picture or text to make a file of it. Excel, PowerPoint, Word, Markdown and CSV files become files you can edit; PDFs, pictures, videos and web pages open as they are; any other file is kept in your files to download."
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => (recents ? void openRecent(s) : navigate(pathOf(s)))}

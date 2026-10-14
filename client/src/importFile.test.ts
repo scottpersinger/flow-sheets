@@ -14,10 +14,12 @@ describe('importing pictures', () => {
     for (const name of ['Photo.JPG', 'logo.png', 'anim.gif', 'pic.webp']) expect(checkImportFile(file(name))).toBeNull();
   });
 
-  it('refuses a picture that is too large, and files it does not know', () => {
+  it('refuses a picture that is too large, and takes any other file up to the import limit', () => {
     expect(checkImportFile(file('big.png', MAX_IMAGE_MB * 1024 * 1024 + 1))).toContain('too large');
     // Larger than other imports may be.
     expect(checkImportFile(file('big.png', 30 * 1024 * 1024))).toBeNull();
-    expect(checkImportFile(file('notes.txt'))).toContain('a picture (.png, .jpg, .gif, .webp)');
+    // A file the app does not know is kept as it is.
+    expect(checkImportFile(file('notes.txt'))).toBeNull();
+    expect(checkImportFile(file('archive.zip', 30 * 1024 * 1024))).toContain('too large');
   });
 });

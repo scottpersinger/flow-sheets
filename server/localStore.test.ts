@@ -55,11 +55,15 @@ describe('a mounted folder', () => {
     expect(me.body.local?.dir).toBe(path.resolve(folder));
   });
 
-  it('shows one folder at a time: its folders and the files it can open, without hidden folders and node_modules', async () => {
+  it('shows one folder at a time: its folders and every file in it, without hidden folders and node_modules', async () => {
     const top = await library();
     expect(top.folders).toEqual([{ name: 'reports', path: 'reports' }]);
     expect(top.docs.map((d) => [d.title, d.kind])).toEqual([['notes', 'markdown']]);
-    expect(top.files.map((f) => [f.filename, f.type])).toEqual([['scan.pdf', 'application/pdf']]);
+    // A file the app cannot show is listed too, as a stored file of a type it does not know.
+    expect(top.files.map((f) => [f.filename, f.type]).sort()).toEqual([
+      ['scan.pdf', 'application/pdf'],
+      ['script.py', 'application/octet-stream'],
+    ]);
     const reports = await library('reports');
     expect(reports.folders).toEqual([]);
     expect(reports.docs.map((d) => [d.title, d.format, d.folder])).toEqual([['stock', 'csv', 'reports']]);
@@ -147,7 +151,7 @@ describe('a mounted folder', () => {
     expect(readFileSync(at('archive', '2026', 'notes 2.md'), 'utf8')).toBe('second');
     expect((await library('archive/2026')).docs.map((d) => [d.id, d.title])).toEqual([[doc.id, 'notes 2']]);
 
-    const [pdf] = (await library()).files;
+    const pdf = (await library()).files.find((f) => f.filename === 'scan.pdf')!;
     expect((await call('POST', '/api/library/move', { kind: 'file', id: pdf.id, folder: 'archive' })).status).toBe(200);
     expect(existsSync(at('archive', 'scan.pdf'))).toBe(true);
     expect((await app.inject({ method: 'GET', url: pdf.url })).body).toBe('%PDF-1.4 test');
@@ -183,11 +187,14 @@ describe('a mounted folder', () => {
     mkdirSync(at('deep', 'er', 'still'), { recursive: true });
     writeFileSync(at('deep', 'er', 'still', 'Quarterly plan.md'), 'plan');
     writeFileSync(at('deep', 'er', 'quarterly.pdf'), '%PDF');
-    writeFileSync(at('deep', 'quarterly.py'), 'not listed');
+    writeFileSync(at('deep', 'quarterly.py'), 'any file');
     writeFileSync(at('node_modules', 'pkg', 'quarterly.md'), 'dependency');
     const found = (await call<Library & { truncated: boolean }>('GET', '/api/library/search?q=QUARTER')).body;
     expect(found.docs.map((d) => [d.title, d.folder])).toEqual([['Quarterly plan', 'deep/er/still']]);
-    expect(found.files.map((f) => [f.filename, f.folder])).toEqual([['quarterly.pdf', 'deep/er']]);
+    expect(found.files.map((f) => [f.filename, f.folder])).toEqual([
+      ['quarterly.py', 'deep'],
+      ['quarterly.pdf', 'deep/er'],
+    ]);
     expect(found.truncated).toBe(false);
     // A result opens like any other file.
     expect((await call<{ doc: { text: string } }>('GET', `/api/markdown/${found.docs[0].id}`)).body.doc.text).toBe('plan');
@@ -205,7 +212,7 @@ describe('a mounted folder', () => {
   });
 
   it('serves and stores other files in the folder', async () => {
-    const [pdf] = (await library()).files;
+    const pdf = (await library()).files.find((f) => f.filename === 'scan.pdf')!;
     const res = await app.inject({ method: 'GET', url: pdf.url });
     expect(res.body).toBe('%PDF-1.4 test');
     const up = await app.inject({ method: 'POST', url: '/api/files', headers: { 'content-type': 'application/pdf', 'x-filename': 'scan.pdf' }, payload: Buffer.from('%PDF-1.4 other') });

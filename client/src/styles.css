@@ -4005,7 +4005,8 @@ button.agent-tool-label:hover {
   align-items: center;
   min-width: 0;
 }
-.breadcrumbs .crumb {
+.breadcrumbs .crumb,
+.list-tab .crumb {
   border: 0;
   background: none;
   padding: 2px 4px;
@@ -4015,7 +4016,8 @@ button.agent-tool-label:hover {
   cursor: pointer;
   border-radius: 4px;
 }
-.breadcrumbs .crumb:hover {
+.breadcrumbs .crumb:hover,
+.list-tab .crumb:hover {
   background: #e8f0fe;
 }
 .breadcrumbs .crumb-sep {
@@ -4171,6 +4173,43 @@ button.agent-tool-label:hover {
   color: #1a73e8;
   cursor: pointer;
   margin-left: 14px;
+}
+
+/* A plain text file in its editor (components/TextFileEditor.tsx). */
+.text-file {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 12px;
+  background: var(--chrome);
+}
+.text-file-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.text-file-editor {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  overflow-wrap: normal;
+  padding: 14px 18px;
+}
+.text-file-wait {
+  padding: 24px;
+}
+
+/* A file the app does not open: listed, with its menu, but not a link. */
+.sheet-list tbody tr.no-open,
+.file-card.no-open {
+  cursor: default;
+}
+.sheet-list tbody tr.no-open .sheet-title {
+  color: var(--muted);
 }
 
 /* A file's preview by the pointer, when it rests on the file's name in the list (FileLibrary's FilePeek). */

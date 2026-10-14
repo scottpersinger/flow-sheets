@@ -948,6 +948,42 @@ describe('branches', () => {
   });
 });
 
+describe('files of any kind', () => {
+  it('are kept as they are, typed by their name when the app knows it', async () => {
+    const { cookie } = await signUp(app, box, 'anyfile@x.com');
+    const upload = (name: string) => app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'application/octet-stream', 'x-filename': name }, payload: Buffer.from([0x50, 0x4b, 3, 4, 0, 1]) });
+    const zip = (await upload('photos.zip')).json().file;
+    expect(zip).toMatchObject({ filename: 'photos.zip', type: 'application/zip' });
+    const odd = (await upload('model.blend')).json().file;
+    expect(odd).toMatchObject({ filename: 'model.blend', type: 'application/octet-stream' });
+    const listed = (await app.inject({ method: 'GET', url: '/api/library', headers: { cookie } })).json() as { files: { filename: string }[] };
+    expect(listed.files.map((f) => f.filename).sort()).toEqual(['model.blend', 'photos.zip']);
+    // Not shown in the page: downloaded, as the bytes it was.
+    const res = await app.inject({ method: 'GET', url: odd.url, headers: { cookie } });
+    expect(res.headers['content-disposition']).toMatch(/^attachment/);
+    expect(res.rawPayload).toEqual(Buffer.from([0x50, 0x4b, 3, 4, 0, 1]));
+  });
+});
+
+describe('plain text files', () => {
+  it('are found by their bytes, whatever their name, and can be rewritten', async () => {
+    const { cookie } = await signUp(app, box, 'plaintext@x.com');
+    const upload = (name: string, bytes: Buffer) => app.inject({ method: 'POST', url: '/api/files', headers: { cookie, 'content-type': 'application/octet-stream', 'x-filename': name }, payload: bytes });
+    const log = (await upload('server.log', Buffer.from('started\r\nlistening on 3001 — ok ✓\r\n'))).json().file;
+    const makefile = (await upload('Makefile', Buffer.from('all:\n\techo hi\n'))).json().file;
+    const binary = (await upload('blob.bin', Buffer.from([0x50, 0x4b, 0, 1, 2]))).json().file;
+    const latin1 = (await upload('old.txt', Buffer.from([0x63, 0x61, 0x66, 0xe9]))).json().file;
+    expect([log.text, makefile.text, binary.text, latin1.text]).toEqual([true, true, undefined, undefined]);
+    const listed = (await app.inject({ method: 'GET', url: '/api/library', headers: { cookie } })).json() as { files: { filename: string; text?: boolean }[] };
+    expect(listed.files.filter((f) => f.text).map((f) => f.filename).sort()).toEqual(['Makefile', 'server.log']);
+
+    const put = await app.inject({ method: 'PUT', url: makefile.url, headers: { cookie, 'content-type': 'application/octet-stream' }, payload: Buffer.from('all:\n\techo bye\n') });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().file).toMatchObject({ filename: 'Makefile', text: true, size: 15 });
+    expect((await app.inject({ method: 'GET', url: makefile.url, headers: { cookie } })).body).toBe('all:\n\techo bye\n');
+  });
+});
+
 describe('video files', () => {
   it('are stored by their extension and served in the parts a player asks for', async () => {
     const { cookie } = await signUp(app, box, 'video@x.com');

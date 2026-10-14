@@ -3,10 +3,13 @@
 // of the app (client/src/pages/HomePage.tsx) and the library inside ChatGPT (plugin/web/Library.tsx);
 // each passes its own data source, actions and header controls, so both look and behave the same.
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
-import { isHtmlName, type SheetMeta } from '../../../shared/types.ts';
+import { isHtmlName, opensInApp, type SheetMeta } from '../../../shared/types.ts';
 import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon } from './Logo.tsx';
 import { pastedFile } from '../pastedFile.ts';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
+
+/** Whether a row opens in the app: every document does, a stored file only if the app can show it (shared/types.ts). Any other is listed, with its menu, but not opened. */
+export const opens = (item: Pick<LibraryItem, 'kind' | 'title' | 'text'>): boolean => item.kind !== 'file' || opensInApp(item.title) || !!item.text;
 
 /** What a row can be: a spreadsheet, presentation, document or Markdown document, or a stored file such as a PDF. */
 export type LibraryKind = SheetMeta['kind'] | 'file';
@@ -19,6 +22,8 @@ export interface LibraryItem {
   title: string;
   /** The folder the file is in; absent at the top. */
   folder?: string;
+  /** A stored file that is plain text, which opens in the text editor. */
+  text?: boolean;
   updatedAt: string;
   createdAt: string;
   branch?: SheetMeta['branch'];
@@ -351,7 +356,7 @@ export function FileLibrary(props: FileLibraryProps) {
   useEffect(() => () => window.clearTimeout(resting.current), []);
   /** What makes a file's name open its preview when the pointer rests on it. */
   const peekOn = (s: LibraryItem) =>
-    props.preview
+    props.preview && opens(s)
       ? {
           onMouseMove: (e: React.MouseEvent) => {
             const { clientX: x, clientY: y } = e;
@@ -575,7 +580,7 @@ export function FileLibrary(props: FileLibraryProps) {
   const itemActions = (s: LibraryItem) =>
     otherShown ? null : (
     <>
-      {props.onOpenInNewTab && (
+      {props.onOpenInNewTab && opens(s) && (
         <button className="btn open-tab-btn" title="Open in a new tab" aria-label={`Open ${s.title} in a new tab`} onClick={() => props.onOpenInNewTab!(s)}>
           Open <span aria-hidden="true">↗</span>
         </button>
@@ -592,7 +597,7 @@ export function FileLibrary(props: FileLibraryProps) {
       </button>
       {menuFor === s.id && (
         <div className="dropdown">
-          <button onClick={() => onOpen(s)}>Open</button>
+          {opens(s) && <button onClick={() => onOpen(s)}>Open</button>}
           {(props.rowActions?.(s, () => setMenuFor(null)) ?? []).map((a) => (
             <button key={a.label} className={a.danger ? 'danger' : undefined} onClick={() => (setMenuFor(null), void a.onClick())}>
               {a.label}
@@ -818,11 +823,11 @@ export function FileLibrary(props: FileLibraryProps) {
               </div>
             ))}
             {visible.map(({ s }) => (
-              <div key={s.id} className="file-card" onClick={() => onOpen(s)} {...dragSource(s)}>
+              <div key={s.id} className={`file-card${opens(s) ? '' : ' no-open'}`} onClick={() => opens(s) && onOpen(s)} title={opens(s) ? undefined : 'This kind of file does not open here. Its menu (⋮) has what you can do with it.'} {...dragSource(s)}>
                 {props.thumbnail!(s)}
                 <div className="file-card-foot">
                   <div className="file-card-name" title={s.title}>
-                    {titleLink(s, <>{kindIcon(s, 16)} {s.title}</>)}
+                    {opens(s) ? titleLink(s, <>{kindIcon(s, 16)} {s.title}</>) : <span className="sheet-title">{kindIcon(s, 16)} {s.title}</span>}
                   </div>
                   <div className="row-actions" onClick={(e) => e.stopPropagation()}>
                     {itemActions(s)}
@@ -879,10 +884,10 @@ export function FileLibrary(props: FileLibraryProps) {
                 </tr>
               ))}
               {visible.map(({ s, depth }) => (
-                <tr key={s.id} onClick={() => onOpen(s)} {...dragSource(s)}>
+                <tr key={s.id} className={opens(s) ? undefined : 'no-open'} onClick={() => opens(s) && onOpen(s)} title={opens(s) ? undefined : 'This kind of file does not open here. Its menu (⋮) has what you can do with it.'} {...dragSource(s)}>
                   <td>
                     <span className="peek-target" {...peekOn(s)}>
-                    {titleLink(
+                    {(opens(s) ? titleLink : (_s: LibraryItem, children: ReactNode) => <span className="sheet-title">{children}</span>)(
                       s,
                       <>
                         {depth > 0 && <span style={{ width: depth * 22 }} className="tree-indent" />}

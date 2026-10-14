@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EDITABLE_IMAGE_TYPES, HTML_TYPE, PREVIEW_FILE_TYPES, type StoredFile } from '../../../shared/types.ts';
 import { HtmlEditor } from '../components/HtmlEditor.tsx';
 import { HtmlPreview } from '../components/HtmlPreview.tsx';
+import { TextFileEditor } from '../components/TextFileEditor.tsx';
 import { ImageFileEditor } from '../image/ImageFileEditor.tsx';
 import { ImageSelector } from '../components/ImageSelector.tsx';
 import type { ImageRegion } from '../../../shared/agent/protocol.ts';
@@ -176,6 +177,9 @@ export function FilePage() {
             backgroundRemovalLoader={loadBackgroundRemoval}
             onClose={() => setEditing(false)}
           />
+        ) : file.text && !previewable ? (
+          // Plain text, whatever its name: a log, a config file, source code.
+          <TextFileEditor key={`${file.id}:${version}`} file={file} onSaved={setFile} />
         ) : previewable ? (
           // A picture that was saved over is asked for by a new address, so no earlier copy of it is shown.
           <ImageSelector key={`${file.id}:${version}`} url={version ? `${file.url}?v=${version}` : file.url} alt={file.filename} region={region} onChange={setRegion} />

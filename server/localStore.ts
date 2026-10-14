@@ -1,7 +1,8 @@
 // The desktop app's storage: a folder on the user's disk instead of the server's own data directory. The
 // files in the folder are the library. Markdown and CSV files are read and written as the plain text they
-// are; spreadsheets, presentations and documents are JSON files with their own extensions; PDFs, images and
-// Office files are listed as stored files, and its directories are the library's folders. SQLite still
+// are; spreadsheets, presentations and documents are JSON files with their own extensions; every other file
+// is listed as a stored file (PDFs, images and videos are shown, Office files converted, the rest only
+// listed), and its directories are the library's folders. SQLite still
 // holds the metadata (ids, branch links), brought in line with a directory each time it is listed, so
 // everything built on SheetStore and FileStore works as is.
 import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
@@ -11,9 +12,9 @@ import path from 'node:path';
 import { newCsvDoc, type CsvDoc } from '../shared/csv.ts';
 import { newMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
 import { joinFolder, parentFolder } from '../shared/folders.ts';
-import { VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile } from '../shared/types.ts';
+import { fileTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile } from '../shared/types.ts';
 import type { DB } from './db.ts';
-import { FileStore, renamed, splitName, toFileMeta, type StoredFileRow } from './files.ts';
+import { FileStore, renamed, splitName, type StoredFileRow } from './files.ts';
 import { byName, SEARCH_LIMIT, type Folders } from './folders.ts';
 import { SheetStore, writeAtomic, type SheetRow, type Stored } from './sheets.ts';
 
@@ -44,7 +45,10 @@ const FILE_TYPES: Record<string, string> = {
   ...Object.fromEntries(Object.entries(VIDEO_TYPES).map(([ext, type]) => [`.${ext}`, type])),
 };
 
-/** The extensions of the files the desktop app lists. */
+/** The type a file of the folder is listed as. */
+const typeOfFile = (rel: string): string => FILE_TYPES[extOf(rel)] ?? fileTypeOf(rel) ?? 'application/octet-stream';
+
+/** The extensions of the files the desktop app shows (the others are listed, not opened). */
 export const LISTED_EXTS: ReadonlySet<string> = new Set([...Object.keys(DOC_TYPES), ...Object.keys(FILE_TYPES)]);
 /** What a listed file is in the library: a document of some kind, or a stored file. */
 export const listedKind = (file: string): DocKind | 'file' => DOC_TYPES[extOf(file)]?.kind ?? 'file';
@@ -92,8 +96,11 @@ export class LocalFolder {
     return path.join(this.root, ...rel.split('/'));
   }
 
-  /** The listed files and the folders directly inside one folder. Hidden entries, node_modules and symbolic links are skipped. */
-  scanDir(folder: string): { files: Found[]; dirs: string[] } {
+  /**
+   * The files and the folders directly inside one folder. Hidden entries, node_modules and symbolic links
+   * are skipped. `all` lists every file; otherwise only the kinds the app shows.
+   */
+  scanDir(folder: string, all = true): { files: Found[]; dirs: string[] } {
     const files: Found[] = [];
     const dirs: string[] = [];
     let entries;
@@ -109,7 +116,7 @@ export class LocalFolder {
         if (!SKIP_DIRS.has(e.name)) dirs.push(rel);
       } else if (e.isFile()) {
         const ext = extOf(e.name);
-        if (!(ext in DOC_TYPES) && !(ext in FILE_TYPES)) continue;
+        if (!all && !(ext in DOC_TYPES) && !(ext in FILE_TYPES)) continue;
         try {
           const st = statSync(this.abs(rel));
           files.push({ rel, ext, size: st.size, mtime: iso(st.mtimeMs), birthtime: iso(st.birthtimeMs || st.mtimeMs) });
@@ -121,11 +128,14 @@ export class LocalFolder {
     return { files, dirs: dirs.sort(byName) };
   }
 
-  /** Every listed file under the mounted folder, up to a limit: what the assistant's file list covers. */
+  /**
+   * Every file the app shows under the mounted folder, up to a limit: what the assistant's file list covers.
+   * Other files are left out, so a tree of source code does not crowd out the documents.
+   */
   scanAll(): Found[] {
     const all: Found[] = [];
     const walk = (folder: string, depth: number) => {
-      const { files, dirs } = this.scanDir(folder);
+      const { files, dirs } = this.scanDir(folder, false);
       for (const f of files) if (all.length < MAX_FILES) all.push(f);
       if (depth < MAX_DEPTH) for (const d of dirs) if (all.length < MAX_FILES && !this.skipInWalk(d)) walk(d, depth + 1);
     };
@@ -176,8 +186,8 @@ export class LocalFolder {
             next.push(rel);
             if (hit) dirs.push(rel);
           } else if (hit && e.isFile()) {
+            // Any file: a search finds what the folder's own listing shows.
             const ext = extOf(e.name);
-            if (!(ext in DOC_TYPES) && !(ext in FILE_TYPES)) continue;
             try {
               const st = await stat(this.abs(rel));
               files.push({ rel, ext, size: st.size, mtime: iso(st.mtimeMs), birthtime: iso(st.birthtimeMs || st.mtimeMs) });
@@ -483,6 +493,10 @@ export class LocalFileStore extends FileStore {
     return joinFolder(r.folder ?? '', r.filename);
   }
 
+  protected override pathOf(r: StoredFileRow): string {
+    return this.folder.abs(this.relOf(r));
+  }
+
   private sync(ownerId: string, found: Found[], inFolder?: string, adoptOnly = false): void {
     const rows = (
       inFolder === undefined
@@ -492,7 +506,8 @@ export class LocalFileStore extends FileStore {
     const byRel = new Map(rows.map((r) => [this.relOf(r), r]));
     const seen = new Set<string>();
     for (const f of found) {
-      if (!(f.ext in FILE_TYPES)) continue;
+      // Everything that is not one of the app's own documents is a stored file.
+      if (f.ext in DOC_TYPES) continue;
       seen.add(f.rel);
       const filename = path.posix.basename(f.rel);
       const folder = parentFolder(f.rel);
@@ -502,7 +517,7 @@ export class LocalFileStore extends FileStore {
       if (!r) {
         this.db
           .prepare('INSERT INTO stored_files (id, owner_id, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(this.newId(), ownerId, filename, folder, FILE_TYPES[f.ext], f.size, f.mtime);
+          .run(this.newId(), ownerId, filename, folder, typeOfFile(f.rel), f.size, f.mtime);
       } else if (r.size !== f.size || r.created_at !== f.mtime) {
         this.db.prepare('UPDATE stored_files SET size = ?, created_at = ? WHERE id = ?').run(f.size, f.mtime, r.id);
       }
@@ -513,14 +528,14 @@ export class LocalFileStore extends FileStore {
   }
 
   override async search(ownerId: string, text: string): Promise<StoredFile[]> {
-    const found = (await this.folder.find(text)).files.filter((f) => f.ext in FILE_TYPES);
+    const found = (await this.folder.find(text)).files.filter((f) => !(f.ext in DOC_TYPES));
     this.sync(ownerId, found, undefined, true);
     const out: StoredFile[] = [];
     for (const f of found) {
       const r = this.db
         .prepare('SELECT id, filename, folder, type, size, created_at FROM stored_files WHERE owner_id = ? AND folder = ? AND filename = ?')
         .get(ownerId, parentFolder(f.rel), path.posix.basename(f.rel)) as StoredFileRow | undefined;
-      if (r) out.push(toFileMeta(r));
+      if (r) out.push(this.meta(r));
     }
     return out;
   }
@@ -534,7 +549,7 @@ export class LocalFileStore extends FileStore {
     this.db
       .prepare('INSERT INTO stored_files (id, owner_id, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(row.id, ownerId, row.filename, folder, row.type, row.size, row.created_at);
-    return toFileMeta(row);
+    return this.meta(row);
   }
 
   override list(ownerId: string): StoredFile[] {

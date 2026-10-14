@@ -77,11 +77,14 @@ export function checkDocxFile(file: File): string | null {
   return checkSize(file);
 }
 
-/** Checks for the home page, which takes any kind. */
+/** Whether the home page turns the file into something it edits or shows; any other is kept as it is. */
+export const isKnownImport = (file: File): boolean => isVideoFile(file) || isImageFile(file) || /\.(xlsx?|pptx|docx|pdf|md|markdown|csv|html?)$/i.test(file.name);
+
+/** Checks for the home page, which takes any kind: what it does not know is kept as the file it is. */
 export function checkImportFile(file: File): string | null {
   if (isVideoFile(file)) return file.size > MAX_VIDEO_BYTES ? `This video is too large to upload (${MAX_VIDEO_BYTES / 1024 / 1024} MB maximum).` : null;
   if (isImageFile(file)) return file.size > MAX_IMAGE_MB * 1024 * 1024 ? `This picture is too large to upload (${MAX_IMAGE_MB} MB maximum).` : null;
-  if (!/\.(xlsx?|pptx|docx|pdf|md|markdown|csv|html?)$/i.test(file.name)) return 'Please choose an Excel workbook (.xlsx or .xls), a PowerPoint presentation (.pptx), a Word document (.docx), a PDF (.pdf), a Markdown file (.md), a CSV file (.csv), a web page (.html), a picture (.png, .jpg, .gif, .webp) or a video (.mp4, .mov, .webm).';
+  if (!isKnownImport(file)) return file.size > MAX_IMPORT_MB * 1024 * 1024 ? `This file is too large to add (${MAX_IMPORT_MB} MB maximum).` : null;
   if (isCsvFile(file) && file.size > MAX_CSV_CHARS) return 'This file is too large to import (10 MB maximum).';
   return checkSize(file);
 }

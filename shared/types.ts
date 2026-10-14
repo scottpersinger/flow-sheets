@@ -201,7 +201,12 @@ export interface StoredFile {
   url: string;
   /** Address that downloads the raw file (Content-Disposition: attachment). */
   downloadUrl: string;
+  /** Plain text (UTF-8, ASCII included) small enough to edit in the app's text editor, whatever its name says. */
+  text?: true;
 }
+
+/** The largest plain text file that opens in the text editor. */
+export const MAX_TEXT_EDIT_BYTES = 5 * 1024 * 1024;
 
 /** Pictures the image editor and the image model can change (an animated GIF would lose its frames). */
 export const EDITABLE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -216,6 +221,36 @@ export function videoTypeOf(filename: string): string | null {
   const ext = /\.([a-z0-9]+)$/i.exec(filename)?.[1].toLowerCase();
   return (ext && VIDEO_TYPES[ext]) || null;
 }
+/** The type a stored file is kept as, by its name: the kinds the app knows; null for any other (kept as application/octet-stream). */
+export function fileTypeOf(filename: string): string | null {
+  const ext = /\.([a-z0-9]+)$/i.exec(filename)?.[1].toLowerCase() ?? '';
+  return videoTypeOf(filename) ?? KNOWN_FILE_TYPES[ext] ?? null;
+}
+const KNOWN_FILE_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  html: 'text/html',
+  htm: 'text/html',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  xml: 'application/xml',
+  zip: 'application/zip',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+/** Whether a stored file has a page in the app (a viewer, or a copy to edit); any other is only listed, to download, move or delete. */
+export const opensInApp = (filename: string): boolean => /\.(pdf|html?|png|jpe?g|gif|webp|mp4|m4v|mov|webm|ogv|xlsx|xls|docx|pptx)$/i.test(filename);
+
 /** The type a web page (.html, .htm) is stored as. It is only ever shown inside a sandboxed frame, never served as a page. */
 export const HTML_TYPE = 'text/html';
 export const isHtmlName = (filename: string): boolean => /\.html?$/i.test(filename);
