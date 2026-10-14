@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import type { DeletedFile, StoredFile } from '../../../shared/types.ts';
+import { isHtmlName, type DeletedFile, type StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api, type FolderInfo } from '../api.ts';
@@ -14,6 +14,7 @@ import { MoveModal } from '../components/MoveModal.tsx';
 import { useFavicon } from '../favicon.ts';
 import { RECENTS_PARAM, rememberListing } from '../listing.ts';
 import { openFromRecents } from './OpenLocalFile.tsx';
+import { FilePreviewFrame } from '../components/FilePreviewFrame.tsx';
 import { checkImportFile, CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, HTML_ACCEPT, IMAGE_ACCEPT, imageTypeOf, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, titleFromFileName, VIDEO_ACCEPT } from '../importFile.ts';
 import { csvTitle } from '../../../shared/csv.ts';
 import { cleanFolderPath, folderTrail } from '../../../shared/folders.ts';
@@ -291,6 +292,13 @@ export function HomePage() {
       }
       // A file of Recents is somewhere else: no thumbnail, folder or row menu until its folder is open.
       thumbnail={recents ? undefined : (s) => <FileThumb item={s} />}
+      // Documents, presentations, spreadsheets and web pages show in their own page, drawn small; a picture,
+      // video or PDF is quicker as its thumbnail, which shows it just as well.
+      preview={
+        recents
+          ? undefined
+          : (s) => (s.kind === 'file' && !isHtmlName(s.title) ? <FileThumb item={s} /> : <FilePreviewFrame href={pathOf(s)} title={s.title} text={s.kind === 'doc' || s.kind === 'markdown' || s.kind === 'sheet'} />)
+      }
       onGettingStarted={() => void openGuide()}
       search={search}
       onSearchChange={setSearch}

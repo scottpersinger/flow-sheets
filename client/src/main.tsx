@@ -18,6 +18,11 @@ import { SettingsPage } from './pages/SettingsPage.tsx';
 import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
 import { VerifyEmailPage } from './pages/VerifyEmailPage.tsx';
 import './styles.css';
+import { isPreview } from './components/FilePreviewFrame.tsx';
+
+// A file's preview in the file list: the same page with only the file showing (styles.css, .file-preview-page).
+const PREVIEW = isPreview();
+if (PREVIEW) document.documentElement.classList.add('file-preview-page');
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { user, loading } = useAuth();
@@ -59,7 +64,7 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
-      {user && open && <AgentPanel />}
+      {user && open && !PREVIEW && <AgentPanel />}
     </div>
   );
 }

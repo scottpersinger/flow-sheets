@@ -191,6 +191,11 @@ export interface FileLibraryProps {
    */
   search?: { text: string; find: boolean };
   onSearchChange?(text: string, find: boolean): void;
+  /**
+   * A larger picture of a file, shown by the pointer when it rests on the file's name in the list for a
+   * moment; moving it away closes the picture.
+   */
+  preview?(item: LibraryItem): ReactNode;
   /** The picture of a file for the thumbnail view. Adds the list/thumbnails switch over the files. */
   thumbnail?(item: LibraryItem): ReactNode;
   /** The rows, or null while loading. */
@@ -251,6 +256,25 @@ function pickFile(accept: string): Promise<File | null> {
   });
 }
 
+/** How long the pointer rests on a file's name before its preview opens, and how far it may then wobble. */
+const PEEK_DELAY_MS = 600;
+const PEEK_SLACK = 8;
+const PEEK_W = 396;
+/** Room kept for the preview's height when placing it (a 4:3 page and the name under it). */
+const PEEK_H = PEEK_W * 0.75 + 40;
+
+/** A file's preview by the pointer, kept inside the window. It takes no clicks: the list stays usable under it. */
+function FilePeek({ item, x, y, preview }: { item: LibraryItem; x: number; y: number; preview(item: LibraryItem): ReactNode }) {
+  const left = Math.max(8, x + 18 + PEEK_W > window.innerWidth - 8 ? x - 18 - PEEK_W : x + 18);
+  const top = Math.max(8, y + 18 + PEEK_H > window.innerHeight - 8 ? y - 18 - PEEK_H : y + 18);
+  return (
+    <div className="file-peek" style={{ left, top, width: PEEK_W }} aria-hidden="true">
+      {preview(item)}
+      <div className="file-peek-name">{item.title}</div>
+    </div>
+  );
+}
+
 export function FileLibrary(props: FileLibraryProps) {
   const { items, error, importing, onOpen } = props;
   const other = props.otherList;
@@ -303,6 +327,44 @@ export function FileLibrary(props: FileLibraryProps) {
     if (wantFind && items !== null && q && !(found && found.text === q)) void find();
   });
   const [dragOver, setDragOver] = useState(false);
+  // The preview by the pointer: opened when it has rested on a file's name for a moment, closed when it moves on.
+  const [peek, setPeek] = useState<{ item: LibraryItem; x: number; y: number } | null>(null);
+  const resting = useRef<number | undefined>(undefined);
+  const stopPeek = () => {
+    window.clearTimeout(resting.current);
+    setPeek(null);
+  };
+  useEffect(() => {
+    if (!peek) return;
+    const close = () => setPeek(null);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('mousedown', close, true);
+    window.addEventListener('keydown', close, true);
+    window.addEventListener('blur', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('mousedown', close, true);
+      window.removeEventListener('keydown', close, true);
+      window.removeEventListener('blur', close);
+    };
+  }, [peek]);
+  useEffect(() => () => window.clearTimeout(resting.current), []);
+  /** What makes a file's name open its preview when the pointer rests on it. */
+  const peekOn = (s: LibraryItem) =>
+    props.preview
+      ? {
+          onMouseMove: (e: React.MouseEvent) => {
+            const { clientX: x, clientY: y } = e;
+            // Open: a small wobble keeps it, a real move closes it (and resting again opens it again).
+            if (peek && Math.hypot(x - peek.x, y - peek.y) <= PEEK_SLACK) return;
+            if (peek) setPeek(null);
+            window.clearTimeout(resting.current);
+            resting.current = window.setTimeout(() => setPeek({ item: s, x, y }), PEEK_DELAY_MS);
+          },
+          onMouseLeave: stopPeek,
+        }
+      : {};
+  useEffect(() => stopPeek(), [items]);
   // A file of the list being dragged, and the folder it is over that would take it.
   const dragged = useRef<LibraryItem | null>(null);
   const [dropFolder, setDropFolder] = useState<string | null>(null);
@@ -819,6 +881,7 @@ export function FileLibrary(props: FileLibraryProps) {
               {visible.map(({ s, depth }) => (
                 <tr key={s.id} onClick={() => onOpen(s)} {...dragSource(s)}>
                   <td>
+                    <span className="peek-target" {...peekOn(s)}>
                     {titleLink(
                       s,
                       <>
@@ -829,6 +892,7 @@ export function FileLibrary(props: FileLibraryProps) {
                         {s.branch && <span className={`branch-tag${s.branch.detached ? ' detached' : ''}`}>{s.branch.detached ? `branch of deleted “${s.branch.parentTitle}”` : depth ? 'branch' : `branch of ${s.branch.parentTitle}`}</span>}
                       </>,
                     )}
+                    </span>
                   </td>
                   <td className="col-type">{kindLabel(s)}</td>
                   <td>{formatWhen(s.updatedAt)}</td>
@@ -853,6 +917,7 @@ export function FileLibrary(props: FileLibraryProps) {
         {findError && <div className="form-error">{findError}</div>}
       </section>
 
+      {peek && props.preview && <FilePeek {...peek} preview={props.preview} />}
       {importing && (
         <div className="modal-backdrop">
           <div className="modal import-progress" role="status">
