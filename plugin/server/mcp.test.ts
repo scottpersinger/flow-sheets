@@ -175,8 +175,8 @@ describe('MCP server', () => {
 
   it('names the app resource after the bundle hash', () => {
     expect(appUri('h1')).toBe('ui://freeflow-docs/app-h1.html');
-    // Universal Docs from version 2; version 1 keeps the name it was submitted under. The desktop app's is Universal Local.
-    expect([serverInfo(1).name, serverInfo(2).name, serverInfo(2, true).name]).toEqual(['freeflow-docs', 'universal-docs', 'universal-local']);
+    // Universal Docs from version 2; version 1 keeps the name it was submitted under. The desktop app's is MCP Docs.
+    expect([serverInfo(1).name, serverInfo(2).name, serverInfo(2, true).name]).toEqual(['freeflow-docs', 'universal-docs', 'mcp-docs']);
     expect(appUri('h2')).not.toBe(appUri('h1'));
   });
 

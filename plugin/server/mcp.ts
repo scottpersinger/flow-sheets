@@ -13,6 +13,7 @@ import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
 import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
+import { appName } from '../../shared/brand.ts';
 import type { ImageJobResult } from './files.ts';
 import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, UPLOAD_TICKET_MS, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
@@ -30,11 +31,11 @@ export const MCP_VERSIONS = [1, 2] as const;
 export type McpVersion = (typeof MCP_VERSIONS)[number];
 const SERVER_VERSIONS: Record<McpVersion, string> = { 1: '0.2.0', 2: '0.3.0' };
 /**
- * Who the server says it is: Universal Docs on the web, Universal Local in the desktop app (for agents on the
+ * Who the server says it is: Universal Docs on the web, MCP Docs in the desktop app (for agents on the
  * same machine). Version 1 keeps the name it was submitted under.
  */
 export const serverInfo = (version: McpVersion = 1, local = false) => ({
-  ...(local ? { name: 'universal-local', title: 'Universal Local' } : version === 1 ? { name: 'freeflow-docs' } : { name: 'universal-docs', title: 'Universal Docs' }),
+  ...(local ? { name: 'mcp-docs', title: 'MCP Docs' } : version === 1 ? { name: 'freeflow-docs' } : { name: 'universal-docs', title: 'Universal Docs' }),
   version: SERVER_VERSIONS[version],
 });
 /** Version 1's server info. */
@@ -74,7 +75,7 @@ export interface McpOptions {
   level?: 'minimal' | 'tools' | 'render' | 'app' | 'full';
   /** Which version of the tools to serve (MCP_VERSIONS); 1 when not given. */
   version?: McpVersion;
-  /** The desktop app's server, for agents on the same machine: it is named Universal Local. */
+  /** The desktop app's server, for agents on the same machine: it is named MCP Docs. */
   local?: boolean;
   /** Fetches files ChatGPT hands to import_file (tests pass a fake). */
   fetchFn?: typeof fetch;
@@ -88,10 +89,12 @@ const V2_INSTRUCTIONS =
   'A file on your own computer (one you can read from disk, not an attachment or a web address) is uploaded with upload_file: it returns an address, and you send the file\'s bytes there yourself, with curl for example. Files can be kept in folders, named by their path ("Reports/2026"): list_files lists one folder (its files and the folders in it; the top when none is given), search_files finds files and folders by name in any folder, create_folder makes one, move_file puts a file in one, and upload_file can upload straight into one.';
 
 /** The instructions a version of the server gives; version 2 adds how to read stored files, upload local ones and use folders. */
-export const instructionsFor = (version: McpVersion = 1): string =>
-  version === 1
-    ? INSTRUCTIONS
-    : `${INSTRUCTIONS}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks. convert_pdf_to_markdown makes a Markdown document of a PDF's text, to edit.`;
+export const instructionsFor = (version: McpVersion = 1, local = false): string => {
+  const intro = local ? INSTRUCTIONS.replace(/^Universal Docs:/, `${appName(true)}:`) : INSTRUCTIONS;
+  return version === 1
+    ? intro
+    : `${intro}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks. convert_pdf_to_markdown makes a Markdown document of a PDF's text, to edit.`;
+};
 
 const DOC_ICON = {
   src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3.5 3.5v11.5h-10.5z"/><path d="M12 2.5v3.5h3.5"/><path d="M7.5 10h5M7.5 13h5"/></svg>'),
@@ -272,7 +275,7 @@ export function arcsAsEllipseBoxes(input: Record<string, unknown>): Record<strin
 
 export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
   const version = opts.version ?? 1;
-  const server = new McpServer({ ...serverInfo(version, opts.local), icons: [DOC_ICON] }, { instructions: instructionsFor(version) });
+  const server = new McpServer({ ...serverInfo(version, opts.local), icons: [DOC_ICON] }, { instructions: instructionsFor(version, opts.local) });
   // What a tool returns to the model holds only what a request needs: revisions and dates are for the app's
   // own tools, which keep them.
   const register = server.registerTool.bind(server) as (name: string, config: { _meta?: Record<string, unknown> }, handler: (...args: unknown[]) => Promise<CallToolResult> | CallToolResult) => unknown;
@@ -800,7 +803,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         // with where it can be done.
         if (remove_background) {
           const where = opts.publicUrl ? ` Open ${f.meta.filename} there: ${opts.publicUrl}/f/${encodeURIComponent(f.meta.id)} , choose Edit, then Magic and Remove background (or ask the assistant there).` : '';
-          throw new ToolError(`Removing a background is only available in the full Universal Docs app, not here.${where} Nothing was changed. The other changes can be made here: call transform_image again without remove_background.`);
+          throw new ToolError(`Removing a background is only available in the full ${appName(!!opts.local)} app, not here.${where} Nothing was changed. The other changes can be made here: call transform_image again without remove_background.`);
         }
         if (!operations.length) throw new ToolError('Give at least one change to make: crop, rotate, straighten, flip, adjust, filter, redact, shapes, text or resize_width.');
         const r = await service.runImageJob(file_id, operations, save === 'replace' ? 'replace' : 'copy');

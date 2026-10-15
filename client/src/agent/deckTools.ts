@@ -30,6 +30,7 @@ import type { DeckController } from '../deck/controller.ts';
 import type { SlideRender } from '../deck/renderSlide.ts';
 import { refusedChange, ToolError } from './toolError.ts';
 import { TransactionRefused } from '../state/store.ts';
+import { appName } from '../brand.ts';
 
 export const DECK_TOOLS: ReadonlySet<string> = new Set(['read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme']);
 
@@ -371,7 +372,7 @@ export function runDeckTool(call: ClientToolCall, env: DeckToolEnv): string {
     try {
       return ctl.runAgent(env.group, fn);
     } catch (e) {
-      if (e instanceof TransactionRefused) throw refusedChange(e.message, 'PowerPoint', 'Universal Docs presentation');
+      if (e instanceof TransactionRefused) throw refusedChange(e.message, 'PowerPoint', `${appName()} presentation`);
       throw e;
     }
   };

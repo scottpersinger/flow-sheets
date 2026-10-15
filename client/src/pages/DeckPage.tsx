@@ -35,6 +35,7 @@ import { checkPptxFile, pickPptxFile } from '../importFile.ts';
 import { SlideView } from '../deck/SlideView.tsx';
 import { ThumbnailStrip } from '../deck/ThumbnailStrip.tsx';
 import { SLIDE_TRAY } from '../panelSize.ts';
+import { appName } from '../brand.ts';
 
 /** Natural size of an image, for sizing a new image element. */
 function imageSize(src: string): Promise<{ w: number; h: number } | undefined> {
@@ -162,9 +163,9 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
   useEffect(() => {
-    document.title = `${meta.title} - Universal Docs`;
+    document.title = `${meta.title} - ${appName()}`;
     return () => {
-      document.title = 'Universal Docs';
+      document.title = appName();
     };
   }, [meta.title]);
 

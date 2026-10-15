@@ -9,6 +9,7 @@ import type { ConnectedAgent } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { Account } from '../components/Account.tsx';
+import { appName } from '../brand.ts';
 
 type KeyProvider = Exclude<AssistantProvider, 'default'>;
 const PROVIDERS: { id: KeyProvider; name: string; placeholder: string; keysAt: string }[] = [
@@ -71,7 +72,7 @@ export function SettingsPage() {
       <header className="home-header">
         <div className="home-brand">
           <Link to="/" className="home-back">
-            ‹ Universal Docs
+            ‹ {appName()}
           </Link>
           <span>Settings</span>
         </div>

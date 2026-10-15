@@ -11,6 +11,7 @@ import { checkCellImage } from '../../../shared/types.ts';
 import type { DocController } from '../doc/controller.ts';
 import { refusedChange, ToolError } from './toolError.ts';
 import { TransactionRefused } from '../state/store.ts';
+import { appName } from '../brand.ts';
 
 export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image', 'set_page_setup', 'set_doc_style']);
 
@@ -222,7 +223,7 @@ export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
     try {
       return ctl.runAgent(env.group, fn);
     } catch (e) {
-      if (e instanceof TransactionRefused) throw refusedChange(e.message, 'Word', 'Universal Docs document');
+      if (e instanceof TransactionRefused) throw refusedChange(e.message, 'Word', `${appName()} document`);
       throw e;
     }
   };

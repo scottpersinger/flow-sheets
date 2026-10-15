@@ -19,6 +19,7 @@ import { MarkdownController, useMarkdownController } from '../markdown/controlle
 import { MarkdownEditor, replaceRange, wrapSelection } from '../markdown/MarkdownEditor.tsx';
 import { MarkdownPreview } from '../markdown/MarkdownPreview.tsx';
 import { MARKDOWN_PREVIEW } from '../panelSize.ts';
+import { appName } from '../brand.ts';
 
 // Diagrams in the preview: Mermaid is fetched when a document first has one.
 const loadMermaid = () => import('mermaid');
@@ -150,9 +151,9 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
   useEffect(() => {
-    document.title = `${meta.title} - Universal Docs`;
+    document.title = `${meta.title} - ${appName()}`;
     return () => {
-      document.title = 'Universal Docs';
+      document.title = appName();
     };
   }, [meta.title]);
 

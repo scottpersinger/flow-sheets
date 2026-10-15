@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, type User } from './api.ts';
+import { setLocalApp } from './brand.ts';
 
 interface AuthState {
   user: User | null;
@@ -35,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!cancelled) {
             setUser(r.user);
             setGoogleLogin(!!r.googleLogin);
+            setLocalApp(!!r.local);
             setLocal(r.local ?? null);
           }
           break;

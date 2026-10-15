@@ -20,17 +20,17 @@ Requires Node 22.18+. The server runs TypeScript directly through Node's built-i
 
 ## Desktop app
 
-The same app, Universal Docs, runs on your machine with a folder as its library, in Electron (`desktop/`).
+The same app, called MCP Docs on the desktop, runs on your machine with a folder as its library, in Electron (`desktop/`).
 
-[![Download Universal Docs for macOS](https://img.shields.io/badge/Download-Universal%20Docs%20for%20macOS-2ea44f?logo=apple)](https://github.com/scottpersinger/universal-docs/releases/latest)
+[![Download MCP Docs for macOS](https://img.shields.io/badge/Download-MCP%20Docs%20for%20macOS-2ea44f?logo=apple)](https://github.com/scottpersinger/universal-docs/releases/latest)
 
 To run it from a clone of this repository:
 
 ```
 npm run desktop                 # build the client, then open the current directory
 npm run desktop -- ~/Documents  # or a folder you name
-npm link                        # once, to get the `universal-docs` command:
-cd ~/Documents && universal-docs  # open the directory you are in (after `npm run build`)
+npm link                        # once, to get the `mcp-docs` command:
+cd ~/Documents && mcp-docs        # open the directory you are in (after `npm run build`)
 ```
 
 The folder's files are the file list and its directories are the library's folders (see Folders below; hidden entries and `node_modules` are skipped). A file's name in the list is its file name without the extension. **File → Open Folder…** switches to another folder. There is no account and nothing to sign in to.
@@ -41,11 +41,11 @@ The folder's files are the file list and its directories are the library's folde
 - Renaming a file in the app renames it on disk, and **Move to…** moves it into another directory. Deleting moves the file out of the folder into the app's data directory (`trash/`), not the system trash.
 - A file changed by another program while it is open in the app is not overwritten: the save is refused.
 
-The app's own data for a folder (the assistant's chat, settings, pasted images, branch snapshots, deleted files) is kept under Electron's user data directory (`~/Library/Application Support/Universal Docs/folders/` on macOS), not in the folder. Images pasted into a file are therefore not part of the file. The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, entered in Settings; on the first run a key already set in your login shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) is used. Changing the app's own code and background research (see Self-improvement) are only in the hosted app. On macOS the `universal-docs` command starts the app through LaunchServices, so the app itself (listed as Electron until it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a folder it may not read shows a message saying so. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows.
+The app's own data for a folder (the assistant's chat, settings, pasted images, branch snapshots, deleted files) is kept under Electron's user data directory (`~/Library/Application Support/MCP Docs/folders/` on macOS), not in the folder. Images pasted into a file are therefore not part of the file. The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, entered in Settings; on the first run a key already set in your login shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) is used. Changing the app's own code and background research (see Self-improvement) are only in the hosted app. On macOS the `mcp-docs` command starts the app through LaunchServices, so the app itself (listed as Electron until it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a folder it may not read shows a message saying so. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows.
 
 ### Packaging
 
-`npm run desktop:win` builds the Windows app with electron-builder into `release/`: an installer (`Universal Docs Setup <version>.exe`) and a zip of the same files, both for x64. It can be run on macOS; without Wine the `.exe` keeps Electron's icon and is not code-signed, so Windows shows its "unknown publisher" warning on first run. `npm run desktop:pack` builds the unpacked app for the machine it runs on, to try the packaged layout.
+`npm run desktop:win` builds the Windows app with electron-builder into `release/`: an installer (`MCP Docs Setup <version>.exe`) and a zip of the same files, both for x64. It can be run on macOS; without Wine the `.exe` keeps Electron's icon and is not code-signed, so Windows shows its "unknown publisher" warning on first run. `npm run desktop:pack` builds the unpacked app for the machine it runs on, to try the packaged layout.
 
 The packaged app holds the server's TypeScript as plain files (`asar` is off), which Electron's Node runs as it does in development. Started from its icon it reopens the folder it showed last, or asks for one the first time; a folder can also be given on its command line. It reads no `.env`.
 

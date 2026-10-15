@@ -122,7 +122,7 @@ export class LocalOAuth {
         );
 
     if (/oauth-protected-resource/.test(p) && req.method === 'GET') {
-      return json(200, { resource: `${this.issuer}/mcp`, authorization_servers: [this.issuer], bearer_methods_supported: ['header'], resource_name: 'Universal Local' });
+      return json(200, { resource: `${this.issuer}/mcp`, authorization_servers: [this.issuer], bearer_methods_supported: ['header'], resource_name: 'MCP Docs' });
     }
     if (/(oauth-authorization-server|openid-configuration)/.test(p) && req.method === 'GET') {
       return json(200, {
@@ -180,8 +180,8 @@ export class LocalOAuth {
       );
       return page(
         200,
-        `Connect “${client.name}” to Universal Docs`,
-        '<p id="msg">Allow or deny the connection in the Universal Docs app. This page goes on by itself when you answer.</p>',
+        `Connect “${client.name}” to MCP Docs`,
+        '<p id="msg">Allow or deny the connection in the MCP Docs app. This page goes on by itself when you answer.</p>',
         `const go=async()=>{try{const r=await fetch('/oauth/wait?p=${encodeURIComponent(id)}');const j=await r.json();if(j.redirect){document.getElementById('msg').textContent=j.denied?'Not allowed. You can close this page.':'Connected. You can close this page and go back to the agent.';location.href=j.redirect;return}if(j.gone){document.getElementById('msg').textContent='This request has expired. Start the connection again from the agent.';return}}catch{}setTimeout(go,1000)};go();`,
       );
     }

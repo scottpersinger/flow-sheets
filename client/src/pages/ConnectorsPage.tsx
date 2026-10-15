@@ -7,6 +7,7 @@ import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { Account } from '../components/Account.tsx';
 import { ConfirmModal, Modal } from '../components/Modal.tsx';
+import { appName } from '../brand.ts';
 
 const STATUS: Record<ConnectionInfo['status'], string> = { connected: 'Connected', error: 'Error', needs_reauth: 'Needs reconnecting' };
 
@@ -58,7 +59,7 @@ export function ConnectorsPage() {
       <header className="home-header">
         <div className="home-brand">
           <Link to="/" className="home-back">
-            ‹ Universal Docs
+            ‹ {appName()}
           </Link>
           <span>Connectors</span>
         </div>

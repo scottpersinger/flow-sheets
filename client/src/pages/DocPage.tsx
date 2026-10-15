@@ -37,6 +37,7 @@ import { VideoDialog } from '../components/VideoDialog.tsx';
 import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
 import { useFavicon } from '../favicon.ts';
+import { appName } from '../brand.ts';
 
 function downloadFile(name: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -187,9 +188,9 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
   const zoomIn = ZOOMS.find((z) => z > pageScale * 100 + 0.5);
 
   useEffect(() => {
-    document.title = `${meta.title} - Universal Docs`;
+    document.title = `${meta.title} - ${appName()}`;
     return () => {
-      document.title = 'Universal Docs';
+      document.title = appName();
     };
   }, [meta.title]);
 

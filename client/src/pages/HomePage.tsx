@@ -19,6 +19,7 @@ import { checkImportFile, imageTypeOf, isKnownImport, isCsvFile, isHtmlFile, isI
 import { csvTitle } from '../../../shared/csv.ts';
 import { cleanFolderPath, folderTrail } from '../../../shared/folders.ts';
 import { markdownTitle } from '../../../shared/markdown.ts';
+import { appName } from '../brand.ts';
 
 const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : s.kind === 'markdown' ? `/md/${s.id}` : s.kind === 'file' ? `/f/${s.id}` : `/s/${s.id}`);
 
@@ -246,7 +247,7 @@ export function HomePage() {
   useListingScroll(query, recents ? recentFiles !== null : items !== null && listed === folder);
 
   useEffect(() => {
-    document.title = 'Universal Docs';
+    document.title = appName();
   }, []);
 
   useEffect(() => {
@@ -268,7 +269,7 @@ export function HomePage() {
       brand={
         <>
           <HomeIcon />
-          <span>Universal Docs</span>
+          <span>{appName()}</span>
         </>
       }
       listTitle={local ? <span title={local.dir}>{dirName(local.dir)}</span> : undefined}

@@ -35,6 +35,7 @@ import { Backup } from './backup.ts';
 import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
 import { openDb } from './db.ts';
 import { EXPORT_FORMATS, ExportError, exportAll, exportFile, exportFolder, imageSource, loadFile, type ExportFormat } from './export.ts';
+import { appName } from '../shared/brand.ts';
 import { openGettingStarted } from './gettingStarted.ts';
 import { isFileId } from './ids.ts';
 import { ImageStore } from './images.ts';
@@ -1313,7 +1314,7 @@ export async function buildApp(opts: AppOptions) {
       const { body, files, problems } = await exportAll(sheets, req.user!.id, imageSource(images, req.user!.id));
       req.log.info({ files, problems: problems.length }, 'exported account');
       const date = new Date().toISOString().slice(0, 10);
-      return attachment(reply, `Universal Docs export ${date}.zip`, 'application/zip').send(body);
+      return attachment(reply, `${appName(!!opts.local)} export ${date}.zip`, 'application/zip').send(body);
     });
   });
 

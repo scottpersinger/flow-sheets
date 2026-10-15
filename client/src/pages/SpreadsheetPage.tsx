@@ -37,6 +37,7 @@ import { uniqueTabName } from '../state/ops.ts';
 import { SheetController } from '../state/controller.ts';
 import { csvGuard, lockedGuard, EDIT_NOT_ALLOWED, xlsxGuard } from '../state/store.ts';
 import { useController } from '../state/useController.ts';
+import { appName } from '../brand.ts';
 
 function downloadFile(name: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -210,9 +211,9 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
   }, [ctl, meta.id, meta.branch]);
 
   useEffect(() => {
-    document.title = `${meta.title} - Universal Docs`;
+    document.title = `${meta.title} - ${appName()}`;
     return () => {
-      document.title = 'Universal Docs';
+      document.title = appName();
     };
   }, [meta.title]);
 
@@ -412,7 +413,7 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
             )}
             {meta.format === 'xlsx' &&
               (notKept ? (
-                <button className="format-chip locked" title={`This Excel file has things Universal Docs can't keep: ${notKept.join(', ')}. Click to allow editing.`} onClick={() => setDialog({ kind: 'editExcel' })}>
+                <button className="format-chip locked" title={`This Excel file has things ${appName()} can't keep: ${notKept.join(', ')}. Click to allow editing.`} onClick={() => setDialog({ kind: 'editExcel' })}>
                   Excel · Read-only
                 </button>
               ) : (
@@ -516,7 +517,7 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
           title="Edit this Excel file?"
           message={
             <>
-              “{meta.title}” has things Universal Docs can't keep: {(notKept ?? []).join(', ')}. If you edit it, they are removed from the file when it saves. A copy of
+              “{meta.title}” has things {appName()} can't keep: {(notKept ?? []).join(', ')}. If you edit it, they are removed from the file when it saves. A copy of
               the file as it is now is kept in the app's trash folder.
             </>
           }
@@ -531,10 +532,10 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
       )}
       {dialog?.kind === 'convert' && meta.format === 'xlsx' && (
         <ConfirmModal
-          title="Keep as a Universal Docs spreadsheet?"
+          title={`Keep as a ${appName()} spreadsheet?`}
           message={
             <>
-              {dialog.reason ?? 'Some things'} cannot be saved in an Excel file. Keeping “{meta.title}” as a Universal Docs spreadsheet instead lets it hold them. It will no longer
+              {dialog.reason ?? 'Some things'} cannot be saved in an Excel file. Keeping “{meta.title}” as a {appName()} spreadsheet instead lets it hold them. It will no longer
               be an Excel file, and you can still download it as Excel.
             </>
           }
@@ -542,7 +543,7 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
           onConfirm={async () => {
             await convertToSpreadsheet();
             dialog.retry?.();
-            notify('Kept as a Universal Docs spreadsheet.');
+            notify(`Kept as a ${appName()} spreadsheet.`);
           }}
           onClose={() => setDialog(null)}
         />

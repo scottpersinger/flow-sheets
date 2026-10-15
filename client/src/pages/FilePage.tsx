@@ -17,6 +17,7 @@ import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
 import { HomeIcon } from '../components/Logo.tsx';
 import { useFavicon } from '../favicon.ts';
 import { isPowerPointFile, isWordFile, titleFromFileName } from '../importFile.ts';
+import { appName } from '../brand.ts';
 
 // Remove background in the image editor: a model that runs in the browser, fetched when it is first used.
 const loadBackgroundRemoval = () => import('@imgly/background-removal');
@@ -126,7 +127,7 @@ export function FilePage() {
       <header className="home-header">
         <Link to={lastListingHref()} className="home-brand" title="Back to the file list">
           <HomeIcon />
-          <span>Universal Docs</span>
+          <span>{appName()}</span>
         </Link>
         <span className="file-page-title">
           {file && <FolderCrumbs folder={file.folder} />}

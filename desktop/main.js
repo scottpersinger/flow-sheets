@@ -12,7 +12,7 @@ import { LocalOAuth } from './mcpAuth.js';
 const root = path.resolve(import.meta.dirname, '..');
 // Also names the app's data directory, which would otherwise be the generic "Electron" one.
 // The name the app's data folder is kept under (last folder, each folder's database): changing it would lose them.
-app.setName('Universal Docs');
+app.setName('MCP Docs');
 const isDir = (p) => {
   try {
     return statSync(p).isDirectory();
@@ -20,9 +20,10 @@ const isDir = (p) => {
     return false;
   }
 };
-// The app was called FreeFlow Docs: the first time it starts under its new name, its data folder moves over.
-const legacyData = path.join(app.getPath('appData'), 'FreeFlow Docs');
-if (!existsSync(app.getPath('userData')) && isDir(legacyData)) {
+// The app was called Universal Docs, and before that FreeFlow Docs: the first time it starts under its new name,
+// its data folder moves over.
+const legacyData = ['Universal Docs', 'FreeFlow Docs'].map((name) => path.join(app.getPath('appData'), name)).find(isDir);
+if (!existsSync(app.getPath('userData')) && legacyData) {
   try {
     renameSync(legacyData, app.getPath('userData'));
   } catch (e) {
@@ -74,7 +75,7 @@ async function approveAgent(name) {
   const options = {
     type: 'question',
     title: 'Connect an Agent',
-    message: `Allow “${name}” to use Universal Docs?`,
+    message: `Allow “${name}” to use MCP Docs?`,
     detail:
       'It will be able to read, change, create and delete the files in the folders you open in the app, and show them in this window, until you disconnect it (File › Connect an Agent).\n\nAllow it only if you just asked an agent on this computer to connect. The name is the one the agent gave itself.',
     buttons: ['Allow', 'Don’t Allow'],
@@ -140,7 +141,7 @@ function startMcpProxy() {
  */
 function bringToFront() {
   if (process.platform !== 'darwin') return app.focus();
-  // .../Universal Docs.app/Contents/MacOS/Universal Docs (or Electron.app in development).
+  // .../MCP Docs.app/Contents/MacOS/MCP Docs (or Electron.app in development).
   const bundle = path.resolve(process.execPath, '..', '..', '..');
   if (!bundle.endsWith('.app')) return app.focus({ steal: true });
   execFile('open', ['-a', bundle], (e) => e && app.focus({ steal: true }));
@@ -169,14 +170,14 @@ function fileChanged(id) {
 }
 
 async function connectAgent() {
-  const command = `claude mcp add --scope user --transport http universal-local ${MCP_URL}/mcp`;
+  const command = `claude mcp add --scope user --transport http mcp-docs ${MCP_URL}/mcp`;
   const agents = mcpAuth?.clients() ?? [];
   const connected = agents.length ? `Connected now: ${agents.map((a) => a.name).join(', ')}.` : 'No agent is connected yet.';
   const res = await dialog.showMessageBox({
     type: 'info',
     title: 'Connect an Agent',
     message: mcpListening ? 'Agents on this computer can read and edit the open folder’s files, and the app shows what they open.' : `The MCP server is not running: port ${MCP_PORT} is in use, probably by another copy of the app.`,
-    detail: `MCP server (Universal Local): ${MCP_URL}/mcp\n\nTo add it to Claude Code, run the command below, then /mcp in Claude Code to sign in. The app asks you to allow each agent that connects.\n\n${command}\n\n${connected}`,
+    detail: `MCP server (MCP Docs): ${MCP_URL}/mcp\n\nTo add it to Claude Code, run the command below, then /mcp in Claude Code to sign in. The app asks you to allow each agent that connects.\n\n${command}\n\n${connected}`,
     buttons: agents.length ? ['Copy Command', 'Disconnect All Agents', 'Close'] : ['Copy Command', 'Close'],
     defaultId: 0,
     cancelId: agents.length ? 2 : 1,
@@ -225,7 +226,7 @@ function startServer(dir) {
     child.once('message', (msg) => resolve({ child, dir, token, port: msg.port, origin: `http://127.0.0.1:${msg.port}` }));
     // Later the server asks for a file outside its folder to be shown (one of Recents), or a page (a file an agent opened).
     child.on('message', (msg) => {
-      if (msg && typeof msg.openFile === 'string') void openFile(msg.openFile).catch((e) => dialog.showErrorBox('Universal Docs', String(e.message ?? e)));
+      if (msg && typeof msg.openFile === 'string') void openFile(msg.openFile).catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e)));
       if (msg && typeof msg.show === 'string' && msg.show.startsWith('/')) showPage(msg.show);
       if (msg && typeof msg.fileChanged === 'string') fileChanged(msg.fileChanged);
     });
@@ -245,7 +246,7 @@ const TABS = 'freeflow';
 
 function createWindow(url) {
   // On macOS the app's windows share one tab group.
-  const win = new BrowserWindow({ width: 1400, height: 900, title: 'Universal Docs', tabbingIdentifier: TABS });
+  const win = new BrowserWindow({ width: 1400, height: 900, title: 'MCP Docs', tabbingIdentifier: TABS });
   void win.loadURL(url);
   return win;
 }
@@ -271,7 +272,7 @@ async function openFolder(dir, landing = '/') {
   current = await startServer(dir);
   rememberFolder(dir);
   current.child.once('exit', () => {
-    dialog.showErrorBox('Universal Docs', 'The local server stopped unexpectedly. The app will close.');
+    dialog.showErrorBox('MCP Docs', 'The local server stopped unexpectedly. The app will close.');
     app.quit();
   });
   // Only this app's windows hold the token, so nothing else on the machine can use the server.
@@ -305,7 +306,7 @@ let started = false;
 app.on('open-file', (e, file) => {
   e.preventDefault();
   if (!started) launchFile = file;
-  else void showFile(file).catch((err) => dialog.showErrorBox('Universal Docs', String(err.message ?? err)));
+  else void showFile(file).catch((err) => dialog.showErrorBox('MCP Docs', String(err.message ?? err)));
 });
 
 // --- Default app (macOS) ----------------------------------------------------------------------------------
@@ -346,9 +347,9 @@ async function offerDefaultApp(first = false) {
   const res = await dialog.showMessageBox({
     type: 'question',
     title: 'Default App',
-    message: 'Open Word, Excel, PowerPoint, PDF, CSV and Markdown files in Universal Docs?',
+    message: 'Open Word, Excel, PowerPoint, PDF, CSV and Markdown files in MCP Docs?',
     detail: 'Double-clicking one of these files in Finder will open it here. You can change it back for a type with Get Info › Open with › Change All… in Finder.',
-    buttons: [first ? 'Use Universal Docs' : 'Make Default', first ? 'Not Now' : 'Cancel'],
+    buttons: [first ? 'Use MCP Docs' : 'Make Default', first ? 'Not Now' : 'Cancel'],
     defaultId: 0,
     cancelId: 1,
   });
@@ -363,7 +364,7 @@ async function offerDefaultApp(first = false) {
   try {
     await setDefaultApp();
   } catch (e) {
-    dialog.showErrorBox('Universal Docs', `The app could not be made the default: ${e.message ?? e}`);
+    dialog.showErrorBox('MCP Docs', `The app could not be made the default: ${e.message ?? e}`);
   }
 }
 
@@ -400,7 +401,7 @@ function buildMenu() {
       {
         label: 'File',
         submenu: [
-          { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: () => void chooseFolder().catch((e) => dialog.showErrorBox('Universal Docs', String(e.message ?? e))) },
+          { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: () => void chooseFolder().catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e))) },
           { label: mac ? 'Show Folder in Finder' : 'Show Folder', click: () => current && void shell.openPath(current.dir) },
           { label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => current && createWindow(`${current.origin}/`) },
           { type: 'separator' },
@@ -420,7 +421,7 @@ app.whenReady().then(async () => {
   buildMenu();
   startMcpProxy();
   if (!existsSync(path.join(root, 'dist', 'client', 'index.html'))) {
-    dialog.showErrorBox('Universal Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
+    dialog.showErrorBox('MCP Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
     return app.quit();
   }
   if (!existsSync(keysCheckedFile())) {
@@ -447,11 +448,11 @@ app.whenReady().then(async () => {
     const dir = path.resolve(arg ?? process.cwd());
     if (isDir(dir)) await openFolder(dir);
     else {
-      dialog.showErrorBox('Universal Docs', `"${dir}" is not a folder. Choose a folder to open.`);
+      dialog.showErrorBox('MCP Docs', `"${dir}" is not a folder. Choose a folder to open.`);
       if (!(await chooseFolder())) app.quit();
     }
   } catch (e) {
-    dialog.showErrorBox('Universal Docs', `The app could not start: ${e.message ?? e}`);
+    dialog.showErrorBox('MCP Docs', `The app could not start: ${e.message ?? e}`);
     app.quit();
   } finally {
     started = true;

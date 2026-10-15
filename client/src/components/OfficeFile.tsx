@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { EDIT_NOT_ALLOWED } from '../state/store.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { ConfirmModal } from './Modal.tsx';
+import { appName } from '../brand.ts';
 
 /** The program each Office format belongs to. */
 const PROGRAM: Record<string, string> = { xlsx: 'Excel', pptx: 'PowerPoint', docx: 'Word' };
@@ -31,7 +32,7 @@ export function useOfficeFile(opts: {
 
   const onRefused = (reason: string, retry: () => void) => setQuestion(reason === EDIT_NOT_ALLOWED ? { kind: 'allow', retry } : { kind: 'own', reason, retry });
   const chip = notKept ? (
-    <button className="format-chip locked" title={`This ${program} file has things Universal Docs can't keep (${notKept.join('; ')}). Click to allow editing.`} onClick={() => setQuestion({ kind: 'allow' })}>
+    <button className="format-chip locked" title={`This ${program} file has things ${appName()} can't keep (${notKept.join('; ')}). Click to allow editing.`} onClick={() => setQuestion({ kind: 'allow' })}>
       {program} · Read-only
     </button>
   ) : (
@@ -46,7 +47,7 @@ export function useOfficeFile(opts: {
           title={`Edit this ${program} file?`}
           message={
             <>
-              “{opts.meta.title}” has things Universal Docs can't keep:
+              “{opts.meta.title}” has things {appName()} can't keep:
               {/* One per line: labels ("Cell borders") and the import's sentences ("Charts were dropped.") alike. */}
               {(notKept ?? []).map((n) => (
                 <span key={n} className="modal-list-item">
@@ -67,10 +68,10 @@ export function useOfficeFile(opts: {
       )}
       {question?.kind === 'own' && (
         <ConfirmModal
-          title={`Keep as a Universal Docs ${opts.own}?`}
+          title={`Keep as a ${appName()} ${opts.own}?`}
           message={
             <>
-              {question.reason} cannot be saved in a {program} file. Keeping “{opts.meta.title}” as a Universal Docs {opts.own} instead lets it hold them. It will no
+              {question.reason} cannot be saved in a {program} file. Keeping “{opts.meta.title}” as a {appName()} {opts.own} instead lets it hold them. It will no
               longer be a {program} file, and you can still download it as {program}.
             </>
           }
@@ -78,7 +79,7 @@ export function useOfficeFile(opts: {
           onConfirm={async () => {
             await opts.keepOwn();
             question.retry?.();
-            opts.notify(`Kept as a Universal Docs ${opts.own}.`);
+            opts.notify(`Kept as a ${appName()} ${opts.own}.`);
           }}
           onClose={() => setQuestion(null)}
         />

@@ -151,7 +151,7 @@ export function formatWhen(iso: string): string {
 }
 
 export interface FileLibraryProps {
-  /** Shown top left, e.g. the logo and "Universal Docs". */
+  /** Shown top left, e.g. the logo and the app name. */
   brand: ReactNode;
   /** Controls at the right of the header (menus, buttons). */
   headerActions?: ReactNode;

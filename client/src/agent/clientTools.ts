@@ -24,6 +24,7 @@ import { EDIT_NOT_ALLOWED, TransactionRefused, xlsxGuard } from '../state/store.
 import { withFilePictures } from './filePictures.ts';
 import { IMAGE_TOOLS, replacesImageFile, runImageTool, type ImageToolEnv } from './imageTools.ts';
 import { ToolError } from './toolError.ts';
+import { appName } from '../brand.ts';
 
 export { ToolError };
 
@@ -313,7 +314,7 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
       }
       if (e instanceof TransactionRefused && ctl.store.guard === xlsxGuard) {
         throw new ToolError(
-          `Nothing was changed: this is an Excel file, which cannot hold ${e.message.toLowerCase()}. Tell the user that this needs the file kept as a Universal Docs spreadsheet instead of an Excel file (they are offered that when they make such a change themselves), and continue only after they have.`,
+          `Nothing was changed: this is an Excel file, which cannot hold ${e.message.toLowerCase()}. Tell the user that this needs the file kept as a ${appName()} spreadsheet instead of an Excel file (they are offered that when they make such a change themselves), and continue only after they have.`,
         );
       }
       if (e instanceof TransactionRefused) {
