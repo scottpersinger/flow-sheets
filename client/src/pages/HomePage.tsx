@@ -13,6 +13,7 @@ import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
 import { useFavicon } from '../favicon.ts';
 import { RECENTS_PARAM, rememberListing, useListingScroll } from '../listing.ts';
+import { LocalFolderMenu } from '../components/LocalFolderMenu.tsx';
 import { openFromRecents } from './OpenLocalFile.tsx';
 import { FilePreviewFrame } from '../components/FilePreviewFrame.tsx';
 import { checkImportFile, imageTypeOf, isKnownImport, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, titleFromFileName } from '../importFile.ts';
@@ -273,6 +274,7 @@ export function HomePage() {
         </>
       }
       listTitle={local ? <span title={local.dir}>{dirName(local.dir)}</span> : undefined}
+      listIcon={local ? <LocalFolderMenu onFile={(rel) => navigate(`/open?file=${encodeURIComponent(rel)}`)} onFolder={openFolder} /> : undefined}
       folder={folderTrail(folder)}
       folders={recents ? [] : folders}
       onOpenFolder={openFolder}
@@ -400,8 +402,22 @@ export function HomePage() {
       }}
       // Any file can be added: the kinds the app knows open in it, the rest are kept to download, move or delete.
       importAccept=""
-      importLabel="Import a file: Excel, PowerPoint, Word, PDF, Markdown, CSV, HTML, video or anything else"
-      importHint="You can also drop any file anywhere on this page, or paste a picture or text to make a file of it. Excel, PowerPoint, Word, Markdown and CSV files become files you can edit; PDFs, pictures, videos and web pages open as they are; any other file is kept in your files to download."
+      importLabel="Import file"
+      tiles={
+        local ? (
+          <div>
+            <button className="new-sheet-tile help-tile agent-tile" onClick={() => void api.connectAgent()}>
+              <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="help-tile-title">Connect your agent</span>
+              <span className="help-tile-sub">
+                Claude Code and more <span aria-hidden="true">→</span>
+              </span>
+            </button>
+          </div>
+        ) : undefined
+      }
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => (recents ? void openRecent(s) : navigate(pathOf(s)))}

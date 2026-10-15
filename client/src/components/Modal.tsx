@@ -24,6 +24,9 @@ export function PromptModal(props: {
   initial: string;
   confirmText: string;
   validate?: (v: string) => string | null;
+  /** Longest value allowed; 200 when not given. */
+  maxLength?: number;
+  placeholder?: string;
   onConfirm: (v: string) => void | Promise<void>;
   onClose: () => void;
 }) {
@@ -57,7 +60,7 @@ export function PromptModal(props: {
       >
         <label className="field">
           <span>{props.label}</span>
-          <input ref={ref} value={value} onChange={(e) => setValue(e.target.value)} maxLength={200} />
+          <input ref={ref} value={value} onChange={(e) => setValue(e.target.value)} maxLength={props.maxLength ?? 200} placeholder={props.placeholder} />
         </label>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">

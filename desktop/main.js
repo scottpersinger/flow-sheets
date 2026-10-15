@@ -32,7 +32,7 @@ if (!existsSync(app.getPath('userData')) && legacyData) {
 }
 
 // The installed app is started from a menu or an icon, where the current directory means nothing: it
-// reopens the folder it showed last, or asks for one the first time.
+// reopens the folder it showed last, or the home folder the first time.
 const lastFolderFile = () => path.join(app.getPath('userData'), 'last-folder.txt');
 function lastFolder() {
   try {
@@ -177,7 +177,7 @@ async function connectAgent() {
     type: 'info',
     title: 'Connect an Agent',
     message: mcpListening ? 'Agents on this computer can read and edit the open folder’s files, and the app shows what they open.' : `The MCP server is not running: port ${MCP_PORT} is in use, probably by another copy of the app.`,
-    detail: `MCP server (MCP Docs): ${MCP_URL}/mcp\n\nTo add it to Claude Code, run the command below, then /mcp in Claude Code to sign in. The app asks you to allow each agent that connects.\n\n${command}\n\n${connected}`,
+    detail: `MCP server (MCP Docs): ${MCP_URL}/mcp\n\nTo add it to Claude Code, run the command below (or install the mcp-docs plugin with: npx mcp-docs), then /mcp in Claude Code to sign in. The app asks you to allow each agent that connects.\n\n${command}\n\n${connected}`,
     buttons: agents.length ? ['Copy Command', 'Disconnect All Agents', 'Close'] : ['Copy Command', 'Close'],
     defaultId: 0,
     cancelId: agents.length ? 2 : 1,
@@ -226,7 +226,10 @@ function startServer(dir) {
     child.once('message', (msg) => resolve({ child, dir, token, port: msg.port, origin: `http://127.0.0.1:${msg.port}` }));
     // Later the server asks for a file outside its folder to be shown (one of Recents), or a page (a file an agent opened).
     child.on('message', (msg) => {
-      if (msg && typeof msg.openFile === 'string') void openFile(msg.openFile).catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e)));
+      if (msg && typeof msg.openFile === 'string') void openFile(msg.openFile, msg.fromRecents !== false).catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e)));
+      if (msg && typeof msg.openFolder === 'string') void openFolder(msg.openFolder).catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e)));
+      if (msg?.chooseFolder) void chooseFolder().catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e)));
+      if (msg?.connectAgent) void connectAgent().catch((e) => dialog.showErrorBox('MCP Docs', String(e.message ?? e)));
       if (msg && typeof msg.show === 'string' && msg.show.startsWith('/')) showPage(msg.show);
       if (msg && typeof msg.fileChanged === 'string') fileChanged(msg.fileChanged);
     });
@@ -440,9 +443,7 @@ app.whenReady().then(async () => {
       return;
     }
     if (!arg && app.isPackaged) {
-      const last = lastFolder();
-      if (last) await openFolder(last);
-      else if (!(await chooseFolder())) app.quit();
+      await openFolder(lastFolder() ?? app.getPath('home'));
       return;
     }
     const dir = path.resolve(arg ?? process.cwd());

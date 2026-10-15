@@ -56,6 +56,7 @@ describe("the desktop app's MCP server", () => {
 
     // It is MCP Docs, not the hosted Universal Docs.
     expect(client.getServerVersion()).toMatchObject({ name: 'mcp-docs', title: 'MCP Docs' });
+    expect(client.getInstructions()).toMatch(/^MCP Docs:/);
     const list = JSON.parse(text(await client.callTool({ name: 'list_files', arguments: {} })));
     const notes = (list.files as { id: string; kind: string; title: string }[]).find((f) => f.kind === 'markdown');
     expect(notes).toBeTruthy();

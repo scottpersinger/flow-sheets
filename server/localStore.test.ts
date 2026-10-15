@@ -506,6 +506,52 @@ describe('recents: the files last opened on the machine', () => {
     }
   });
 
+  it('opens a file or folder by its path: here when it is in the folder, else by the app', async () => {
+    const elsewhere = mkdtempSync(path.join(tmpdir(), 'sheetsweb-elsewhere-'));
+    const data = mkdtempSync(path.join(tmpdir(), 'sheetsweb-localdata-'));
+    writeFileSync(path.join(elsewhere, 'plan.md'), '# Plan\n');
+    writeFileSync(path.join(elsewhere, 'tool.py'), 'print(1)');
+    mkdirSync(at('bypath', 'inner'), { recursive: true });
+    writeFileSync(at('bypath', 'notes.md'), '# Notes\n');
+    const files: [string, boolean | undefined][] = [];
+    const dirs: string[] = [];
+    let chosen = 0;
+    let connecting = 0;
+    const app = await buildApp({ dataDir: data, local: { dir: folder, recents: null, openFile: (f, r) => files.push([f, r]), openFolder: (d) => dirs.push(d), chooseFolder: () => chosen++, connectAgent: () => connecting++ } });
+    const open = async (p: unknown) => {
+      const res = await app.inject({ method: 'POST', url: '/api/local/open-path', payload: { path: p } });
+      return { status: res.statusCode, body: res.json() as { file?: string; folder?: string; switching?: true } };
+    };
+    try {
+      // In the open folder, absolute or relative to it.
+      expect((await open(at('bypath', 'notes.md'))).body).toEqual({ file: 'bypath/notes.md' });
+      expect((await open('bypath/inner/')).body).toEqual({ folder: 'bypath/inner' });
+      expect((await open(folder)).body).toEqual({ folder: '' });
+      expect(files).toEqual([]);
+      expect(dirs).toEqual([]);
+
+      // Outside it: the app opens the folder, or the file's own folder (not from Recents).
+      expect((await open(path.join(elsewhere, 'plan.md'))).body).toEqual({ switching: true });
+      expect(files).toEqual([[path.join(elsewhere, 'plan.md'), false]]);
+      expect((await open(`  ${elsewhere}  `)).body).toEqual({ switching: true });
+      expect(dirs).toEqual([elsewhere]);
+
+      // Not a file the app opens, not there, nothing given.
+      expect((await open(path.join(elsewhere, 'tool.py'))).status).toBe(400);
+      expect((await open(path.join(elsewhere, 'gone.md'))).status).toBe(404);
+      expect((await open('  ')).status).toBe(400);
+
+      expect((await app.inject({ method: 'POST', url: '/api/local/choose-folder' })).statusCode).toBe(200);
+      expect(chosen).toBe(1);
+      expect((await app.inject({ method: 'POST', url: '/api/local/connect-agent' })).statusCode).toBe(200);
+      expect(connecting).toBe(1);
+    } finally {
+      await app.close();
+      rmSync(data, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it('is not there without a source for it, or outside the desktop app', async () => {
     const data = mkdtempSync(path.join(tmpdir(), 'sheetsweb-localdata-'));
     const none = await buildApp({ dataDir: data, local: { dir: folder, recents: null } });

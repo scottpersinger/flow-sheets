@@ -247,7 +247,7 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
         if (isDiscover(body)) {
           const level = opts.mcp?.level;
           const caps = level === 'minimal' || level === 'tools' ? { tools: { listChanged: true } } : SERVER_CAPABILITIES;
-          return json(res, 200, discoverResult(body, serverInfo(version, opts.mcp?.local), caps, instructionsFor(version)));
+          return json(res, 200, discoverResult(body, serverInfo(version, opts.mcp?.local), caps, instructionsFor(version, opts.mcp?.local)));
         }
         // A client on the newer version must get `resultType` on every result (Claude Code refuses a tool result without it).
         const stateless = isStateless(req, body);

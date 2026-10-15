@@ -5116,3 +5116,43 @@ img.thumb-image {
     max-width: calc(100vw - 24px);
   }
 }
+
+/* The desktop app's folder menu, left of the open folder's name over the file list. */
+.local-folder {
+  position: relative;
+  display: inline-flex;
+  align-self: center;
+  /* Close to the name: the tabs' gap is for between tabs. */
+  margin-right: -16px;
+}
+.local-folder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.local-folder-btn:hover,
+.local-folder-btn[aria-expanded='true'] {
+  background: rgba(128, 128, 128, 0.15);
+  color: inherit;
+}
+.local-folder-menu {
+  left: 0;
+  right: auto;
+  min-width: 180px;
+  font-weight: normal;
+}
+
+/* The desktop app's Connect your agent tile: the guide tile's shape, in its own colors. */
+.agent-tile {
+  background: linear-gradient(135deg, #0f2027 0%, #134e5e 55%, #0f9b8e 100%);
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3), 0 2px 8px rgba(15, 155, 142, 0.28);
+}
+.agent-tile:hover {
+  box-shadow: 0 2px 4px rgba(60, 64, 67, 0.3), 0 8px 18px rgba(15, 155, 142, 0.4);
+}

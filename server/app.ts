@@ -8,6 +8,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import type { AgentEvent, AgentTurnRequest, AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
@@ -124,7 +125,13 @@ export interface AppOptions {
      * Show a file that is outside the folder: the desktop app (desktop/main.js) opens the file's own folder
      * in place of this one. Without it only files inside the folder can be opened from Recents.
      */
-    openFile?: (file: string) => void;
+    openFile?: (file: string, fromRecents?: boolean) => void;
+    /** Open another folder in place of this one (the desktop app does it; this server ends). */
+    openFolder?: (dir: string) => void;
+    /** Ask the person for a folder to open, in the desktop app's Open Folder dialog. */
+    chooseFolder?: () => void;
+    /** Show how to connect an agent to the app's MCP server, in the desktop app's dialog. */
+    connectAgent?: () => void;
     /** The files last opened on this machine (server/recents.ts); null where there is no such list. Tests give their own. */
     recents?: (() => Promise<Recents>) | null;
     /**
@@ -1245,6 +1252,52 @@ export async function buildApp(opts: AppOptions) {
       if (!opts.local?.openFile) return reply.code(400).send({ error: 'This file is outside the open folder. Open its folder to see it.' });
       opts.local.openFile(file);
       return { switching: true };
+    });
+
+    // Open a file or a folder the person names by its path: absolute, from the home folder (~/...), or
+    // relative to the open folder. One in the open folder is shown here (its path there); for any other the
+    // app is asked to open it, or the file's own folder, and this server ends.
+    r.post('/api/local/open-path', async (req, reply) => {
+      const given = (req.body as { path?: unknown } | undefined)?.path;
+      if (!folder || typeof given !== 'string' || !given.trim()) return reply.code(400).send({ error: 'Enter the path of a file or folder.' });
+      const typed = given.trim();
+      const target = path.resolve(folder.root, typed === '~' || typed.startsWith('~/') ? path.join(homedir(), typed.slice(1)) : typed);
+      let st;
+      try {
+        st = statSync(target);
+      } catch {
+        return reply.code(404).send({ error: `There is no file or folder at ${target}.` });
+      }
+      const rel = path.relative(folder.root, target);
+      const parts = rel.split(path.sep);
+      // Inside the open folder and listed there (no part of it hidden or skipped).
+      const inside = !path.isAbsolute(rel) && !parts.some((p) => p === '..' || p.startsWith('.') || p === 'node_modules');
+      if (st.isDirectory()) {
+        if (inside) return { folder: rel.split(path.sep).join('/') };
+        if (!opts.local?.openFolder) return reply.code(400).send({ error: 'Only folders inside the open folder can be opened here.' });
+        opts.local.openFolder(target);
+        return { switching: true };
+      }
+      if (!st.isFile() || !LISTED_EXTS.has(path.extname(target).toLowerCase())) return reply.code(400).send({ error: `${path.basename(target)} is not a kind of file this app opens.` });
+      if (path.basename(target).startsWith('.')) return reply.code(400).send({ error: 'Hidden files cannot be opened here.' });
+      if (inside) return { file: rel.split(path.sep).join('/') };
+      if (!opts.local?.openFile) return reply.code(400).send({ error: 'This file is outside the open folder. Open its folder to see it.' });
+      opts.local.openFile(target, false);
+      return { switching: true };
+    });
+
+    // Show the desktop app's Connect an Agent dialog.
+    r.post('/api/local/connect-agent', async (_req, reply) => {
+      if (!opts.local?.connectAgent) return reply.code(400).send({ error: 'Agents cannot be connected here.' });
+      opts.local.connectAgent();
+      return { ok: true };
+    });
+
+    // Show the desktop app's Open Folder dialog.
+    r.post('/api/local/choose-folder', async (_req, reply) => {
+      if (!opts.local?.chooseFolder) return reply.code(400).send({ error: 'Folders cannot be opened here.' });
+      opts.local.chooseFolder();
+      return { ok: true };
     });
 
     // The library's file at a path inside the open folder: what to show for it.

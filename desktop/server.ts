@@ -23,7 +23,10 @@ const app = await buildApp({
   local: {
     dir,
     token: process.env.LOCAL_TOKEN || undefined,
-    openFile: (file) => process.send?.({ openFile: file }),
+    openFile: (file, fromRecents = true) => process.send?.({ openFile: file, fromRecents }),
+    openFolder: (dir) => process.send?.({ openFolder: dir }),
+    chooseFolder: () => process.send?.({ chooseFolder: true }),
+    connectAgent: () => process.send?.({ connectAgent: true }),
     // The MCP server for agents on this machine (MCP_TOKEN; MCP_URL is main.js's fixed port in front of it).
     // What the model opens is shown in the window, which main.js does.
     ...(process.env.MCP_TOKEN ? { mcp: { token: process.env.MCP_TOKEN, url: process.env.MCP_URL || undefined, show: (page: string) => process.send?.({ show: page }), changed: (id: string) => process.send?.({ fileChanged: id }) } } : {}),

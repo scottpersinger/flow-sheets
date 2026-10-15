@@ -148,6 +148,12 @@ export const api = {
   /** The desktop app: the file the window shows, for the MCP tools to act on (server/localMcp.ts); null for none. */
   localShowing: (file: { kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file'; id: string } | null) => request<{ ok: true }>('POST', '/api/local/showing', file ?? {}),
   openLocal: (path: string) => request<{ file?: string; switching?: true }>('POST', '/api/local/open', { path }),
+  /** The desktop app: open a file or folder by its path (absolute, ~/..., or in the open folder). */
+  openLocalPath: (path: string) => request<{ file?: string; folder?: string; switching?: true }>('POST', '/api/local/open-path', { path }),
+  /** The desktop app: show its Open Folder dialog. */
+  chooseLocalFolder: () => request<{ ok: true }>('POST', '/api/local/choose-folder'),
+  /** The desktop app: show how to connect an agent to its MCP server (and who is connected). */
+  connectAgent: () => request<{ ok: true }>('POST', '/api/local/connect-agent'),
   /** The library's file at a path inside the open folder. */
   resolveLocal: (file: string) => request<{ kind: SheetMeta['kind'] | 'file'; id: string }>('GET', `/api/local/resolve?file=${encodeURIComponent(file)}`),
   login: (email: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { email, password }),

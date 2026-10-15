@@ -157,6 +157,8 @@ export interface FileLibraryProps {
   headerActions?: ReactNode;
   /** The name of the top of the library, in the heading over the files table. Defaults to "Your files". */
   listTitle?: ReactNode;
+  /** Shown left of the top of the library's name (the desktop app's folder menu). */
+  listIcon?: ReactNode;
   /**
    * Folders. With `folder` set (even to '', the top) the heading becomes breadcrumbs, the folders inside
    * the current one are listed above its files, and "New folder" is offered.
@@ -215,7 +217,10 @@ export interface FileLibraryProps {
   /** Importing: the picker's accept list, the tile label, the hint under the tiles, and what to do with the file. */
   importAccept: string;
   importLabel: string;
-  importHint: string;
+  /** Said under the tiles. */
+  importHint?: string;
+  /** More tiles, after Import (the desktop app's Connect your agent). */
+  tiles?: ReactNode;
   /** Name of the file being imported, shown as progress; null when idle. */
   importing: string | null;
   onImport(file: File): void;
@@ -719,14 +724,16 @@ export function FileLibrary(props: FileLibraryProps) {
               </button>
               <div className="tile-label">{props.importLabel}</div>
             </div>
+            {props.tiles}
           </div>
-          <div className="tile-hint">{props.importHint}</div>
+          {props.importHint && <div className="tile-hint">{props.importHint}</div>}
         </div>
       </section>
 
       <section className="home-inner">
         <div className="list-heading">
           <div className={`list-tabs${other ? ' has-tabs' : ''}`}>
+          {!results && props.listIcon}
           {results ? (
             <h2>
               Found “{filter.trim()}” in all folders
