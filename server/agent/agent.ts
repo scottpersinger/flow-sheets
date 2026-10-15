@@ -6,12 +6,12 @@ import { CLIENT_TOOLS, IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAG
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { ownModel } from './providers.ts';
-import { renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
+import { PROMPT_WITHOUT_JOBS, renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
 import type { AssistantSettingsStore, ModelChoice } from './settings.ts';
 import { AgentStore, type MessageParam, type Pending } from './store.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
-import { runServerTool, TOOL_DEFS, ToolFailure, validateToolInput } from './tools.ts';
+import { runServerTool, TOOL_DEFS, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from './tools.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
 type ToolUse = Anthropic.Beta.BetaToolUseBlock;
@@ -38,6 +38,8 @@ export interface AgentOptions {
   /** Where import_file puts pictures and stored files. */
   images?: ImageStore;
   files?: FileStore;
+  /** Whether the assistant can file background jobs (app changes, research); the desktop app cannot. Default true. */
+  jobs?: boolean;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -64,6 +66,7 @@ export class AgentService {
   private dailyLimit: number;
   private images: ImageStore | undefined;
   private files: FileStore | undefined;
+  private jobs: boolean;
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -75,6 +78,7 @@ export class AgentService {
     this.ownModel = opts.ownModel ?? ownModel;
     this.images = opts.images;
     this.files = opts.files;
+    this.jobs = opts.jobs ?? true;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -171,8 +175,8 @@ export class AgentService {
             betas: ['server-side-fallback-2026-07-01'],
             fallbacks: 'default',
             output_config: { effort: EFFORT },
-            system: [{ type: 'text', text: SYSTEM_PROMPT }],
-            tools: TOOL_DEFS,
+            system: [{ type: 'text', text: this.jobs ? SYSTEM_PROMPT : PROMPT_WITHOUT_JOBS }],
+            tools: this.jobs ? TOOL_DEFS : TOOL_DEFS_WITHOUT_JOBS,
             // Caches the whole prefix up to the latest message; each turn reads the previous one's cache.
             cache_control: { type: 'ephemeral' },
             messages: this.store.messages(conv.id),

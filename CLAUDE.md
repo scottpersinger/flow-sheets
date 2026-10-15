@@ -46,12 +46,8 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   override the on-disk hooks of `SheetStore` and `FileStore`: real `.md`/`.csv` files, `.ffsheet`/`.ffslides`/
   `.ffdoc` for the JSON formats, the tables synced with the folder on every list) and makes every request
   the one local user. The client learns it is local from `useAuth().local`.
-  It installs two ways: bundled (electron-builder, code fixed) and self-improving (the `universal-docs` npm
-  package in `launcher/`, which keeps a git checkout in `~/.universal-docs/app` on a `my-changes` branch,
-  rebased onto the newest `desktop-v*` tag by `universal-docs update`). Run from a checkout, `main.js` turns
-  on the assistant's jobs (`local.appChanges`, `APP_CHANGES`) and restarts the server on exit code 75 on the
-  same port, as `server/supervise.ts` does in production; the worker commits a change on `my-changes` and
-  never publishes it.
+  It has no background jobs (app changes, research): `AgentOptions.jobs` is false, so the assistant is not
+  offered `JOB_TOOLS` and its prompt is `PROMPT_WITHOUT_JOBS`, and `/api/agent/jobs` refuses.
   There documents are Office files: spreadsheets Excel (`format === 'xlsx'`, `shared/xlsxFormat.ts`),
   presentations PowerPoint (`'pptx'`, `shared/pptxFormat.ts`), documents Word (`'docx'`, `shared/docxFormat.ts`).
   A file is imported when read and written back with its export (`workbookXlsx`, `deckPptx`, `docDocx` in

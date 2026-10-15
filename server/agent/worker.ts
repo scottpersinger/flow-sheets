@@ -5,11 +5,7 @@
 // with typecheck and tests → in production rebuild the client and ask the server to restart → publish the
 // change to GitHub as a pull request that is merged at once → record the change. Progress goes to the
 // agent_jobs table. Launched detached by JobRunner so it survives the server restarting.
-//
-// In the desktop app (a checkout run with `universal-docs`, LOCAL_DIR set) the same steps run against the
-// checkout: the client is rebuilt, desktop/main.js restarts the server, and the change is committed on the
-// `my-changes` branch when that is the one checked out (else it stays in the working tree). Nothing goes to
-// GitHub. A job that fails puts the files it changed back the way they were.
+// A job that fails puts the files it changed back the way they were.
 import '../env.ts';
 import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { execFile } from 'node:child_process';
@@ -49,14 +45,9 @@ if (!job) {
 }
 
 const production = process.env.NODE_ENV === 'production';
-/** The desktop app's server (desktop/server.ts) for a folder: the checkout is the user's own copy of the app. */
-const local = !!process.env.LOCAL_DIR;
-/** The server runs under server/supervise.ts (or desktop/main.js) and can be asked to restart. */
+/** The server runs under server/supervise.ts and can be asked to restart. */
 const supervised = process.env.SUPERVISED === '1' && !!process.env.AGENT_SERVER_PID;
-/** A local job never publishes, even with a GITHUB_TOKEN in the developer's .env. */
-const github = local ? null : githubConfig();
-/** The branch a local checkout keeps its own changes on; a job commits there when it is checked out. */
-const LOCAL_BRANCH = 'my-changes';
+const github = githubConfig();
 const git = new Git(REPO_ROOT);
 
 const log = (line: string) => {
@@ -139,8 +130,8 @@ try {
   summary = summary || (job.kind === 'revert' ? `Reverted "${original!.title}".` : 'The change was made.');
   store.setStatus(jobId, 'verifying', { summary, files, patch, costUsd: cost });
 
-  // 5. Rebuild the client and restart the server so the change is live right away.
-  if (production || local) {
+  // 5. Production: rebuild the client and restart the server so the change is live right away.
+  if (production) {
     store.setStatus(jobId, 'building');
     log('Building the client…');
     built = true;
@@ -165,22 +156,8 @@ try {
       if (original) store.markReverted(original.id, jobId);
       process.exit();
     }
-  } else if (local && files.length && (await git.currentBranch()) === LOCAL_BRANCH) {
-    // The change is already live, so a failure here is recorded rather than undoing it.
-    const title = job.kind === 'revert' ? `Revert: ${original!.title}` : job.title;
-    try {
-      const sha = await git.commitFiles(files, `${title}\n\n${changeRecord(job, original, summary, files)}\n`);
-      store.setStatus(jobId, 'publishing', { branch: LOCAL_BRANCH, commitSha: sha });
-      log(`Committed on ${LOCAL_BRANCH} as ${sha.slice(0, 7)}.`);
-    } catch (e) {
-      const message = e instanceof Error ? e.message.split('\n')[0] : String(e);
-      log(`Committing failed: ${message}`);
-      store.setStatus(jobId, 'done', { error: `The change is live but could not be committed: ${message}` });
-      if (original) store.markReverted(original.id, jobId);
-      process.exit();
-    }
   } else {
-    log(local ? `The checkout is not on ${LOCAL_BRANCH}; leaving the change uncommitted in the working tree.` : 'GITHUB_TOKEN is not set; leaving the change uncommitted in the working tree.');
+    log('GITHUB_TOKEN is not set; leaving the change uncommitted in the working tree.');
   }
 
   if (original) store.markReverted(original.id, jobId);

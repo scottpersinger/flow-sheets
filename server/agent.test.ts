@@ -5,7 +5,8 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentContext, AgentEvent, AgentTurnRequest } from '../shared/agent/protocol.ts';
 import type { ModelCall } from './agent/agent.ts';
-import { resetSearchRateLimit, runServerTool, validateToolInput } from './agent/tools.ts';
+import { PROMPT_WITHOUT_JOBS } from './agent/prompt.ts';
+import { resetSearchRateLimit, runServerTool, TOOL_DEFS_WITHOUT_JOBS, validateToolInput } from './agent/tools.ts';
 import { buildApp } from './app.ts';
 import { mailbox, signUp } from './testing.ts';
 
@@ -292,6 +293,20 @@ describe('agent', () => {
     const { db } = await import('./db.ts').then((m) => ({ db: m.openDb(path.join(dir, 'app.db')) }));
     db.prepare("UPDATE agent_jobs SET status = 'done' WHERE id = ?").run(job.id);
     db.close();
+  });
+
+  it('offers the background jobs in the hosted app only', async () => {
+    replies.push(() => ({ content: [text('Hi.')] }));
+    await turn({ message: 'hello', context: home });
+    const names = (requests[0].tools ?? []).map((t) => ('name' in t ? t.name : ''));
+    expect(names).toEqual(expect.arrayContaining(['request_app_change', 'request_research']));
+    expect(JSON.stringify(requests[0].system)).toContain('request_app_change');
+    // The desktop app (jobs: false) has no checkout to change: neither the tools nor the prompt mention them.
+    expect(TOOL_DEFS_WITHOUT_JOBS.map((t) => t.name)).not.toContain('request_app_change');
+    expect(TOOL_DEFS_WITHOUT_JOBS.map((t) => t.name)).not.toContain('request_research');
+    expect(TOOL_DEFS_WITHOUT_JOBS.length).toBe(names.length - 2);
+    expect(PROMPT_WITHOUT_JOBS).not.toMatch(/request_app_change|request_research|Improving the app/);
+    expect(PROMPT_WITHOUT_JOBS).toContain('Replying:');
   });
 
   it('queues an app change and starts it after the turn ends', async () => {

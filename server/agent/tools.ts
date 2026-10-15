@@ -650,6 +650,10 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = Object.entries(schemas).map(
   };
 });
 
+/** The tools that file a background job (server/agent/jobs.ts), which the desktop app does not run. */
+export const JOB_TOOLS = new Set(['request_app_change', 'request_research']);
+export const TOOL_DEFS_WITHOUT_JOBS = TOOL_DEFS.filter((t) => !JOB_TOOLS.has(t.name));
+
 // ---------------------------------------------------------------------------
 // Server-side tools
 

@@ -202,8 +202,7 @@ export class JobStore {
 /** Starts a job's worker process; returns its pid. Swappable so tests don't run Claude Code. */
 export type Launcher = (job: JobRecord) => number | undefined;
 
-/** `env` adds to the worker's environment when a job starts (the desktop app passes the user's own key). */
-export function workerLauncher(dataDir: string, env: () => Record<string, string> = () => ({})): Launcher {
+export function workerLauncher(dataDir: string): Launcher {
   return (job) => {
     const logDir = path.join(dataDir, 'jobs');
     mkdirSync(logDir, { recursive: true });
@@ -212,8 +211,8 @@ export function workerLauncher(dataDir: string, env: () => Record<string, string
       cwd: REPO_ROOT,
       detached: true,
       stdio: ['ignore', out, out],
-      // The worker asks this server to restart once the change is verified (when supervised).
-      env: { ...process.env, ...env(), DATA_DIR: dataDir, AGENT_SERVER_PID: String(process.pid) },
+      // The worker asks this server to restart once the change is verified (production only).
+      env: { ...process.env, DATA_DIR: dataDir, AGENT_SERVER_PID: String(process.pid) },
     });
     child.unref();
     return child.pid;

@@ -138,23 +138,6 @@ describe('git for app-change jobs', () => {
     expect(await git.restoreTree(before)).toEqual([]);
   });
 
-  it('commits only the job files on the branch checked out', async () => {
-    const dir = path.join(root, 'local');
-    sh(root, ['clone', '-q', origin, dir]);
-    sh(dir, ['checkout', '-q', '-b', 'my-changes']);
-    const git = new Git(dir);
-    expect(await git.currentBranch()).toBe('my-changes');
-    writeFileSync(path.join(dir, 'staged-by-user.txt'), 'not the job\n');
-    sh(dir, ['add', 'staged-by-user.txt']);
-    writeFileSync(path.join(dir, 'a.txt'), 'from the job\n');
-    writeFileSync(path.join(dir, 'tool.txt'), 'new\n');
-    const commit = await git.commitFiles(['a.txt', 'tool.txt'], 'Add a tool\n\nRecord.\n');
-    expect(sh(dir, ['show', '--name-only', '--format=%an %s', commit]).split('\n').filter(Boolean)).toEqual(['Sheets Assistant Add a tool', 'a.txt', 'tool.txt']);
-    expect(sh(dir, ['diff', '--cached', '--name-only'])).toBe('staged-by-user.txt'); // still staged, not committed
-    sh(dir, ['checkout', '-q', '--detach']);
-    expect(await git.currentBranch()).toBeNull();
-  });
-
   it('reads the GitHub configuration from the environment', () => {
     expect(githubConfig({})).toBeNull();
     expect(githubConfig({ GITHUB_TOKEN: 't' })).toBeNull();

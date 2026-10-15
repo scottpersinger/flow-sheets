@@ -141,11 +141,6 @@ export interface AppOptions {
      * the assistant when the user has no settings yet: the app's first run.
      */
     env?: Record<string, string | undefined>;
-    /**
-     * The app runs from a git checkout (the self-improving install), so the assistant's background jobs can
-     * run: changes to the app's own code, and research. desktop/main.js restarts the server after a change.
-     */
-    appChanges?: boolean;
   };
 }
 
@@ -219,15 +214,9 @@ export async function buildApp(opts: AppOptions) {
   const settingsDb = settingsDir === opts.dataDir ? db : openDb(path.join(settingsDir, 'settings.db'));
   if (settingsDb !== db) settingsDb.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES ('local', 'local', '', ?)").run(new Date().toISOString());
   const assistantSettings = new AssistantSettingsStore(settingsDb, path.join(settingsDir, 'connector.key'), { builtIn: !opts.local });
-  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { ...opts.agent, images, files: storedFiles });
+  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles });
   const jobs = new JobStore(db);
-  // In the desktop app the coding agent runs on the Anthropic key saved in Settings, unless the environment
-  // names one (CODING_API_KEY); with neither, Claude Code uses its own sign-in on this machine.
-  const codingKey = (): Record<string, string> => {
-    const key = opts.local && !process.env.CODING_API_KEY ? assistantSettings.storedKey('local', 'anthropic') : null;
-    return key ? { CODING_API_KEY: key } : {};
-  };
-  const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir, codingKey));
+  const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.
   jobRunner.reconcile();
 
@@ -1509,8 +1498,8 @@ export async function buildApp(opts: AppOptions) {
       const title = typeof body.title === 'string' ? body.title.trim() : '';
       const spec = typeof body.spec === 'string' ? body.spec.trim() : '';
       if (!title || !spec) return reply.code(400).send({ error: 'A title and a spec are required.' });
-      // Jobs run a worker against the app's own checkout, which only the self-improving desktop install has.
-      if (opts.local && !opts.local.appChanges) return reply.code(400).send({ error: 'Background jobs are only available in the self-improving install of the desktop app (see the README).' });
+      // Jobs run a worker against the hosted app's checkout, which the desktop app does not have.
+      if (opts.local) return reply.code(400).send({ error: 'Background jobs are not available in the desktop app.' });
       const kind = body.kind === 'research' ? 'research' : 'change';
       let sheetId: string | undefined;
       if (kind === 'research' && typeof body.sheetId === 'string' && body.sheetId) {
@@ -1531,7 +1520,7 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const target = jobs.get(id);
       if (!target) return reply.code(404).send({ error: 'Change not found' });
-      if (opts.local && !opts.local.appChanges) return reply.code(400).send({ error: 'Changes to the app are only available in the self-improving install of the desktop app (see the README).' });
+      if (opts.local) return reply.code(400).send({ error: 'Changes to the app are not available in the desktop app.' });
       if (target.kind !== 'change') return reply.code(400).send({ error: 'Only changes can be reverted, not reverts.' });
       if (target.status !== 'done') return reply.code(400).send({ error: 'Only a finished change can be reverted.' });
       if (target.revertedByJobId) return reply.code(400).send({ error: 'That change has already been reverted.' });
