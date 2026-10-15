@@ -27,6 +27,10 @@ const app = await buildApp({
     // The MCP server for agents on this machine (MCP_TOKEN; MCP_URL is main.js's fixed port in front of it).
     // What the model opens is shown in the window, which main.js does.
     ...(process.env.MCP_TOKEN ? { mcp: { token: process.env.MCP_TOKEN, url: process.env.MCP_URL || undefined, show: (page: string) => process.send?.({ show: page }), changed: (id: string) => process.send?.({ fileChanged: id }) } } : {}),
+    // The assistant's settings are the app's (APP_DATA_DIR), shared by every folder; on the first run a key
+    // already in the user's environment (main.js passes on the login shell's) is used.
+    settingsDir: process.env.APP_DATA_DIR || undefined,
+    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: process.env.OPENAI_API_KEY, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY },
   },
   blob: null,
 });

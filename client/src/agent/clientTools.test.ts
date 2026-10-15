@@ -4,7 +4,7 @@ import type { FetchResult } from '../../../shared/connectors.ts';
 import { newWorkbook, type Workbook } from '../../../shared/types.ts';
 import { csvToWorkbook } from '../../../shared/csv.ts';
 import { SheetController } from '../state/controller.ts';
-import { csvGuard } from '../state/store.ts';
+import { csvGuard, lockedGuard, xlsxGuard } from '../state/store.ts';
 import { confirmationFor, runClientTool, ToolError, type ClientToolEnv } from './clientTools.ts';
 import type { AspEditorHandle } from '@ascentsparksoftware/react-image-editor';
 import { setActiveImageEditor } from '../image/activeEditor.ts';
@@ -557,5 +557,30 @@ describe('CSV files', () => {
     expect(ctl.tab.cells.A1).toEqual({ v: 'Name', st: { b: true } });
     ctl.undo();
     expect(ctl.tab.cells.A1).toEqual({ v: 'Name' });
+  });
+});
+
+describe('Excel files (desktop app)', () => {
+  it('take formatting, but refuse a picture in a cell and say to keep the file as a Universal Docs spreadsheet', async () => {
+    const { ctl, call } = setup();
+    ctl.store.guard = xlsxGuard;
+    await call('format_range', { range: 'A1:B1', bold: true });
+    expect(ctl.tab.cells.A1?.st).toEqual({ b: true });
+    await expect(call('set_cell_image', { range: 'C3', url: 'https://example.com/logo.png' })).rejects.toThrow(/Excel file.*pictures in cells.*Universal Docs spreadsheet/s);
+    expect(ctl.tab.cells.C3).toBeUndefined();
+  });
+
+  it('refuse every change until the user allows editing one that holds things the app cannot keep', async () => {
+    const { ctl, call } = setup();
+    ctl.store.guard = lockedGuard;
+    await expect(call('write_range', { start: 'A1', rows: [['x']] })).rejects.toThrow(/read-only until the user allows editing.*"Read-only" button/s);
+    expect(ctl.tab.cells.A1).toBeUndefined();
+    let retry: (() => void) | null = null;
+    ctl.onRefused = (_reason, r) => (retry = r);
+    ctl.setStyle({ b: true });
+    expect(ctl.tab.cells.A1).toBeUndefined();
+    ctl.store.guard = xlsxGuard;
+    retry!();
+    expect(ctl.tab.cells.A1).toEqual({ v: '', st: { b: true } });
   });
 });

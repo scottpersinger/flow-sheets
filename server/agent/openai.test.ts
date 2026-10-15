@@ -114,7 +114,7 @@ describe('OpenAI translation', () => {
 describe('assistant settings', () => {
   const box = mailbox();
   const KEY = 'sk-proj-SECRETKEY-abcd1234';
-  const calls: { apiKey: string; model: string; params: Params }[] = [];
+  const calls: { provider: string; apiKey: string; model: string; params: Params }[] = [];
   let dir: string;
   let app: Awaited<ReturnType<typeof buildApp>>;
   let cookie: string;
@@ -131,14 +131,14 @@ describe('assistant settings', () => {
         // No calls are allowed on the server's key, so only a user's own key gets through.
         dailyRequestLimit: 0,
         model: async () => reply('from the built-in model'),
-        openai: (apiKey, model) => async (params, { onText }) => {
-          calls.push({ apiKey, model, params });
-          onText('from OpenAI');
-          return reply('from OpenAI');
+        ownModel: ({ provider, apiKey, model }) => async (params, { onText }) => {
+          calls.push({ provider, apiKey, model, params });
+          onText(`from ${provider}`);
+          return reply(`from ${provider}`);
         },
       },
-      checkOpenAIKey: async (apiKey) => {
-        if (apiKey === 'sk-wrong') throw new SettingsError('OpenAI did not accept that API key.');
+      checkAssistantKey: async (provider, apiKey) => {
+        if (apiKey === 'sk-wrong') throw new SettingsError(`${provider} did not accept that API key.`);
       },
     });
     cookie = (await signUp(app, box, 'settings@x.com')).cookie;
@@ -152,10 +152,20 @@ describe('assistant settings', () => {
   const get = async () => (await app.inject({ method: 'GET', url: '/api/settings/assistant', headers: { cookie } })).json().settings;
   const put = (payload: unknown) => app.inject({ method: 'PUT', url: '/api/settings/assistant', headers: { cookie }, payload: payload as object });
   const send = () => app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { message: 'Hi', context: { page: 'home' } } });
+  const fresh = {
+    provider: 'default',
+    builtIn: true,
+    anthropicModel: 'claude-sonnet-5-5',
+    openaiModel: 'gpt-6.1-sol',
+    openrouterModel: 'anthropic/claude-sonnet-5.5',
+    anthropicKey: null,
+    openaiKey: null,
+    openrouterKey: null,
+  };
 
   it('requires sign-in and starts on the built-in model', async () => {
     expect((await app.inject({ method: 'GET', url: '/api/settings/assistant' })).statusCode).toBe(401);
-    expect(await get()).toEqual({ provider: 'default', openaiModel: 'gpt-6.1-sol', openaiKey: null });
+    expect(await get()).toEqual(fresh);
   });
 
   it('rejects a missing key, a wrong key and an unknown model without saving', async () => {
@@ -166,35 +176,105 @@ describe('assistant settings', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/did not accept/);
     expect((await put({ provider: 'openai', openaiModel: 'gpt-4', openaiKey: KEY })).statusCode).toBe(400);
-    expect(await get()).toEqual({ provider: 'default', openaiModel: 'gpt-6.1-sol', openaiKey: null });
+    expect((await put({ provider: 'anthropic', anthropicModel: 'claude-2', anthropicKey: KEY })).statusCode).toBe(400);
+    expect((await put({ provider: 'openrouter', openrouterModel: 'not a model', openrouterKey: KEY })).statusCode).toBe(400);
+    expect(await get()).toEqual(fresh);
   });
 
   it('stores the key encrypted, returns it masked, and runs the assistant on it', async () => {
     const res = await put({ provider: 'openai', openaiModel: 'gpt-6-astra', openaiKey: KEY });
     expect(res.statusCode).toBe(200);
-    expect(res.json().settings).toEqual({ provider: 'openai', openaiModel: 'gpt-6-astra', openaiKey: '••••1234' });
+    expect(res.json().settings).toMatchObject({ provider: 'openai', openaiModel: 'gpt-6-astra', openaiKey: '••••1234' });
     expect(res.body).not.toContain('SECRETKEY');
     expect(readFileSync(path.join(dir, 'app.db')).includes('SECRETKEY')).toBe(false);
 
     const turn = await send();
     expect(turn.statusCode).toBe(200);
-    expect(turn.payload).toContain('from OpenAI');
+    expect(turn.payload).toContain('from openai');
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ apiKey: KEY, model: 'gpt-6-astra' });
+    expect(calls[0]).toMatchObject({ provider: 'openai', apiKey: KEY, model: 'gpt-6-astra' });
     expect(calls[0].params.tools?.length).toBeGreaterThan(0);
 
     // Changing the model keeps the saved key.
-    expect((await put({ provider: 'openai', openaiModel: 'gpt-6-luna' })).json().settings).toEqual({ provider: 'openai', openaiModel: 'gpt-6-luna', openaiKey: '••••1234' });
+    expect((await put({ provider: 'openai', openaiModel: 'gpt-6-luna' })).json().settings).toMatchObject({ provider: 'openai', openaiModel: 'gpt-6-luna', openaiKey: '••••1234' });
     await send();
     expect(calls[1]).toMatchObject({ apiKey: KEY, model: 'gpt-6-luna' });
   });
 
-  it('goes back to the built-in model, with its daily limit, and removes the key', async () => {
-    expect((await put({ provider: 'default', openaiModel: 'gpt-6-luna' })).json().settings).toEqual({ provider: 'default', openaiModel: 'gpt-6-luna', openaiKey: '••••1234' });
-    expect((await send()).statusCode).toBe(429);
-    expect(calls).toHaveLength(2);
+  it('runs on an Anthropic key with the chosen Claude model, and on any OpenRouter model', async () => {
+    expect((await put({ provider: 'anthropic', anthropicModel: 'claude-opus-5-5', anthropicKey: 'sk-ant-SECRET-9999' })).statusCode).toBe(200);
+    await send();
+    expect(calls.at(-1)).toMatchObject({ provider: 'anthropic', apiKey: 'sk-ant-SECRET-9999', model: 'claude-opus-5-5' });
+    // The Claude request names the user's model.
+    expect(calls.at(-1)!.params.model).toBe('claude-opus-5-5');
 
-    expect((await put({ provider: 'default', openaiModel: 'gpt-6-luna', openaiKey: null })).json().settings.openaiKey).toBeNull();
+    const or = await put({ provider: 'openrouter', openrouterModel: 'moonshotai/kimi-k3', openrouterKey: 'sk-or-SECRET-7777' });
+    expect(or.json().settings).toMatchObject({ provider: 'openrouter', openrouterModel: 'moonshotai/kimi-k3', openrouterKey: '••••7777', anthropicKey: '••••9999', openaiKey: '••••1234' });
+    await send();
+    expect(calls.at(-1)).toMatchObject({ provider: 'openrouter', apiKey: 'sk-or-SECRET-7777', model: 'moonshotai/kimi-k3' });
+  });
+
+  it('goes back to the built-in model, with its daily limit, and removes the key', async () => {
+    expect((await put({ provider: 'default' })).json().settings).toMatchObject({ provider: 'default', openaiKey: '••••1234' });
+    const before = calls.length;
+    expect((await send()).statusCode).toBe(429);
+    expect(calls).toHaveLength(before);
+
+    expect((await put({ provider: 'default', openaiKey: null })).json().settings.openaiKey).toBeNull();
     expect((await put({ provider: 'openai', openaiModel: 'gpt-6-luna' })).statusCode).toBe(400);
+  });
+});
+
+describe("the desktop app's assistant", () => {
+  const dirs: string[] = [];
+  const reply = { id: 'm', type: 'message', role: 'assistant', model: 'x', content: [{ type: 'text', text: 'ok', citations: null }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } as unknown as Anthropic.Beta.BetaMessage;
+  const used: string[] = [];
+  const open = async (settingsDir: string, env?: Record<string, string>) => {
+    const folder = mkdtempSync(path.join(tmpdir(), 'sheetsweb-desk-folder-'));
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-desk-data-'));
+    dirs.push(folder, dataDir);
+    return buildApp({
+      dataDir,
+      local: { dir: folder, settingsDir, ...(env ? { env } : {}) },
+      agent: { model: async () => reply, ownModel: (c) => async () => (used.push(`${c.provider}:${c.apiKey}`), reply) },
+      checkAssistantKey: async () => {},
+    });
+  };
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('has no model of its own: the assistant asks for a key until one is set', async () => {
+    const shared = mkdtempSync(path.join(tmpdir(), 'sheetsweb-desk-settings-'));
+    dirs.push(shared);
+    const app = await open(shared);
+    const settings = (await app.inject({ method: 'GET', url: '/api/settings/assistant' })).json().settings;
+    expect(settings).toMatchObject({ provider: 'default', builtIn: false });
+    const turn = await app.inject({ method: 'POST', url: '/api/agent/turn', payload: { message: 'Hi', context: { page: 'home' } } });
+    expect(turn.statusCode).toBe(400);
+    expect(turn.json().error).toMatch(/add your Anthropic, OpenAI or OpenRouter API key/);
+    expect((await app.inject({ method: 'PUT', url: '/api/settings/assistant', payload: { provider: 'openai', openaiKey: 'sk-mine-key-mine' } })).statusCode).toBe(200);
+    await app.close();
+
+    // Another folder's server shares the settings.
+    const other = await open(shared);
+    expect((await other.inject({ method: 'GET', url: '/api/settings/assistant' })).json().settings).toMatchObject({ provider: 'openai', openaiKey: '••••mine' });
+    await other.close();
+  });
+
+  it("uses a key from the environment on the first run, Anthropic's first, and only then", async () => {
+    const shared = mkdtempSync(path.join(tmpdir(), 'sheetsweb-desk-settings-'));
+    dirs.push(shared);
+    const app = await open(shared, { OPENAI_API_KEY: 'sk-env-openai', ANTHROPIC_API_KEY: 'sk-ant-env-key-env' });
+    expect((await app.inject({ method: 'GET', url: '/api/settings/assistant' })).json().settings).toMatchObject({ provider: 'anthropic', anthropicKey: '••••-env', openaiKey: '••••enai' });
+    await app.inject({ method: 'POST', url: '/api/agent/turn', payload: { message: 'Hi', context: { page: 'home' } } });
+    expect(used.at(-1)).toBe('anthropic:sk-ant-env-key-env');
+    await app.inject({ method: 'PUT', url: '/api/settings/assistant', payload: { provider: 'openai' } });
+    await app.close();
+
+    // Settings exist now: a key in the environment no longer changes them.
+    const again = await open(shared, { OPENROUTER_API_KEY: 'sk-or-env' });
+    expect((await again.inject({ method: 'GET', url: '/api/settings/assistant' })).json().settings).toMatchObject({ provider: 'openai', openrouterKey: null });
+    await again.close();
   });
 });

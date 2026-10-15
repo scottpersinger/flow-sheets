@@ -3,6 +3,8 @@ import { docNode, docText } from '../../../shared/doc.ts';
 import { docToMarkdown, markdownToDoc } from '../../../shared/docMarkdown.ts';
 import { DocController } from '../doc/controller.ts';
 import { confirmationFor, runClientTool, type ClientToolEnv } from './clientTools.ts';
+import { docxGuard } from '../doc/store.ts';
+import { lockedGuard } from '../state/store.ts';
 
 function setup(markdown = '') {
   const doc = new DocController(markdownToDoc(markdown), async () => {});
@@ -239,3 +241,19 @@ describe('a stored picture file used as a picture in a document', () => {
   });
 });
 
+describe('Word files (desktop app)', () => {
+  it('take text, but refuse a video and say to keep the file as a document of the app', async () => {
+    const { doc, call, md } = setup('Hello.');
+    doc.store.guard = docxGuard;
+    await call('insert_content', { markdown: 'More.' });
+    await expect(call('insert_content', { markdown: '![Demo](https://www.youtube.com/watch?v=dQw4w9WgXcQ)' })).rejects.toThrow(/Word file.*videos.*Universal Docs document/s);
+    expect(md()).not.toContain('youtube');
+  });
+
+  it('refuse every change until the user allows editing', async () => {
+    const { doc, call, md } = setup('Hello.');
+    doc.store.guard = lockedGuard;
+    await expect(call('insert_content', { markdown: 'More.' })).rejects.toThrow(/read-only until the user allows editing/);
+    expect(md()).toBe('Hello.');
+  });
+});

@@ -5,9 +5,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { CLIENT_TOOLS, IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
-import { openaiModel } from './openai.ts';
+import { ownModel } from './providers.ts';
 import { renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
-import type { AssistantSettingsStore } from './settings.ts';
+import type { AssistantSettingsStore, ModelChoice } from './settings.ts';
 import { AgentStore, type MessageParam, type Pending } from './store.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
@@ -33,8 +33,8 @@ export interface AgentOptions {
   model?: ModelCall;
   /** Model calls allowed per user per day (shared API key). */
   dailyRequestLimit?: number;
-  /** Makes the model call for a user running the assistant on their own OpenAI key. Tests pass a stub. */
-  openai?: (apiKey: string, model: string) => ModelCall;
+  /** Makes the model call for a user running the assistant on their own key (Anthropic, OpenAI or OpenRouter). Tests pass a stub. */
+  ownModel?: (choice: ModelChoice) => ModelCall;
   /** Where import_file puts pictures and stored files. */
   images?: ImageStore;
   files?: FileStore;
@@ -60,7 +60,7 @@ export class AgentService {
   private sheets: SheetStore;
   private settings: AssistantSettingsStore;
   private model: ModelCall | null;
-  private openai: (apiKey: string, model: string) => ModelCall;
+  private ownModel: (choice: ModelChoice) => ModelCall;
   private dailyLimit: number;
   private images: ImageStore | undefined;
   private files: FileStore | undefined;
@@ -72,7 +72,7 @@ export class AgentService {
     this.sheets = sheets;
     this.settings = settings;
     this.model = opts.model ?? null;
-    this.openai = opts.openai ?? openaiModel;
+    this.ownModel = opts.ownModel ?? ownModel;
     this.images = opts.images;
     this.files = opts.files;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
@@ -108,8 +108,11 @@ export class AgentService {
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
     if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    const own = this.settings.choice(userId);
+    // Without a model of its own (the desktop app), the server runs the assistant only on the user's key.
+    if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
     // The daily limit protects the server's shared key; a user on their own key pays for their own calls.
-    if (!this.settings.openai(userId) && this.store.requestsToday(userId) >= this.dailyLimit) {
+    if (!own && this.store.requestsToday(userId) >= this.dailyLimit) {
       throw new AgentError(429, "You've reached today's limit for the assistant. Try again tomorrow.");
     }
   }
@@ -146,9 +149,10 @@ export class AgentService {
     this.store.setPending(conv.id, null);
 
     const env = { userId, sheets: this.sheets, images: this.images, files: this.files, context: req.context };
-    // The user's own OpenAI key and model when they set one in Settings; otherwise the server's model.
-    const own = this.settings.openai(userId);
-    const callModel = own ? this.openai(own.apiKey, own.model) : this.getModel();
+    // The user's own key and model when they set one in Settings; otherwise the server's model.
+    const own = this.settings.choice(userId);
+    if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
+    const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 
     // 2. Call the model until it stops calling tools, or pauses for the browser.
@@ -161,7 +165,8 @@ export class AgentService {
       try {
         message = await callModel(
           {
-            model: MODEL,
+            // A Claude model the user chose runs as asked; other providers' calls translate the request.
+            model: own?.provider === 'anthropic' ? own.model : MODEL,
             max_tokens: 32000,
             betas: ['server-side-fallback-2026-07-01'],
             fallbacks: 'default',

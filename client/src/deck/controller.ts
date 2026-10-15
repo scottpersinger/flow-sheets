@@ -24,7 +24,7 @@ import {
 } from '../../../shared/deck.ts';
 import { boxFromEnds, cloneElements, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { arcTightBox, SHAPES } from '../../../shared/shapes.ts';
-import { AutoSaver } from '../state/store.ts';
+import { AutoSaver, TransactionRefused } from '../state/store.ts';
 import { DeckStore, type DeckTx } from './store.ts';
 
 interface Meta {
@@ -115,9 +115,23 @@ export class DeckController {
     this.clamp();
   }
 
+  /**
+   * Told when the store's guard refuses one of the user's changes (a PowerPoint file, desktop app), with a
+   * retry that makes it, for once the page has the user's answer. Unset, the refusal is thrown.
+   */
+  onRefused: ((reason: string, retry: () => void) => void) | null = null;
+
   run(fn: (tx: DeckTx) => void): boolean {
     const before = this.meta();
-    const changed = this.store.transact(fn, { before });
+    let changed: boolean;
+    try {
+      changed = this.store.transact(fn, { before });
+    } catch (e) {
+      if (!(e instanceof TransactionRefused) || !this.onRefused) throw e;
+      this.onRefused(e.message, () => this.run(fn));
+      this.emit();
+      return false;
+    }
     if (changed) this.store.amendLastMeta(this.meta());
     this.emit();
     return changed;

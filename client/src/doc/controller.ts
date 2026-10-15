@@ -9,7 +9,7 @@ import { EditorState, NodeSelection, TextSelection, type Command, type Plugin, t
 import type { EditorView } from 'prosemirror-view';
 import { useSyncExternalStore } from 'react';
 import { editedImageWidth, docNode, docSchema, docStyleOf, pageSetupOf, type Alignment, type BlockType, type Doc, type DocStyle, type HeadingLevel, type MarkName, type PageSetup, type Spacing } from '../../../shared/doc.ts';
-import { AutoSaver } from '../state/store.ts';
+import { AutoSaver, TransactionRefused } from '../state/store.ts';
 import { autoLinkOnEnter, autoLinkRule } from './autolink.ts';
 import { paginationOf, paginationPlugin, type Pagination } from './pagination.ts';
 import { CLOSE_HISTORY_META, DocStore } from './store.ts';
@@ -107,8 +107,20 @@ export class DocController {
     this.emit();
   }
 
+  /**
+   * Told when the store's guard refuses one of the user's changes (a Word file, desktop app), with a retry
+   * that makes it, for once the page has the user's answer. Unset, the refusal is thrown.
+   */
+  onRefused: ((reason: string, retry: () => void) => void) | null = null;
+
   dispatch = (tr: Transaction, group?: string): void => {
-    this.store.apply(tr, group);
+    try {
+      this.store.apply(tr, group);
+    } catch (e) {
+      if (!(e instanceof TransactionRefused) || !this.onRefused) throw e;
+      // Nothing changed, so the same transaction still applies once the user says yes.
+      this.onRefused(e.message, () => this.dispatch(tr, group));
+    }
     this.view?.updateState(this.store.state);
   };
 
@@ -143,7 +155,9 @@ export class DocController {
     const tr = this.state.tr;
     fn(tr);
     tr.scrollIntoView();
-    this.dispatch(tr, group);
+    // A refusal goes to the agent's tool, not the page.
+    this.store.apply(tr, group);
+    this.view?.updateState(this.store.state);
     return tr.docChanged;
   }
 

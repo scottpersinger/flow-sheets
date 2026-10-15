@@ -146,7 +146,26 @@
     },
     "mac": {
       "target": "dir",
-      "identity": null
+      "identity": null,
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          { "CFBundleTypeName": "Universal Docs Spreadsheet", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Owner", "LSItemContentTypes": ["im.freeflow.docs.sheet"] },
+          { "CFBundleTypeName": "Universal Docs Presentation", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Owner", "LSItemContentTypes": ["im.freeflow.docs.slides"] },
+          { "CFBundleTypeName": "Universal Docs Document", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Owner", "LSItemContentTypes": ["im.freeflow.docs.doc"] },
+          { "CFBundleTypeName": "Markdown Document", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Default", "LSItemContentTypes": ["net.daringfireball.markdown"] },
+          { "CFBundleTypeName": "CSV File", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Default", "LSItemContentTypes": ["public.comma-separated-values-text"] },
+          { "CFBundleTypeName": "Office Document", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Default", "LSItemContentTypes": ["org.openxmlformats.wordprocessingml.document", "org.openxmlformats.spreadsheetml.sheet", "org.openxmlformats.presentationml.presentation", "com.microsoft.excel.xls"] },
+          { "CFBundleTypeName": "PDF Document", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Default", "LSItemContentTypes": ["com.adobe.pdf"] }
+        ],
+        "UTExportedTypeDeclarations": [
+          { "UTTypeIdentifier": "im.freeflow.docs.sheet", "UTTypeDescription": "Universal Docs Spreadsheet", "UTTypeConformsTo": ["public.data", "public.content"], "UTTypeTagSpecification": { "public.filename-extension": ["ffsheet"] } },
+          { "UTTypeIdentifier": "im.freeflow.docs.slides", "UTTypeDescription": "Universal Docs Presentation", "UTTypeConformsTo": ["public.data", "public.content"], "UTTypeTagSpecification": { "public.filename-extension": ["ffslides"] } },
+          { "UTTypeIdentifier": "im.freeflow.docs.doc", "UTTypeDescription": "Universal Docs Document", "UTTypeConformsTo": ["public.data", "public.content"], "UTTypeTagSpecification": { "public.filename-extension": ["ffdoc"] } }
+        ],
+        "UTImportedTypeDeclarations": [
+          { "UTTypeIdentifier": "net.daringfireball.markdown", "UTTypeDescription": "Markdown Document", "UTTypeConformsTo": ["public.plain-text"], "UTTypeTagSpecification": { "public.filename-extension": ["md", "markdown"], "public.mime-type": ["text/markdown"] } }
+        ]
+      }
     }
   }
 }

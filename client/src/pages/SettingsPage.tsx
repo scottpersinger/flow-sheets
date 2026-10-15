@@ -1,28 +1,37 @@
-// Settings: what the assistant runs on. By default that is the server's model; a user can instead enter their
-// own OpenAI API key and pick a model. The key goes to the server and is never shown again. Below that, the
-// agents signed in to the account's files with a device code, each of which can be disconnected.
+// Settings: what the assistant runs on. The hosted app has a model of its own; a user can instead enter their
+// own Anthropic, OpenAI or OpenRouter API key and pick a model, and in the desktop app, which has no model of
+// its own, they must. Keys go to the server and are never shown again. Below that, the agents signed in to
+// the account's files with a device code, each of which can be disconnected.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { OPENAI_MODELS, type AssistantSettings, type OpenAIModelId } from '../../../shared/agent/protocol.ts';
+import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '../../../shared/agent/protocol.ts';
 import type { ConnectedAgent } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { Account } from '../components/Account.tsx';
 
+type KeyProvider = Exclude<AssistantProvider, 'default'>;
+const PROVIDERS: { id: KeyProvider; name: string; placeholder: string; keysAt: string }[] = [
+  { id: 'anthropic', name: 'Anthropic (Claude)', placeholder: 'sk-ant-…', keysAt: 'console.anthropic.com' },
+  { id: 'openai', name: 'OpenAI', placeholder: 'sk-…', keysAt: 'platform.openai.com' },
+  { id: 'openrouter', name: 'OpenRouter', placeholder: 'sk-or-…', keysAt: 'openrouter.ai/keys' },
+];
+
 export function SettingsPage() {
   const [saved, setSaved] = useState<AssistantSettings | null>(null);
-  const [provider, setProvider] = useState<AssistantSettings['provider']>('default');
-  const [model, setModel] = useState<OpenAIModelId>(OPENAI_MODELS[0].id);
-  const [key, setKey] = useState('');
+  const [provider, setProvider] = useState<AssistantProvider>('default');
+  const [models, setModels] = useState<Record<KeyProvider, string>>({ anthropic: '', openai: '', openrouter: '' });
+  const [keys, setKeys] = useState<Record<KeyProvider, string>>({ anthropic: '', openai: '', openrouter: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const show = (s: AssistantSettings) => {
     setSaved(s);
-    setProvider(s.provider);
-    setModel(s.openaiModel);
-    setKey('');
+    // Without a model of its own and nothing chosen yet, start on the first provider rather than on nothing.
+    setProvider(s.provider === 'default' && !s.builtIn ? 'anthropic' : s.provider);
+    setModels({ anthropic: s.anthropicModel, openai: s.openaiModel, openrouter: s.openrouterModel });
+    setKeys({ anthropic: '', openai: '', openrouter: '' });
   };
 
   useEffect(() => {
@@ -32,7 +41,7 @@ export function SettingsPage() {
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  const save = async (body: Parameters<typeof api.saveAssistantSettings>[0], done: string) => {
+  const save = async (body: AssistantSettingsUpdate, done: string) => {
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -46,7 +55,16 @@ export function SettingsPage() {
     }
   };
 
-  const modelHint = OPENAI_MODELS.find((m) => m.id === model)?.hint;
+  const savedKey = (p: KeyProvider) => (saved ? { anthropic: saved.anthropicKey, openai: saved.openaiKey, openrouter: saved.openrouterKey }[p] : null);
+  const current = PROVIDERS.find((p) => p.id === provider);
+  const modelHint = provider === 'anthropic' ? ANTHROPIC_MODELS.find((m) => m.id === models.anthropic)?.hint : provider === 'openai' ? OPENAI_MODELS.find((m) => m.id === models.openai)?.hint : undefined;
+  const update = (): AssistantSettingsUpdate => ({
+    provider,
+    anthropicModel: models.anthropic as AssistantSettingsUpdate['anthropicModel'],
+    openaiModel: models.openai as AssistantSettingsUpdate['openaiModel'],
+    openrouterModel: models.openrouter.trim(),
+    ...(current && keys[current.id].trim() ? { [`${current.id}Key`]: keys[current.id].trim() } : {}),
+  });
 
   return (
     <div className="home">
@@ -65,10 +83,15 @@ export function SettingsPage() {
 
       <section className="home-inner changes">
         <h2>Assistant</h2>
-        <p className="changes-intro">
-          The assistant runs on the built-in model unless you choose an OpenAI model here. OpenAI usage is billed to your own API key, which is stored encrypted
-          on the server and never shown again.
-        </p>
+        {saved && (
+          <p className="changes-intro">
+            {saved.builtIn
+              ? 'The assistant runs on the built-in model unless you choose Anthropic, OpenAI or OpenRouter here, billed to your own API key.'
+              : 'The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, billed to that account. A key already set in your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY) is used the first time the app starts.'}{' '}
+            Keys are stored encrypted and never shown again.
+          </p>
+        )}
+        {saved && saved.provider === 'default' && !saved.builtIn && <div className="form-error">The assistant needs an API key: choose a provider, enter your key and save.</div>}
         {saved === null ? (
           !error && <div className="page-loading">Loading…</div>
         ) : (
@@ -77,37 +100,56 @@ export function SettingsPage() {
             autoComplete="off"
             onSubmit={(e) => {
               e.preventDefault();
-              void save({ provider, openaiModel: model, ...(key.trim() ? { openaiKey: key.trim() } : {}) }, 'Saved.');
+              void save(update(), 'Saved.');
             }}
           >
             <label className="field">
               <span>The assistant runs on</span>
-              <select value={provider} onChange={(e) => setProvider(e.target.value as AssistantSettings['provider'])}>
-                <option value="default">Built-in model</option>
-                <option value="openai">OpenAI, with my API key</option>
+              <select value={provider} onChange={(e) => setProvider(e.target.value as AssistantProvider)}>
+                {saved.builtIn && <option value="default">Built-in model</option>}
+                {PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}, with my API key
+                  </option>
+                ))}
               </select>
             </label>
-            {provider === 'openai' && (
+            {current && (
               <>
                 <label className="field">
-                  <span>OpenAI API key</span>
+                  <span>{current.name.replace(/ \(.*\)/, '')} API key</span>
                   <input
                     type="password"
                     autoComplete="new-password"
-                    value={key}
-                    placeholder={saved.openaiKey ? `Saved (${saved.openaiKey}); leave blank to keep` : 'sk-…'}
-                    onChange={(e) => setKey(e.target.value)}
+                    value={keys[current.id]}
+                    placeholder={savedKey(current.id) ? `Saved (${savedKey(current.id)}); leave blank to keep` : current.placeholder}
+                    onChange={(e) => setKeys({ ...keys, [current.id]: e.target.value })}
                   />
+                  {!savedKey(current.id) && <span className="field-hint">Get one at {current.keysAt}.</span>}
                 </label>
                 <label className="field">
                   <span>Model</span>
-                  <select value={model} onChange={(e) => setModel(e.target.value as OpenAIModelId)}>
-                    {OPENAI_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
+                  {current.id === 'openrouter' ? (
+                    <>
+                      <input list="openrouter-models" value={models.openrouter} placeholder="author/model" spellCheck={false} onChange={(e) => setModels({ ...models, openrouter: e.target.value })} />
+                      <datalist id="openrouter-models">
+                        {OPENROUTER_MODELS.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </datalist>
+                      <span className="field-hint">Any OpenRouter model that can call tools; the list has leading ones.</span>
+                    </>
+                  ) : (
+                    <select value={models[current.id]} onChange={(e) => setModels({ ...models, [current.id]: e.target.value })}>
+                      {(current.id === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   {modelHint && <span className="field-hint">{modelHint}</span>}
                 </label>
               </>
@@ -118,8 +160,19 @@ export function SettingsPage() {
               <button type="submit" className="btn primary" disabled={busy}>
                 {busy ? 'Checking…' : 'Save'}
               </button>
-              {saved.openaiKey && (
-                <button type="button" className="btn danger" disabled={busy} onClick={() => void save({ provider: 'default', openaiModel: model, openaiKey: null }, 'The key was removed.')}>
+              {current && savedKey(current.id) && (
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={busy}
+                  onClick={() =>
+                    void save(
+                      // Removing the key in use leaves the built-in model, or (without one) no model until another key is saved.
+                      { ...update(), provider: saved.provider === current.id ? 'default' : saved.provider, [`${current.id}Key`]: null },
+                      'The key was removed.',
+                    )
+                  }
+                >
                   Remove saved key
                 </button>
               )}

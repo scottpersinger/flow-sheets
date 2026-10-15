@@ -384,14 +384,19 @@ function DocInlinePrompt({ ctl }: { ctl: DocController }) {
   );
 }
 
-export function DocEditor({ ctl, onImageFiles, onScale, onEditImage, readOnly = false }: { ctl: DocController; onImageFiles(files: File[]): void; /** Shown, not edited (a document inside a zip file). */ readOnly?: boolean; /** Open the image editor on the selected picture (a double-click on it). */ onEditImage?(): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
+export function DocEditor({ ctl, onImageFiles, onScale, onEditImage, readOnly = false }: { ctl: DocController; onImageFiles(files: File[]): void; /** Shown, not edited (a document inside a zip file, or a Word file not yet allowed editing). */ readOnly?: boolean; /** Open the image editor on the selected picture (a double-click on it). */ onEditImage?(): void; /** Told the size the pages are drawn at (1 is full size), for the zoom controls. */ onScale?(scale: number): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const filesRef = useRef(onImageFiles);
   filesRef.current = onImageFiles;
   const editRef = useRef(onEditImage);
   editRef.current = onEditImage;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const [available, setAvailable] = useState(0);
+  // The view reads it when it is redrawn: a Word file becomes editable once the user allows it.
+  const viewRef = useRef<EditorView | null>(null);
+  useEffect(() => viewRef.current?.setProps({}), [readOnly]);
   const hasAgent = useHasAgent();
   useEffect(() => {
     ctl.assistantEnabled = hasAgent;
@@ -400,7 +405,7 @@ export function DocEditor({ ctl, onImageFiles, onScale, onEditImage, readOnly = 
   useEffect(() => {
     const view = new EditorView(ref.current!, {
       state: ctl.state,
-      editable: () => !readOnly,
+      editable: () => !readOnlyRef.current,
       dispatchTransaction: (tr) => ctl.dispatch(tr),
       plugins: [dropCursor({ color: '#1a73e8', width: 2 }), gapCursor()],
       nodeViews: { image: (node, v, getPos) => new ImageView(node, v, getPos, () => editRef.current?.()), video: (node, v, getPos) => new VideoView(node, v, getPos) },
@@ -441,6 +446,7 @@ export function DocEditor({ ctl, onImageFiles, onScale, onEditImage, readOnly = 
       },
     });
     ctl.attachView(view);
+    viewRef.current = view;
     if (import.meta.env.DEV) (window as unknown as { __docView?: EditorView }).__docView = view; // for poking at pagination in dev tools
     // Not when the user is typing elsewhere (inside ChatGPT, a document the model opens must not take the composer's focus).
     if (document.hasFocus()) view.focus();

@@ -46,6 +46,22 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   override the on-disk hooks of `SheetStore` and `FileStore`: real `.md`/`.csv` files, `.ffsheet`/`.ffslides`/
   `.ffdoc` for the JSON formats, the tables synced with the folder on every list) and makes every request
   the one local user. The client learns it is local from `useAuth().local`.
+  There documents are Office files: spreadsheets Excel (`format === 'xlsx'`, `shared/xlsxFormat.ts`),
+  presentations PowerPoint (`'pptx'`, `shared/pptxFormat.ts`), documents Word (`'docx'`, `shared/docxFormat.ts`).
+  A file is imported when read and written back with its export (`workbookXlsx`, `deckPptx`, `docDocx` in
+  `server/docxExport.ts`); pictures read from one are stored once (`ImageStore.createOnce`). New documents
+  and CSV files that outgrow CSV become Office files (`SheetStore.richFormat`); only one its Office file
+  cannot hold (a picture in a cell, a gradient, a video in a document, ...) is kept as `.ffsheet`/`.ffslides`/
+  `.ffdoc`, and in the editor such a change asks first (`xlsxGuard`, `pptxGuard`, `docxGuard`, the stores'
+  `guard`). What writing back would remove (the import's losses, the export's approximations) is `notKept`
+  on a load of a file the app did not write: the editor is read-only (`lockedGuard`, `useOfficeFile` in
+  `client/src/components/OfficeFile.tsx`) until the user allows editing, and the first save over it keeps a
+  copy in the trash.
+  On macOS the app declares the file types it opens (`build.mac.extendInfo` in `package.json`: it owns
+  `.ffsheet`/`.ffslides`/`.ffdoc` and edits Markdown, CSV, Office files and PDFs). macOS keeps Apple's apps
+  the default for the standard ones whatever the app declares, so the installed app offers once, and has
+  Make Default App… in the app menu, to set itself as the person's default (`setDefaultApp`). Finder's
+  `open-file` shows the file in the open folder when it is inside it, else opens the file's own folder.
   On macOS it has Recents, a tab beside the open folder's name on the home page (`/?recents=1`, `FileLibrary`'s
   `otherList`): the files last opened on the machine in any app, as Finder's Recents lists them, read from
   Spotlight (`server/recents.ts`, `GET /api/local/recents`). Opening one outside the open folder
@@ -113,10 +129,16 @@ Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a cha
 The server runs the Claude loop (`server/agent/agent.ts`). Tools are defined once as Zod schemas in
 `server/agent/tools.ts`; the server validates every tool input and sends the JSON Schema to Claude.
 
-A user can run the assistant on an OpenAI model with their own API key instead (the Settings page,
-`/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`). The loop and the stored history
-stay in the Claude message format; `server/agent/openai.ts` translates each request to the Responses API
-and the reply back. The model choices are `OPENAI_MODELS` in `shared/agent/protocol.ts`.
+A user can run the assistant on their own Anthropic, OpenAI or OpenRouter API key instead (the Settings page,
+`/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`; `server/agent/providers.ts` makes
+the model call and checks a key before it is saved). The loop and the stored history stay in the Claude
+message format; `server/agent/openai.ts` translates each request to OpenAI's Responses API and
+`server/agent/openrouter.ts` to Chat Completions, and the reply back. The model choices are
+`ANTHROPIC_MODELS`, `OPENAI_MODELS` and, as suggestions (any tool-calling model id is accepted),
+`OPENROUTER_MODELS` in `shared/agent/protocol.ts`. The desktop app has no model of its own
+(`AssistantSettings.builtIn` is false): its settings are the app's, in `settings.db` in its data folder
+(`local.settingsDir`), and on the first run a key found in the user's login shell (`desktop/main.js`) is used
+(`adoptFromEnvironment`: Anthropic's, then OpenAI's, then OpenRouter's).
 
 Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
 model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,

@@ -128,8 +128,12 @@ export type DocKind = 'sheet' | 'deck' | 'doc' | 'markdown';
 export interface SheetMeta {
   id: string;
   kind: DocKind;
-  /** Set on a spreadsheet stored as a CSV file (shared/csv.ts): it holds one tab of plain values. */
-  format?: 'csv';
+  /**
+   * Set on a spreadsheet stored as a CSV file (shared/csv.ts), which holds one tab of plain values, and, in
+   * the desktop app, on a document stored as an Office file: a spreadsheet as Excel (shared/xlsxFormat.ts), a
+   * presentation as PowerPoint (shared/pptxFormat.ts), a document as Word (shared/docxFormat.ts).
+   */
+  format?: 'csv' | 'xlsx' | 'pptx' | 'docx';
   title: string;
   /** The folder the file is in (shared/folders.ts); absent at the top of the library. */
   folder?: string;

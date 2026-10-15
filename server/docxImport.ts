@@ -1,12 +1,14 @@
 // Convert an uploaded .docx file into a document. Keeps paragraphs with their styles (title, subtitle, headings,
 // quotes), bulleted and numbered lists with nesting, run formatting (bold, italic, underline, strikethrough,
 // color, highlight, font and size), hyperlinks, line breaks and inline pictures. Tables are flattened to
-// paragraphs; headers, footers, footnotes, comments, fields and drawings other than pictures are dropped and
-// reported as warnings.
+// paragraphs; a header and footer of plain text and page numbers are read into the page setup, and richer
+// ones, footnotes, comments, fields and drawings other than pictures are dropped and reported as warnings.
+// What the app's own writer (server/docxExport.ts) adds for itself in its namespace is read back too: that a
+// style's look is the app's own (not formatting to keep as marks), and the page mode.
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model';
-import { cleanFontFamily, DEFAULT_DOC_STYLE, docFromNode, docSchema, isColor, MAX_BLOCKS, MAX_FONT_SIZE, MAX_LINE_HEIGHT, MAX_MARGIN, MAX_PARAGRAPH_SPACE, MIN_FONT_SIZE, MIN_LINE_HEIGHT, MIN_MARGIN, PAGE_SIZES, validateDoc, type Alignment, type Doc, type DocStyle, type PageSetup, type PageSizeId, type Spacing } from '../shared/doc.ts';
+import { cleanFontFamily, DEFAULT_DOC_STYLE, docFromNode, docSchema, isColor, MAX_BLOCKS, MAX_FONT_SIZE, MAX_HEADER_CHARS, MAX_LINE_HEIGHT, MAX_MARGIN, MAX_PARAGRAPH_SPACE, MIN_FONT_SIZE, MIN_LINE_HEIGHT, MIN_MARGIN, PAGE_SIZES, validateDoc, type Alignment, type Doc, type DocStyle, type PageSetup, type PageSizeId, type Spacing } from '../shared/doc.ts';
 import { safeLinkUrl } from '../shared/links.ts';
 import { MAX_CELL_IMAGE_BYTES } from '../shared/types.ts';
 import { ImportError, IMPORT_LIMITS } from './xlsxImport.ts';
@@ -124,6 +126,8 @@ interface Style {
   basedOn?: string;
   pPr?: XNode;
   rPr?: XNode;
+  /** Written by the app with the look of its own block styles, which the block already has: its formatting is not kept as marks or spacing. */
+  app?: boolean;
 }
 
 const n = docSchema.nodes;
@@ -137,9 +141,11 @@ class Importer {
   /** The document's defaults (docDefaults plus the Normal style), which become the document style. */
   private defaultRun: RunProps = {};
   private defaultSpacing: Spacing = {};
-  /** numId → abstractNumId, and abstractNumId → per-level format ("bullet" or a number format). */
+  /** numId → abstractNumId, and abstractNumId → per-level format ("bullet" or a number format) and start. */
   private nums = new Map<string, string>();
-  private abstractNums = new Map<string, Map<number, string>>();
+  private abstractNums = new Map<string, Map<number, { fmt: string; start: number }>>();
+  /** numId → per-level starts that override its abstract numbering's. */
+  private numStarts = new Map<string, Map<number, number>>();
   private imageCache = new Map<string, Promise<string | null>>();
   private blockCount = 0;
 
@@ -199,6 +205,7 @@ class Importer {
         basedOn: attrs(child(s, 'w:basedOn'))['w:val'],
         pPr: child(s, 'w:pPr'),
         rPr: child(s, 'w:rPr'),
+        app: a['ud:look'] === 'app',
       });
     }
     const defaults = child(stylesRoot, 'w:docDefaults');
@@ -252,16 +259,22 @@ class Importer {
     const numbering = doc && root(doc, 'w:numbering');
     if (!numbering) return;
     for (const abs of children(numbering, 'w:abstractNum')) {
-      const levels = new Map<number, string>();
+      const levels = new Map<number, { fmt: string; start: number }>();
       for (const lvl of children(abs, 'w:lvl')) {
         const i = num(attrs(lvl)['w:ilvl']) ?? 0;
-        levels.set(i, attrs(child(lvl, 'w:numFmt'))['w:val'] ?? 'decimal');
+        levels.set(i, { fmt: attrs(child(lvl, 'w:numFmt'))['w:val'] ?? 'decimal', start: num(val(child(lvl, 'w:start'))) ?? 1 });
       }
       this.abstractNums.set(attrs(abs)['w:abstractNumId'], levels);
     }
     for (const nm of children(numbering, 'w:num')) {
       const absId = attrs(child(nm, 'w:abstractNumId'))['w:val'];
       if (absId !== undefined) this.nums.set(attrs(nm)['w:numId'], absId);
+      const starts = new Map<number, number>();
+      for (const o of children(nm, 'w:lvlOverride')) {
+        const start = num(val(child(o, 'w:startOverride')));
+        if (start !== undefined) starts.set(num(attrs(o)['w:ilvl']) ?? 0, start);
+      }
+      if (starts.size) this.numStarts.set(attrs(nm)['w:numId'], starts);
     }
   }
 
@@ -281,8 +294,14 @@ class Importer {
 
   private isBullet(numId: string, ilvl: number): boolean {
     const abs = this.nums.get(numId);
-    const fmt = abs !== undefined ? this.abstractNums.get(abs)?.get(ilvl) : undefined;
+    const fmt = abs !== undefined ? this.abstractNums.get(abs)?.get(ilvl)?.fmt : undefined;
     return fmt === 'bullet' || fmt === undefined;
+  }
+
+  /** The number a list's level starts at. */
+  private listStart(numId: string, ilvl: number): number {
+    const abs = this.nums.get(numId);
+    return this.numStarts.get(numId)?.get(ilvl) ?? (abs !== undefined ? this.abstractNums.get(abs)?.get(ilvl)?.start : undefined) ?? 1;
   }
 
   // --- Properties ----------------------------------------------------------------------------------
@@ -290,9 +309,12 @@ class Importer {
   private runProps(rPr: XNode | undefined, base: RunProps): RunProps {
     if (!rPr) return { ...base };
     const out: RunProps = { ...base };
-    // A character style on the run applies underneath its direct properties.
+    // A character style on the run applies underneath its direct properties; a code style makes it code.
     const styleId = attrs(child(rPr, 'w:rStyle'))['w:val'];
-    for (const s of this.styleChain(styleId)) Object.assign(out, this.runProps(s.rPr, out));
+    for (const s of this.styleChain(styleId)) {
+      if (/\bcode\b/.test(`${s.id} ${s.name}`.toLowerCase())) out.code = true;
+      if (!s.app) Object.assign(out, this.runProps(s.rPr, out));
+    }
     const set = <K extends keyof RunProps>(k: K, v: RunProps[K] | undefined) => {
       if (v !== undefined) out[k] = v;
     };
@@ -324,9 +346,9 @@ class Importer {
     const chain = this.styleChain(styleId);
     const para: ParaProps = { kind: 'paragraph', spacing: {} };
     let run: RunProps = {};
-    for (const s of chain) run = this.runProps(s.rPr, run);
+    for (const s of chain) if (!s.app) run = this.runProps(s.rPr, run);
     let spacing: Spacing = { ...this.defaultSpacing };
-    for (const s of chain) spacing = this.spacingProps(s.pPr, spacing);
+    for (const s of chain) if (!s.app) spacing = this.spacingProps(s.pPr, spacing);
     spacing = this.spacingProps(pPr, spacing);
     for (const k of ['before', 'after', 'line'] as const) {
       const v = spacing[k];
@@ -498,10 +520,15 @@ class Importer {
 
   /** A paragraph's blocks: its textblock (if it has any content) and any pictures it held. */
   private async paragraph(p: XNode, rels: Rel[]): Promise<{ blocks: PMNode[]; list?: { numId: string; ilvl: number; bullet: boolean } }> {
-    const { para, run } = this.paraProps(child(p, 'w:pPr'));
-    const { inline, images } = await this.inline(p, run, rels);
+    const pPr = child(p, 'w:pPr');
+    const { para, run } = this.paraProps(pPr);
+    const { inline, images: found } = await this.inline(p, run, rels);
+    // A paragraph holding only pictures places them as it is aligned.
+    const images = !inline.length && (para.align === 'center' || para.align === 'right') ? found.map((b) => (b.type === n.image ? n.image.create({ ...b.attrs, align: para.align }) : b)) : found;
     const attrsOf = { align: para.align ?? null, spacing: Object.keys(para.spacing).length ? para.spacing : null };
     let block: PMNode | null = null;
+    // An empty paragraph with a border under it is a rule across the page.
+    if (para.kind === 'paragraph' && !para.numId && !inline.length && !images.length && child(child(pPr, 'w:pBdr'), 'w:bottom')) return { blocks: [n.horizontal_rule.create()] };
     if (para.kind === 'code') {
       const text = inline.map((x) => (x.isText ? x.text : '\n')).join('');
       block = n.code_block.create(null, text ? docSchema.text(text) : undefined);
@@ -522,12 +549,14 @@ class Importer {
   private async blocks(container: XNode, rels: Rel[]): Promise<PMNode[]> {
     const out: PMNode[] = [];
     // Open lists by level: the list node's items are built up, then closed when the level ends.
-    type Open = { ilvl: number; bullet: boolean; items: PMNode[][] };
+    // A list is one numbering's: one of another (abstract) numbering at the same level is another list.
+    type Open = { ilvl: number; bullet: boolean; abs?: string; start: number; items: PMNode[][] };
     let open: Open[] = [];
     const closeTo = (level: number) => {
       while (open.length && open[open.length - 1].ilvl >= level) {
         const done = open.pop()!;
-        const list = (done.bullet ? n.bullet_list : n.ordered_list).create(null, done.items.map((blocks) => n.list_item.create(null, blocks)));
+        const items = done.items.map((blocks) => n.list_item.create(null, blocks));
+        const list = done.bullet ? n.bullet_list.create(null, items) : n.ordered_list.create({ start: done.start }, items);
         const parent = open[open.length - 1];
         if (parent && parent.items.length) parent.items[parent.items.length - 1].push(list);
         else if (parent) parent.items.push([n.paragraph.create(), list]);
@@ -536,7 +565,10 @@ class Importer {
     };
     const push = (block: PMNode) => {
       if (++this.blockCount > MAX_BLOCKS) throw new ImportError('This document has too many paragraphs to import.');
-      out.push(block);
+      // Quote paragraphs one after another are one quote.
+      const last = out[out.length - 1];
+      if (block.type === n.blockquote && last?.type === n.blockquote) out[out.length - 1] = n.blockquote.create(null, last.content.append(block.content));
+      else out.push(block);
     };
     for (const el of kids(container)) {
       const tag = tagOf(el);
@@ -545,11 +577,12 @@ class Importer {
         if (list && blocks.length) {
           // Start or continue a list at this level; a different kind at the same level starts a new list.
           const top = open[open.length - 1];
-          if (top && top.ilvl === list.ilvl && top.bullet !== list.bullet) closeTo(list.ilvl);
+          const abs = this.nums.get(list.numId);
+          if (top && top.ilvl === list.ilvl && (top.bullet !== list.bullet || top.abs !== abs)) closeTo(list.ilvl);
           else closeTo(list.ilvl + 1);
           let cur = open[open.length - 1];
           if (!cur || cur.ilvl < list.ilvl) {
-            cur = { ilvl: list.ilvl, bullet: list.bullet, items: [] };
+            cur = { ilvl: list.ilvl, bullet: list.bullet, abs, start: this.listStart(list.numId, list.ilvl), items: [] };
             open.push(cur);
           }
           const [first, ...rest] = blocks;
@@ -582,15 +615,105 @@ class Importer {
     return out;
   }
 
+  /**
+   * A header or footer part that is plain text with page fields: its text line ({page} and {pages} for the
+   * fields) and how its page number is aligned, when it has one on a line of its own. Null if it is richer.
+   */
+  private async marginPart(file: string): Promise<{ text: string; number?: Alignment | 'left' } | null> {
+    const doc = await this.xml(file);
+    const part = doc && (root(doc, 'w:hdr') ?? root(doc, 'w:ftr'));
+    if (!part) return null;
+    const texts: string[] = [];
+    let number: Alignment | 'left' | undefined;
+    for (const p of kids(part)) {
+      if (tagOf(p) !== 'w:p') return null;
+      let text = '';
+      let field: string | null = null;
+      let inResult = false;
+      let rich = false;
+      const token = (instr: string) => {
+        const name = instr.trim().split(/\s+/)[0]?.toUpperCase();
+        if (name === 'PAGE') text += '{page}';
+        else if (name === 'NUMPAGES' || name === 'SECTIONPAGES') text += '{pages}';
+        else rich = true;
+      };
+      const walk = (node: XNode) => {
+        for (const c of kids(node)) {
+          const tag = tagOf(c);
+          if (tag === 'w:r') {
+            for (const r of kids(c)) {
+              const t = tagOf(r);
+              if (t === 'w:fldChar') {
+                const type = attrs(r)['w:fldCharType'];
+                if (type === 'begin') field = '';
+                else if (type === 'separate') inResult = true;
+                else if (type === 'end') {
+                  if (field !== null) token(field);
+                  field = null;
+                  inResult = false;
+                }
+              } else if (t === 'w:instrText') {
+                if (field !== null) field += textOf(r);
+              } else if (t === 'w:t') {
+                if (field === null && !inResult) text += textOf(r);
+              } else if (t === 'w:tab') text += ' ';
+              else if (t === 'w:drawing' || t === 'w:pict' || t === 'w:object') rich = true;
+            }
+          } else if (tag === 'w:fldSimple') token(attrs(c)['w:instr'] ?? '');
+          else if (tag === 'w:hyperlink' || tag === 'w:smartTag' || tag === 'w:sdt' || tag === 'w:sdtContent' || tag === 'w:ins') walk(c);
+        }
+      };
+      walk(p);
+      if (rich) return null;
+      const jc = val(child(child(p, 'w:pPr'), 'w:jc'));
+      if (text.trim() === '{page}' && number === undefined) number = jc === 'center' ? 'center' : jc === 'right' || jc === 'end' ? 'right' : 'left';
+      else if (text.trim()) texts.push(text.trim());
+    }
+    if (texts.length > 1 || (texts[0]?.length ?? 0) > MAX_HEADER_CHARS) return null;
+    return { text: texts[0] ?? '', ...(number ? { number } : {}) };
+  }
+
+  /**
+   * The page setup's header, footer and page numbers from the section's header and footer parts; null when
+   * they are richer than that (more than one section's, a different first page, pictures, other fields).
+   */
+  private async headersFooters(sectPr: XNode | undefined, rels: Rel[]): Promise<Partial<PageSetup> | null> {
+    const parts = rels.filter((r) => /\/(header|footer)$/.test(r.type));
+    if (!parts.length) return {};
+    const refs = [...children(sectPr, 'w:headerReference'), ...children(sectPr, 'w:footerReference')];
+    // Every part must be one of this section's, and only the default ones may hold anything.
+    if (parts.some((r) => !refs.some((ref) => attrs(ref)['r:id'] === r.id))) return null;
+    const out: Partial<PageSetup> = {};
+    for (const ref of refs) {
+      const rel = rels.find((r) => r.id === attrs(ref)['r:id']);
+      const read = rel && (await this.marginPart(rel.target));
+      if (!read) return null;
+      const footer = tagOf(ref) === 'w:footerReference';
+      if ((attrs(ref)['w:type'] ?? 'default') !== 'default') {
+        if (read.text || read.number) return null;
+        continue;
+      }
+      if (read.text) out[footer ? 'footer' : 'header'] = read.text;
+      if (read.number) {
+        if (out.pageNumbers) return null;
+        out.pageNumbers = !footer ? 'top-right' : read.number === 'right' ? 'bottom-right' : 'bottom-center';
+      }
+    }
+    return out;
+  }
+
   async run(): Promise<Doc> {
     const docXml = await this.xml('word/document.xml');
     const body = docXml && child(root(docXml, 'w:document'), 'w:body');
     if (!body) throw new ImportError('This file is not a valid Word document (.docx).');
     await Promise.all([this.loadStyles(), this.loadNumbering()]);
     const rels = await this.rels('word/document.xml');
-    if (rels.some((r) => /\/(header|footer)$/.test(r.type))) this.note('Headers and footers were dropped.');
+    const sectPr = child(body, 'w:sectPr');
+    const margins = await this.headersFooters(sectPr, rels);
+    if (!margins) this.note('Headers and footers were dropped.');
     const blocks = await this.blocks(body, rels);
-    const node = n.doc.create({ page: this.pageSetup(child(body, 'w:sectPr')), style: this.docStyle() }, blocks.length ? blocks : n.paragraph.create());
+    const page = { ...this.pageSetup(sectPr), ...margins };
+    const node = n.doc.create({ page: Object.keys(page).length ? page : null, style: this.docStyle() }, blocks.length ? blocks : n.paragraph.create());
     const doc = docFromNode(node);
     const problem = validateDoc(doc);
     if (problem) throw new ImportError(`The imported document is not valid: ${problem}`);
@@ -604,6 +727,8 @@ const TWIPS_PER_INCH = 1440;
 function pageSetupFromSectPr(sectPr: XNode | undefined): Partial<PageSetup> | null {
   if (!sectPr) return null;
   const out: Partial<PageSetup> = {};
+  // The app's writer says when a document has no pages (Word has no such thing).
+  if (attrs(sectPr)['ud:mode'] === 'pageless') out.mode = 'pageless';
   const sz = attrs(child(sectPr, 'w:pgSz'));
   const w = num(sz['w:w']);
   const h = num(sz['w:h']);

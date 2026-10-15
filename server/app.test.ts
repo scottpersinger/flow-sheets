@@ -24,7 +24,7 @@ beforeAll(async () => {
   delete process.env.GOOGLE_CLIENT_ID;
   delete process.env.GOOGLE_CLIENT_SECRET;
   dir = mkdtempSync(path.join(tmpdir(), 'sheetsweb-test-'));
-  app = await buildApp({ dataDir: dir, sendMail: box.send, appUrl: 'https://sheets.test', imageEditor: async (req) => (imageEdits.push(req), Buffer.from(`edited:${req.prompt}`)), checkOpenAIKey: async () => {} });
+  app = await buildApp({ dataDir: dir, sendMail: box.send, appUrl: 'https://sheets.test', imageEditor: async (req) => (imageEdits.push(req), Buffer.from(`edited:${req.prompt}`)), checkAssistantKey: async () => {} });
 });
 
 afterAll(async () => {

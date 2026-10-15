@@ -2,6 +2,7 @@ import { cellKey } from '../../../shared/cellref.ts';
 import { Engine } from '../../../shared/formula/engine.ts';
 import { csvCellProblem, csvProblem, csvTabPropProblem } from '../../../shared/csv.ts';
 import type { CellData, Tab, Workbook } from '../../../shared/types.ts';
+import { xlsxCellProblem, xlsxProblem } from '../../../shared/xlsxFormat.ts';
 import { formatValue, type Scalar } from '../../../shared/values.ts';
 
 export type Patch =
@@ -33,6 +34,20 @@ export function csvGuard(patches: Patch[]): string | null {
   }
   return null;
 }
+
+/** The guard of an Excel file (shared/xlsxFormat.ts): refuses what an Excel file cannot store (a picture in a cell). */
+export function xlsxGuard(patches: Patch[]): string | null {
+  for (const p of patches) {
+    const problem = p.k === 'cell' ? xlsxCellProblem(p.after) : p.k === 'tabs' ? xlsxProblem({ version: 1, tabs: p.after }) : null;
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/** What the guard of an Office file holding things the app cannot keep answers until the user allows editing it. */
+export const EDIT_NOT_ALLOWED = 'Editing this file';
+/** Refuses every change: an Office file whose saving would remove things (charts, say) waits for the user's yes. */
+export const lockedGuard = (): string => EDIT_NOT_ALLOWED;
 
 const STRUCTURAL_PROPS = new Set<keyof Tab>(['name', 'rows', 'cols']);
 const MAX_UNDO = 200;

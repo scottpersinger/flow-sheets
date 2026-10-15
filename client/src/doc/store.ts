@@ -4,8 +4,10 @@
 // order, redo applies the steps again. Entries merge when they share a group (one agent request) or when
 // they follow each other quickly (typing), so a sentence undoes in one go rather than a letter at a time.
 import { EditorState, Selection, Transaction, type Plugin } from 'prosemirror-state';
+import type { Node as PMNode } from 'prosemirror-model';
 import type { Step } from 'prosemirror-transform';
 import { docFromNode, docNode, type Doc } from '../../../shared/doc.ts';
+import { TransactionRefused } from '../state/store.ts';
 
 export interface DocUndoEntry {
   steps: Step[];
@@ -37,6 +39,11 @@ export class DocStore {
   private redoStack: DocUndoEntry[] = [];
   private listeners = new Set<() => void>();
   private cached: { doc: EditorState['doc']; json: Doc } | null = null;
+  /**
+   * When set, every change to the document is checked before it takes effect (the document before and after):
+   * a string refuses it (the reason) and apply throws TransactionRefused. A Word file's (desktop app).
+   */
+  guard: ((before: PMNode, after: PMNode) => string | null) | null = null;
 
   constructor(doc: Doc, plugins: Plugin[] = []) {
     this.state = EditorState.create({ doc: docNode(doc), plugins });
@@ -62,6 +69,8 @@ export class DocStore {
   /** Apply a transaction. Returns whether the document changed. */
   apply(tr: Transaction, group?: string): boolean {
     const before = this.state;
+    const refused = tr.docChanged && !tr.getMeta(HISTORY_META) ? this.guard?.(before.doc, tr.doc) : null;
+    if (refused) throw new TransactionRefused(refused);
     this.state = before.apply(tr);
     if (!tr.docChanged) {
       this.emit(false);
@@ -138,3 +147,15 @@ export class DocStore {
     return e;
   }
 }
+
+const hasVideo = (node: PMNode): boolean => {
+  let found = false;
+  node.descendants((n) => {
+    if (n.type.name === 'video') found = true;
+    return !found;
+  });
+  return found;
+};
+
+/** The guard of a Word file (shared/docxFormat.ts): refuses adding a video, which a Word file cannot hold. */
+export const docxGuard = (before: PMNode, after: PMNode): string | null => (hasVideo(after) && !hasVideo(before) ? 'Videos' : null);

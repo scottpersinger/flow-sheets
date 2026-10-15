@@ -35,7 +35,7 @@ import { csvTitle, csvToWorkbook } from '../../../shared/csv.ts';
 import { checkCsvFile, checkExcelFile, pickCsvFile, pickExcelFile } from '../importFile.ts';
 import { uniqueTabName } from '../state/ops.ts';
 import { SheetController } from '../state/controller.ts';
-import { csvGuard } from '../state/store.ts';
+import { csvGuard, lockedGuard, EDIT_NOT_ALLOWED, xlsxGuard } from '../state/store.ts';
 import { useController } from '../state/useController.ts';
 
 function downloadFile(name: string, mime: string, content: string) {
@@ -62,9 +62,19 @@ function toCSV(ctl: SheetController): string {
   return rows.join('\n');
 }
 
+/**
+ * The guard of a spreadsheet's file format: a CSV or Excel file takes only the changes it can store, and an
+ * Excel file holding things the app cannot keep (`notKept`) none until the user allows editing it.
+ */
+function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
+  if (meta.format === 'csv') return csvGuard;
+  if (meta.format === 'xlsx') return notKept?.length ? lockedGuard : xlsxGuard;
+  return null;
+}
+
 export function SpreadsheetPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: SheetController; sync: RevisionSync<Workbook> } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; notKept?: string[]; ctl: SheetController; sync: RevisionSync<Workbook> } | { error: string } | null>(null);
   const { sheetFailed } = useAgent();
 
   useEffect(() => {
@@ -74,23 +84,31 @@ export function SpreadsheetPage() {
     setState(null);
     api
       .getSheet(id!)
-      .then(({ sheet, workbook }) => {
+      .then(({ sheet, workbook, notKept }) => {
         if (cancelled) return;
         // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
         const sync = new RevisionSync<Workbook>(sheet.id, sheet.updatedAt, {
           save: async (wb, rev) => ({ meta: (await api.saveSheet(sheet.id, wb, rev)).sheet }),
           load: async () => {
             const latest = await api.getSheet(sheet.id);
-            // Converted to a spreadsheet elsewhere: the newer version may hold what CSV cannot.
-            if (ctl) ctl.store.guard = latest.sheet.format === 'csv' ? csvGuard : null;
+            if (ctl) {
+              // The newer version is put in place as a change, which the guard must let through; then the
+              // guard of its format applies (it may have been converted elsewhere). An Excel file the user
+              // has not allowed editing yet stays read-only.
+              const c = ctl;
+              const locked = c.store.guard === lockedGuard && latest.sheet.format === 'xlsx';
+              c.store.guard = null;
+              setTimeout(() => (c.store.guard = locked ? lockedGuard : guardFor(latest.sheet, undefined)));
+            }
             return { meta: latest.sheet, doc: latest.workbook };
           },
         });
         ctl = new SheetController(workbook, sync.save);
         stopSync = sync.attach(ctl);
-        // A CSV file only takes changes CSV can store; the rest asks to convert it first (see Workbench).
-        if (sheet.format === 'csv') ctl.store.guard = csvGuard;
-        setState({ meta: sheet, ctl, sync });
+        // A CSV or Excel file only takes changes it can store; the rest asks to convert it first, or to allow
+        // editing an Excel file that holds things the app cannot keep (see Workbench).
+        ctl.store.guard = guardFor(sheet, notKept);
+        setState({ meta: sheet, notKept, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -119,7 +137,7 @@ export function SpreadsheetPage() {
       </div>
     );
   }
-  return <Workbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
+  return <Workbench key={state.meta.id} initialMeta={state.meta} initialNotKept={state.notKept} ctl={state.ctl} sync={state.sync} />;
 }
 
 type Dialog =
@@ -130,9 +148,11 @@ type Dialog =
   | { kind: 'csvCopy' }
   /** Convert a CSV file to a spreadsheet: asked from the File menu, or because a change needs it (then `reason` and `retry` are set). */
   | { kind: 'convert'; reason?: string; retry?: () => void }
+  /** Allow editing an Excel file that holds things the app cannot keep: asked from its Read-only chip, or by the first change (then `retry` is set). */
+  | { kind: 'editExcel'; retry?: () => void }
   | null;
 
-function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: SheetController; sync: RevisionSync<Workbook> }) {
+function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: SheetController; sync: RevisionSync<Workbook> }) {
   useController(ctl);
   const navigate = useNavigate();
   const location = useLocation();
@@ -145,6 +165,8 @@ function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: Sh
     if (location.state) navigate(location.pathname, { replace: true, state: null });
   };
   const [meta, setMeta] = useState(initialMeta);
+  // What saving this Excel file would remove, until the user allows editing it.
+  const [notKept, setNotKept] = useState(initialNotKept);
   useRegisterSheet(ctl, meta);
   useFavicon('sheet');
   const [title, setTitle] = useState(initialMeta.title);
@@ -156,9 +178,10 @@ function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: Sh
 
   useEffect(() => ctl.saver.subscribe(() => setSaveTick((t) => t + 1)), [ctl]);
 
-  // A CSV file: when a change needs something CSV cannot store, offer to convert the file and then make it.
+  // A CSV or Excel file: when a change needs something the file cannot store, offer to convert it and then
+  // make the change. An Excel file not yet allowed editing asks for that first.
   useEffect(() => {
-    ctl.onRefused = (reason, retry) => setDialog({ kind: 'convert', reason, retry });
+    ctl.onRefused = (reason, retry) => setDialog(reason === EDIT_NOT_ALLOWED ? { kind: 'editExcel', retry } : { kind: 'convert', reason, retry });
     return () => {
       ctl.onRefused = null;
     };
@@ -170,7 +193,8 @@ function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: Sh
     const { sheet } = await api.convertSheet(meta.id);
     // Converting is a new revision with the same content: the edit that asked for it saves on top of it.
     sync.rev = sheet.updatedAt;
-    ctl.store.guard = null;
+    // A CSV file may have become an Excel file (desktop app), which has its own limits.
+    ctl.store.guard = guardFor(sheet, undefined);
     setMeta(sheet);
   };
 
@@ -270,9 +294,10 @@ function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: Sh
           const [tab] = csvToWorkbook(await file.text()).tabs;
           // Sheet names cannot contain [ ] * ? / \ : and are at most 100 characters.
           const name = csvTitle(file.name).replace(/[[\]*?/\\:]/g, ' ').trim().slice(0, 100) || 'Imported CSV';
+          const before = ctl.store.workbook.tabs.length;
           ctl.importTabs([{ ...tab, name: uniqueTabName(ctl.store.workbook.tabs, name) }]);
           // In a CSV file the new sheet waits for the answer to "Convert to a spreadsheet?".
-          if (!ctl.store.guard) notify(`Added “${file.name}” as a new sheet. Press ${isMac ? '⌘Z' : 'Ctrl+Z'} to undo.`);
+          if (ctl.store.workbook.tabs.length > before) notify(`Added “${file.name}” as a new sheet. Press ${isMac ? '⌘Z' : 'Ctrl+Z'} to undo.`);
         } catch (e) {
           notify(e instanceof Error ? e.message : String(e));
         }
@@ -385,6 +410,16 @@ function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: Sh
                 CSV
               </span>
             )}
+            {meta.format === 'xlsx' &&
+              (notKept ? (
+                <button className="format-chip locked" title={`This Excel file has things Universal Docs can't keep: ${notKept.join(', ')}. Click to allow editing.`} onClick={() => setDialog({ kind: 'editExcel' })}>
+                  Excel · Read-only
+                </button>
+              ) : (
+                <span className="format-chip" title="This is an Excel file: edits are saved to it as an Excel file.">
+                  Excel
+                </span>
+              ))}
             {meta.branch && (
               <span className="branch-chip" title={`Branched ${new Date(meta.branch.branchedAt).toLocaleString()}`}>
                 <BranchIcon />
@@ -476,7 +511,43 @@ function Workbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: Sh
           onClose={() => setDialog(null)}
         />
       )}
-      {dialog?.kind === 'convert' && (
+      {dialog?.kind === 'editExcel' && (
+        <ConfirmModal
+          title="Edit this Excel file?"
+          message={
+            <>
+              “{meta.title}” has things Universal Docs can't keep: {(notKept ?? []).join(', ')}. If you edit it, they are removed from the file when it saves. A copy of
+              the file as it is now is kept in the app's trash folder.
+            </>
+          }
+          confirmText="Edit anyway"
+          onConfirm={() => {
+            ctl.store.guard = xlsxGuard;
+            setNotKept(undefined);
+            dialog.retry?.();
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'convert' && meta.format === 'xlsx' && (
+        <ConfirmModal
+          title="Keep as a Universal Docs spreadsheet?"
+          message={
+            <>
+              {dialog.reason ?? 'Some things'} cannot be saved in an Excel file. Keeping “{meta.title}” as a Universal Docs spreadsheet instead lets it hold them. It will no longer
+              be an Excel file, and you can still download it as Excel.
+            </>
+          }
+          confirmText="Keep as spreadsheet"
+          onConfirm={async () => {
+            await convertToSpreadsheet();
+            dialog.retry?.();
+            notify('Kept as a Universal Docs spreadsheet.');
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'convert' && meta.format !== 'xlsx' && (
         <ConfirmModal
           title="Convert to a spreadsheet?"
           message={

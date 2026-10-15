@@ -163,6 +163,11 @@ function migrate(db: DB): void {
   if (!cols.has('format')) db.exec('ALTER TABLE sheets ADD COLUMN format TEXT');
   // Folders (shared/folders.ts): each file is in one, named by its path; '' is the top of the library.
   if (!cols.has('folder')) db.exec("ALTER TABLE sheets ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
+  // The assistant on the user's own Anthropic or OpenRouter key, beside OpenAI's (server/agent/settings.ts).
+  const settingsCols = new Set((db.prepare('PRAGMA table_info(assistant_settings)').all() as { name: string }[]).map((c) => c.name));
+  for (const col of ['anthropic_model', 'anthropic_key', 'anthropic_key_masked', 'openrouter_model', 'openrouter_key', 'openrouter_key_masked']) {
+    if (!settingsCols.has(col)) db.exec(`ALTER TABLE assistant_settings ADD COLUMN ${col} TEXT`);
+  }
   const fileCols = new Set((db.prepare('PRAGMA table_info(stored_files)').all() as { name: string }[]).map((c) => c.name));
   if (!fileCols.has('folder')) db.exec("ALTER TABLE stored_files ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
   db.exec(`

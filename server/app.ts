@@ -22,8 +22,10 @@ import { checkImageEditRate, editedImageName, EDITABLE_IMAGE_TYPES, ImageEditErr
 import { CELL_IMAGE_TYPES, fileTypeOf, HTML_TYPE, isHtmlName, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
 import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
-import { checkOpenAIKey, openaiErrorMessage } from './agent/openai.ts';
-import { AssistantSettingsStore, SettingsError } from './agent/settings.ts';
+import { openaiErrorMessage } from './agent/openai.ts';
+import { OpenRouterError } from './agent/openrouter.ts';
+import { checkAssistantKey, OwnKeyError } from './agent/providers.ts';
+import { AssistantSettingsStore, SettingsError, type KeyCheck } from './agent/settings.ts';
 import { AgentStore } from './agent/store.ts';
 import { registerConnectorService } from './agent/tools.ts';
 import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
@@ -93,8 +95,8 @@ export interface AppOptions {
    * (comma-separated). Lets the app move to a new domain while old links keep working.
    */
   legacyHosts?: string[];
-  /** Checks an OpenAI key before it is saved in Settings. Tests pass a stub; the default asks OpenAI. */
-  checkOpenAIKey?: (apiKey: string, model: string) => Promise<void>;
+  /** Checks an assistant API key before it is saved in Settings. Tests pass a stub; the default asks the provider. */
+  checkAssistantKey?: KeyCheck;
   /** Edits a picture for the assistant's edit_image. Tests pass a stub; the default asks OpenAI's image model. */
   imageEditor?: ImageEditor;
   /** Connector overrides (tests pass a fake fetch). */
@@ -129,6 +131,16 @@ export interface AppOptions {
      * token. `url` is where agents reach it (desktop/main.js's fixed port); `show` puts a page in the window.
      */
     mcp?: { token: string; url?: string; show(path: string): void; changed?(id: string): void };
+    /**
+     * Where the assistant settings are kept (the app's own data folder), so every folder's server shares
+     * them; defaults to dataDir. The desktop app has no model of its own, so the user brings a key.
+     */
+    settingsDir?: string;
+    /**
+     * Keys found in the user's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY), used for
+     * the assistant when the user has no settings yet: the app's first run.
+     */
+    env?: Record<string, string | undefined>;
   };
 }
 
@@ -139,7 +151,7 @@ function cleanTitle(t: unknown): string | null {
 }
 
 function agentErrorMessage(e: unknown): string {
-  if (e instanceof AgentError) return e.message;
+  if (e instanceof AgentError || e instanceof OwnKeyError || e instanceof OpenRouterError) return e.message;
   const openai = openaiErrorMessage(e);
   if (openai) return openai;
   if (e instanceof Anthropic.RateLimitError) return 'The assistant is getting too many requests right now. Try again in a minute.';
@@ -197,7 +209,11 @@ export async function buildApp(opts: AppOptions) {
   // Lets the agent's server tools (list_connections, fetch_connector_data) reach the user's connections.
   registerConnectorService(sheets, connectors);
   // Created after the connector service, which makes the encryption key file they share.
-  const assistantSettings = new AssistantSettingsStore(db, path.join(opts.dataDir, 'connector.key'));
+  // The desktop app's settings are the app's, not the folder's: one database for every folder's server.
+  const settingsDir = opts.local?.settingsDir ?? opts.dataDir;
+  const settingsDb = settingsDir === opts.dataDir ? db : openDb(path.join(settingsDir, 'settings.db'));
+  if (settingsDb !== db) settingsDb.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES ('local', 'local', '', ?)").run(new Date().toISOString());
+  const assistantSettings = new AssistantSettingsStore(settingsDb, path.join(settingsDir, 'connector.key'), { builtIn: !opts.local });
   const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { ...opts.agent, images, files: storedFiles });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
@@ -235,6 +251,13 @@ export async function buildApp(opts: AppOptions) {
   // The desktop app has one user, who owns the mounted folder's files and is never asked to sign in.
   const localUser: User | null = opts.local ? { id: 'local', email: 'local' } : null;
   if (localUser) db.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES (?, ?, '', ?)").run(localUser.id, localUser.email, new Date().toISOString());
+  // The first run: a key already set in the user's environment runs the assistant without a visit to Settings.
+  if (localUser && opts.local?.env) {
+    const used = assistantSettings.adoptFromEnvironment(localUser.id, opts.local.env);
+    if (used) app.log.info({ provider: used }, 'assistant key found in the environment');
+  }
+  // The pictures of the folder's PowerPoint and Word files, read each time one is opened, are stored once.
+  if (localUser && sheets instanceof LocalSheetStore) sheets.media = { store: (type, data) => images.createOnce(localUser.id, type, data), source: imageSource(images, localUser.id) };
   // The desktop app's MCP server, and the file its window shows (the one the tools act on by default).
   const localMcp = opts.local?.mcp
     ? await mountLocalMcp(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, folders, userId: localUser!.id, token: opts.local.mcp.token, publicUrl: opts.local.mcp.url ?? null, show: opts.local.mcp.show, changed: opts.local.mcp.changed })
@@ -251,6 +274,7 @@ export async function buildApp(opts: AppOptions) {
       if (!(await backup.drain(8_000))) app.log.error(`backup: ${backup.pending} upload(s) still pending at shutdown`);
     }
     db.close();
+    if (settingsDb !== db) settingsDb.close();
   });
   // The daily pass runs for a real deployment (store from the environment), not for tests.
   if (backup && opts.blob === undefined) backup.startDaily();
@@ -524,10 +548,10 @@ export async function buildApp(opts: AppOptions) {
       try {
         const res = await sheets.load(req.user!.id, id);
         if (!res) return reply.code(404).send({ error: 'Sheet not found' });
-        return { sheet: res.meta, workbook: res.workbook };
+        return { sheet: res.meta, workbook: res.workbook, ...(res.notKept ? { notKept: res.notKept } : {}) };
       } catch (e) {
-        // A CSV file from a mounted folder that cannot be opened (too large, for one).
-        if (e instanceof CsvError) return reply.code(400).send({ error: e.message });
+        // A CSV or Excel file from a mounted folder that cannot be opened (too large, or not what it says).
+        if (e instanceof CsvError || e instanceof ImportError) return reply.code(400).send({ error: e.message });
         throw e;
       }
     });
@@ -563,7 +587,8 @@ export async function buildApp(opts: AppOptions) {
       return { sheet: meta };
     });
 
-    // Convert a CSV file to a native spreadsheet, so it can hold formatting, more tabs and so on.
+    // Convert a CSV file to a richer spreadsheet (formatting, more tabs and so on), or an Excel file to the
+    // app's own format (pictures in cells).
     r.post('/api/sheets/:id/convert', async (req, reply) => {
       const { id } = req.params as { id: string };
       const meta = await sheets.convertToNative(req.user!.id, id);
@@ -637,9 +662,23 @@ export async function buildApp(opts: AppOptions) {
 
     r.get('/api/docs/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const res = await sheets.loadDoc(req.user!.id, id);
-      if (!res) return reply.code(404).send({ error: 'Document not found' });
-      return { meta: res.meta, doc: res.doc };
+      try {
+        const res = await sheets.loadDoc(req.user!.id, id);
+        if (!res) return reply.code(404).send({ error: 'Document not found' });
+        return { meta: res.meta, doc: res.doc, ...(res.notKept ? { notKept: res.notKept } : {}) };
+      } catch (e) {
+        // A PowerPoint or Word file from a mounted folder that cannot be opened.
+        if (e instanceof ImportError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
+    });
+
+    // Keep a document stored as an Office file (desktop app) in the app's own format, which holds everything.
+    r.post('/api/docs/:id/convert', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const meta = await sheets.convertToOwnFormat(req.user!.id, id, 'doc');
+      if (!meta) return reply.code(404).send({ error: 'Document not found' });
+      return { meta };
     });
 
     r.put('/api/docs/:id', async (req, reply) => {
@@ -782,9 +821,23 @@ export async function buildApp(opts: AppOptions) {
 
     r.get('/api/decks/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const res = await sheets.loadDeck(req.user!.id, id);
-      if (!res) return reply.code(404).send({ error: 'Presentation not found' });
-      return { meta: res.meta, deck: res.deck };
+      try {
+        const res = await sheets.loadDeck(req.user!.id, id);
+        if (!res) return reply.code(404).send({ error: 'Presentation not found' });
+        return { meta: res.meta, deck: res.deck, ...(res.notKept ? { notKept: res.notKept } : {}) };
+      } catch (e) {
+        // A PowerPoint or Word file from a mounted folder that cannot be opened.
+        if (e instanceof ImportError) return reply.code(400).send({ error: e.message });
+        throw e;
+      }
+    });
+
+    // Keep a presentation stored as an Office file (desktop app) in the app's own format, which holds everything.
+    r.post('/api/decks/:id/convert', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const meta = await sheets.convertToOwnFormat(req.user!.id, id, 'deck');
+      if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
+      return { meta };
     });
 
     r.put('/api/decks/:id', async (req, reply) => {
@@ -1422,7 +1475,7 @@ export async function buildApp(opts: AppOptions) {
 
     r.put('/api/settings/assistant', async (req, reply) => {
       try {
-        return { settings: await assistantSettings.update(req.user!.id, (req.body ?? {}) as Partial<AssistantSettingsUpdate>, opts.checkOpenAIKey ?? checkOpenAIKey) };
+        return { settings: await assistantSettings.update(req.user!.id, (req.body ?? {}) as Partial<AssistantSettingsUpdate>, opts.checkAssistantKey ?? checkAssistantKey) };
       } catch (e) {
         if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
         throw e;

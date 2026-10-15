@@ -25,10 +25,16 @@ const DEFAULT_ROW_PX = 21;
 export interface ImportResult {
   workbook: Workbook;
   warnings: string[];
+  /**
+   * What the file holds that the workbook does not (named for the user, e.g. "Charts"), so writing the
+   * workbook back over the file would remove it. Found by looking through the file's parts, so it errs on
+   * the side of listing a thing.
+   */
+  lost: string[];
 }
 
 /** Reject zip bombs before handing the archive to the xlsx parser. */
-async function checkArchive(buf: Buffer): Promise<void> {
+async function checkArchive(buf: Buffer): Promise<JSZip> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(buf);
@@ -45,6 +51,54 @@ async function checkArchive(buf: Buffer): Promise<void> {
   }
   if (total > IMPORT_LIMITS.maxUncompressedBytes) throw new ImportError('This workbook is too large to import.');
   if (!zip.file('xl/workbook.xml')) throw new ImportError('This file is not a valid .xlsx workbook.');
+  return zip;
+}
+
+/** Parts of a workbook the import leaves out, by the files that hold them. */
+const LOST_PARTS: [RegExp, string][] = [
+  [/^xl\/charts\/chart\d*\.xml$/, 'Charts'],
+  [/^xl\/media\//, 'Pictures'],
+  [/^xl\/(comments\d*\.xml|threadedComments\/)/, 'Comments'],
+  [/^xl\/pivotTables\//, 'Pivot tables'],
+  [/^xl\/tables\//, 'Tables'],
+  [/^xl\/externalLinks\//, 'Links to other workbooks'],
+  [/^xl\/vbaProject\.bin$/, 'Macros'],
+];
+/** What a worksheet's XML holds that the import leaves out, by the elements that hold it. */
+const LOST_IN_SHEETS: [RegExp, string][] = [
+  [/<(\w+:)?conditionalFormatting[ >]/, 'Conditional formatting'],
+  [/<(\w+:)?dataValidations[ >]/, 'Data validation'],
+  [/<hyperlink /, 'Links'],
+  [/<(row|col) [^>]*hidden="(1|true)"/, 'Hidden rows and columns'],
+  [/<(row|col) [^>]*outlineLevel="[1-9]/, 'Grouped rows and columns'],
+  [/<sheetProtection /, 'Sheet protection'],
+];
+
+/** What writing the imported workbook back over the file would remove (see ImportResult.lost). */
+async function lostParts(zip: JSZip): Promise<string[]> {
+  const lost = new Set<string>();
+  const names = Object.keys(zip.files);
+  for (const [re, label] of LOST_PARTS) if (names.some((n) => re.test(n))) lost.add(label);
+  for (const n of names.filter((n) => /^xl\/worksheets\/sheet\d*\.xml$/.test(n))) {
+    const xml = await zip.file(n)!.async('string');
+    for (const [re, label] of LOST_IN_SHEETS) if (re.test(xml)) lost.add(label);
+  }
+  // Drawings hold charts and pictures (named above by their own parts) and shapes.
+  for (const n of names.filter((n) => /^xl\/drawings\/drawing\d*\.xml$/.test(n))) {
+    if (/<(\w+:)?sp[ >]/.test(await zip.file(n)!.async('string'))) lost.add('Shapes and text boxes');
+  }
+  const workbook = await zip.file('xl/workbook.xml')!.async('string');
+  // Excel's own names (print areas, the filter's range) are not the user's.
+  if ([...workbook.matchAll(/<definedName [^>]*name="([^"]+)"/g)].some((m) => !m[1].startsWith('_xlnm.'))) lost.add('Named ranges');
+  const styles = (await zip.file('xl/styles.xml')?.async('string')) ?? '';
+  const borders = /<borders[^>]*>([\s\S]*?)<\/borders>/.exec(styles)?.[1] ?? '';
+  if (/ style="(?!none")/.test(borders)) lost.add('Cell borders');
+  const fonts = /<fonts[^>]*>([\s\S]*?)<\/fonts>/.exec(styles)?.[1] ?? '';
+  // A font that only makes text bold, say, leaves out the size and name it keeps.
+  const sizes = new Set([...fonts.matchAll(/<sz val="([^"]+)"/g)].map((m) => m[1]));
+  const faces = new Set([...fonts.matchAll(/<name val="([^"]+)"/g)].map((m) => m[1]));
+  if (sizes.size > 1 || faces.size > 1) lost.add('Fonts and text sizes');
+  return [...lost];
 }
 
 function argbToHex(c: Partial<ExcelJS.Color> | undefined): string | undefined {
@@ -164,7 +218,7 @@ export async function importExcel(buf: Buffer): Promise<ImportResult> {
 }
 
 export async function importXlsx(buf: Buffer): Promise<ImportResult> {
-  await checkArchive(buf);
+  const zip = await checkArchive(buf);
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(buf as unknown as ArrayBuffer);
@@ -338,5 +392,8 @@ export async function importXlsx(buf: Buffer): Promise<ImportResult> {
   if (hidden.length) warnings.push(`Hidden sheets are shown as normal tabs: ${hidden.join(', ')}.`);
   if (renamed.length) warnings.push(`Some sheet names were changed: ${renamed.join(', ')}.`);
 
-  return { workbook: { version: 1, tabs }, warnings };
+  const lost = await lostParts(zip);
+  if (merged) lost.push('Merged cells');
+  if (hidden.length) lost.push('Hidden sheets');
+  return { workbook: { version: 1, tabs }, warnings, lost };
 }

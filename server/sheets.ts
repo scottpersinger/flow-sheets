@@ -8,6 +8,7 @@ import type { MarkdownDoc } from '../shared/markdown.ts';
 import { csvProblem, csvStyle, csvToWorkbook, isCsvDoc, newCsvDoc, workbookToCsv, type CsvDoc } from '../shared/csv.ts';
 import { migrateDeck } from '../shared/lines.ts';
 import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
+import { xlsxProblem } from '../shared/xlsxFormat.ts';
 import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
 
@@ -15,8 +16,8 @@ export interface SheetRow {
   id: string;
   owner_id: string;
   kind: DocKind;
-  /** 'csv' for a spreadsheet stored as CSV text; null otherwise. */
-  format: string | null;
+  /** How the file holds the document when not as the app's JSON (CSV text, an Excel file, ...); null otherwise. */
+  format: SheetFormat | null;
   title: string;
   /** Path of the folder the document is in; '' at the top. */
   folder: string;
@@ -38,7 +39,7 @@ const SELECT_SHEETS = `
 const toMeta = (r: SheetRow): SheetMeta => ({
   id: r.id,
   kind: r.kind,
-  ...(r.format === 'csv' ? { format: 'csv' as const } : {}),
+  ...(r.format ? { format: r.format } : {}),
   title: r.title,
   ...(r.folder ? { folder: r.folder } : {}),
   createdAt: r.created_at,
@@ -58,6 +59,8 @@ const toMeta = (r: SheetRow): SheetMeta => ({
 const baseFileOf = (id: string) => `${id}.base.json`;
 
 export type Stored = Workbook | Deck | Doc | MarkdownDoc | CsvDoc;
+/** How a document's file holds it, when not as the app's JSON: a spreadsheet as CSV text or an Excel file, a presentation as a PowerPoint file, a document as a Word file. */
+export type SheetFormat = 'csv' | 'xlsx' | 'pptx' | 'docx';
 
 /** Structural validation of an uploaded workbook (guards against malformed saves, not a full schema). */
 export function validateWorkbook(wb: unknown): string | null {
@@ -97,7 +100,9 @@ export function validateWorkbook(wb: unknown): string | null {
  * Spreadsheets, slide decks, text documents and Markdown documents, stored as one JSON file each with their
  * metadata in SQLite. The workbook methods (load, save, branch, ...) only see spreadsheets; the deck, doc and
  * markdown methods likewise. A spreadsheet can be stored as CSV text instead of a workbook (format "csv"):
- * load still returns a workbook, and save writes CSV for as long as the workbook fits in one.
+ * load still returns a workbook, and save writes CSV for as long as the workbook fits in one. The desktop
+ * app's store also keeps spreadsheets, presentations and documents as Office files (formats "xlsx", "pptx" and
+ * "docx", server/localStore.ts).
  */
 export class SheetStore {
   protected db: DB;
@@ -126,18 +131,31 @@ export class SheetStore {
   // overrides these to keep real files (.md, .csv, ...) under the names the user gave them. ---
 
   /** The file for a new document, relative to the store's directory, and the title it ends up with. */
-  protected newFile(id: string, _kind: DocKind, _format: 'csv' | null, title: string, _folder: string): { file: string; title: string } {
+  protected newFile(id: string, _kind: DocKind, _format: SheetFormat | null, title: string, _folder: string): { file: string; title: string } {
     return { file: `${id}.json`, title };
   }
 
-  /** The text written to a document's file. */
-  protected encode(_file: string, doc: Stored): string {
+  /** What is written to a document's file. */
+  protected encode(_file: string, doc: Stored): string | Buffer | Promise<string | Buffer> {
     return JSON.stringify(doc);
   }
 
-  /** The document read from the text of its file. */
-  protected decode(_file: string, text: string): Stored {
-    return JSON.parse(text) as Stored;
+  /** The document read from the bytes of its file. */
+  protected decode(_file: string, data: Buffer): Stored | Promise<Stored> {
+    return JSON.parse(data.toString('utf8')) as Stored;
+  }
+
+  /**
+   * The format a new document is stored in, and a spreadsheet richer than CSV (a CSV file that outgrew it):
+   * the app's JSON here; the desktop app keeps Office files when the document fits in one.
+   */
+  protected richFormat(_kind: DocKind, _doc: Stored): SheetFormat | null {
+    return null;
+  }
+
+  /** What the file of a document just loaded holds that the app cannot keep (an Excel file's charts, say), if anything. */
+  protected notKept(_r: SheetRow): string[] | undefined {
+    return undefined;
   }
 
   /** Where a branch's snapshot of its original is kept. */
@@ -179,7 +197,7 @@ export class SheetStore {
     return newFileId((id) => !!this.db.prepare('SELECT 1 FROM sheets WHERE id = ?').get(id));
   }
 
-  private async insert(ownerId: string, kind: DocKind, wanted: string, doc: Stored, folder = '', format: 'csv' | null = null): Promise<SheetMeta> {
+  private async insert(ownerId: string, kind: DocKind, wanted: string, doc: Stored, folder = '', format: SheetFormat | null = null): Promise<SheetMeta> {
     const id = this.newId();
     const { file, title } = this.newFile(id, kind, format, wanted, folder);
     const json = await this.writeDoc(file, doc);
@@ -220,7 +238,8 @@ export class SheetStore {
   }
 
   async create(ownerId: string, title: string, workbook?: Workbook, folder = ''): Promise<SheetMeta> {
-    return this.insert(ownerId, 'sheet', title, workbook ?? newWorkbook(randomUUID()), folder);
+    const wb = workbook ?? newWorkbook(randomUUID());
+    return this.insert(ownerId, 'sheet', title, wb, folder, this.richFormat('sheet', wb));
   }
 
   /** Create a branch: a copy of the sheet that remembers its original and keeps a snapshot (base) of it. */
@@ -230,16 +249,17 @@ export class SheetStore {
     const id = this.newId();
     // A branch starts next to its original.
     const folder = src.meta.folder ?? '';
-    const { file, title } = this.newFile(id, 'sheet', null, wanted, folder);
+    const format = this.richFormat('sheet', src.workbook);
+    const { file, title } = this.newFile(id, 'sheet', format, wanted, folder);
     const json = await this.writeDoc(file, src.workbook);
     await writeAtomic(this.basePath(id), JSON.stringify(src.workbook));
     const now = this.stamp(file);
     this.db
       .prepare(
-        `INSERT INTO sheets (id, owner_id, kind, title, folder, file, created_at, updated_at, parent_id, parent_title, branched_at)
-         VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sheets (id, owner_id, kind, format, title, folder, file, created_at, updated_at, parent_id, parent_title, branched_at)
+         VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, ownerId, title, folder, file, now, now, sourceId, src.meta.title, now);
+      .run(id, ownerId, format, title, folder, file, now, now, sourceId, src.meta.title, now);
     this.backup?.putFile(ownerId, 'sheet', id, now, json);
     this.backup?.putBase(ownerId, id, json);
     return this.get(ownerId, id);
@@ -257,20 +277,22 @@ export class SheetStore {
 
   private async read<T>(r: SheetRow): Promise<T> {
     await this.writeChains.get(r.id);
-    return this.decode(r.file, await readFile(this.filePath(r.file), 'utf8')) as T;
+    return (await this.decode(r.file, await readFile(this.filePath(r.file)))) as T;
   }
 
-  async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook } | null> {
+  /** `notKept`: what the file holds that saving would lose, for an Excel file the app did not write (see notKept). */
+  async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook; notKept?: string[] } | null> {
     const r = this.row(ownerId, id, 'sheet');
     if (!r) return null;
     const stored = await this.read<Workbook | CsvDoc>(r);
     const csv = isCsvDoc(stored);
     // The file says what it is; bring the column in line if they disagree (e.g. after a restore).
-    if (csv !== (r.format === 'csv')) this.setFormat(r, csv ? 'csv' : null);
-    return { meta: toMeta(r), workbook: csv ? csvToWorkbook(stored.csv) : stored };
+    if (r.format !== 'xlsx' && csv !== (r.format === 'csv')) this.setFormat(r, csv ? 'csv' : null);
+    const notKept = this.notKept(r);
+    return { meta: toMeta(r), workbook: csv ? csvToWorkbook(stored.csv) : stored, ...(notKept?.length ? { notKept } : {}) };
   }
 
-  protected setFormat(r: SheetRow, format: 'csv' | null): void {
+  protected setFormat(r: SheetRow, format: SheetFormat | null): void {
     this.db.prepare('UPDATE sheets SET format = ? WHERE id = ?').run(format, r.id);
     r.format = format;
   }
@@ -290,37 +312,55 @@ export class SheetStore {
   async save(ownerId: string, id: string, workbook: Workbook): Promise<SheetMeta | null> {
     const r = this.row(ownerId, id, 'sheet');
     if (!r) return null;
+    // An Excel file stays one while the workbook fits; otherwise it is kept in the app's own format rather
+    // than lose what was added (the editor asks first; this is for changes made elsewhere).
+    if (r.format === 'xlsx' && xlsxProblem(workbook)) this.setFormat(r, null);
     if (r.format !== 'csv') return this.write(r, workbook);
-    // A CSV file stays CSV while the workbook holds nothing CSV cannot store; otherwise it becomes a native
+    // A CSV file stays CSV while the workbook holds nothing CSV cannot store; otherwise it becomes a richer
     // spreadsheet rather than lose what was added.
     if (csvProblem(workbook)) {
-      this.setFormat(r, null);
+      this.setFormat(r, this.richFormat('sheet', workbook));
       return this.write(r, workbook);
     }
     const before = await this.read<Workbook | CsvDoc>(r);
     return this.write(r, newCsvDoc(workbookToCsv(workbook, isCsvDoc(before) ? csvStyle(before.csv) : undefined)));
   }
 
-  /** Turn a CSV file into a native spreadsheet (same id and content). No-op for one that already is. */
+  /**
+   * Turn a CSV file into a richer spreadsheet (see richFormat), or an Excel file into the app's own format,
+   * which holds everything; same id and content. No-op for one in the app's own format already.
+   */
   async convertToNative(ownerId: string, id: string): Promise<SheetMeta | null> {
     const res = await this.load(ownerId, id);
     if (!res) return null;
-    if (res.meta.format !== 'csv') return res.meta;
+    if (!res.meta.format) return res.meta;
     const r = this.row(ownerId, id, 'sheet')!;
-    this.setFormat(r, null);
+    this.setFormat(r, res.meta.format === 'csv' ? this.richFormat('sheet', res.workbook) : null);
     return this.write(r, res.workbook);
+  }
+
+  /** Keep a presentation or document stored as an Office file in the app's own format instead, which holds everything. */
+  async convertToOwnFormat(ownerId: string, id: string, kind: 'deck' | 'doc'): Promise<SheetMeta | null> {
+    const r = this.row(ownerId, id, kind);
+    if (!r) return null;
+    if (!r.format) return toMeta(r);
+    const doc = await this.read<Deck | Doc>(r);
+    this.setFormat(r, null);
+    return this.write(r, doc);
   }
 
   // --- Slide decks -------------------------------------------------------------
 
   async createDeck(ownerId: string, title: string, deck: Deck, folder = ''): Promise<SheetMeta> {
-    return this.insert(ownerId, 'deck', title, deck, folder);
+    return this.insert(ownerId, 'deck', title, deck, folder, this.richFormat('deck', deck));
   }
 
-  async loadDeck(ownerId: string, id: string): Promise<{ meta: SheetMeta; deck: Deck } | null> {
+  async loadDeck(ownerId: string, id: string): Promise<{ meta: SheetMeta; deck: Deck; notKept?: string[] } | null> {
     const r = this.row(ownerId, id, 'deck');
     if (!r) return null;
-    return { meta: toMeta(r), deck: migrateDeck(await this.read<Deck>(r)) };
+    const deck = migrateDeck(await this.read<Deck>(r));
+    const notKept = this.notKept(r);
+    return { meta: toMeta(r), deck, ...(notKept?.length ? { notKept } : {}) };
   }
 
   /** A presentation whoever owns it, with the owner. Only for content the app itself hands out (the Getting started guide). */
@@ -338,13 +378,15 @@ export class SheetStore {
   // --- Text documents ------------------------------------------------------------
 
   async createDoc(ownerId: string, title: string, doc: Doc, folder = ''): Promise<SheetMeta> {
-    return this.insert(ownerId, 'doc', title, doc, folder);
+    return this.insert(ownerId, 'doc', title, doc, folder, this.richFormat('doc', doc));
   }
 
-  async loadDoc(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: Doc } | null> {
+  async loadDoc(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: Doc; notKept?: string[] } | null> {
     const r = this.row(ownerId, id, 'doc');
     if (!r) return null;
-    return { meta: toMeta(r), doc: await this.read<Doc>(r) };
+    const doc = await this.read<Doc>(r);
+    const notKept = this.notKept(r);
+    return { meta: toMeta(r), doc, ...(notKept?.length ? { notKept } : {}) };
   }
 
   async saveDoc(ownerId: string, id: string, doc: Doc): Promise<SheetMeta | null> {
@@ -407,11 +449,11 @@ export class SheetStore {
     return { id, kind, ...(format ? { format } : {}), title, createdAt: now, updatedAt: now };
   }
 
-  /** Writes the document to its file and returns the text written. */
+  /** Writes the document to its file and returns its text for the off-box copy (JSON when the file is binary). */
   private async writeDoc(file: string, doc: Stored): Promise<string> {
-    const text = this.encode(file, doc);
-    await writeAtomic(this.filePath(file), text);
-    return text;
+    const data = await this.encode(file, doc);
+    await writeAtomic(this.filePath(file), data);
+    return typeof data === 'string' ? data : JSON.stringify(doc);
   }
 }
 

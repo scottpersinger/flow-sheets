@@ -28,7 +28,8 @@ import { checkCellImage, type StoredFile } from '../../../shared/types.ts';
 import { arcGeometry, arcTightBox, type ArcGeom } from '../../../shared/shapes.ts';
 import type { DeckController } from '../deck/controller.ts';
 import type { SlideRender } from '../deck/renderSlide.ts';
-import { ToolError } from './toolError.ts';
+import { refusedChange, ToolError } from './toolError.ts';
+import { TransactionRefused } from '../state/store.ts';
 
 export const DECK_TOOLS: ReadonlySet<string> = new Set(['read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme']);
 
@@ -366,7 +367,14 @@ export function deckConfirmationFor(call: ClientToolCall, deck: DeckController |
 export function runDeckTool(call: ClientToolCall, env: DeckToolEnv): string {
   const i = call.input;
   const ctl = requireDeck(env);
-  const run = (fn: Parameters<DeckController['runAgent']>[1]) => ctl.runAgent(env.group, fn);
+  const run = (fn: Parameters<DeckController['runAgent']>[1]) => {
+    try {
+      return ctl.runAgent(env.group, fn);
+    } catch (e) {
+      if (e instanceof TransactionRefused) throw refusedChange(e.message, 'PowerPoint', 'Universal Docs presentation');
+      throw e;
+    }
+  };
 
   switch (call.name) {
     case 'read_deck':

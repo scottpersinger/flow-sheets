@@ -296,18 +296,75 @@ export const OPENAI_MODELS = [
 export type OpenAIModelId = (typeof OPENAI_MODELS)[number]['id'];
 export const DEFAULT_OPENAI_MODEL: OpenAIModelId = 'gpt-6.1-sol';
 
-/** A user's choice of what powers the assistant. The key itself never leaves the server. */
+/** Claude models a user can run the assistant on with their own Anthropic API key (Settings page). */
+export const ANTHROPIC_MODELS = [
+  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', hint: 'Most capable, highest cost' },
+  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', hint: 'Balanced' },
+  { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', hint: 'Fastest, lowest cost' },
+] as const;
+export type AnthropicModelId = (typeof ANTHROPIC_MODELS)[number]['id'];
+export const DEFAULT_ANTHROPIC_MODEL: AnthropicModelId = 'claude-sonnet-5-5';
+
+/**
+ * Suggestions for the OpenRouter model field, which takes any OpenRouter model that can call tools: leading
+ * models on OpenRouter as of October 2026 (its benchmark leaders, then the newest of each major lab).
+ */
+export const OPENROUTER_MODELS = [
+  { id: 'anthropic/claude-opus-5.5', name: 'Claude Opus 5.5' },
+  { id: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' },
+  { id: 'anthropic/claude-fable-5.1', name: 'Claude Fable 5.1' },
+  { id: 'qwen/qwen3.8-max-0902', name: 'Qwen3.8 Max' },
+  { id: 'openai/gpt-6-astra', name: 'GPT-6 Astra' },
+  { id: 'google/gemini-4-argon', name: 'Gemini 4 Argon' },
+  { id: 'openai/gpt-6.1-sol', name: 'GPT-6.1 Sol' },
+  { id: 'anthropic/claude-opus-5', name: 'Claude Opus 5' },
+  { id: 'anthropic/claude-fable-5', name: 'Claude Fable 5' },
+  { id: 'meta/muse-spark-1.3', name: 'Muse Spark 1.3' },
+  { id: 'anthropic/claude-haiku-5.5', name: 'Claude Haiku 5.5' },
+  { id: 'x-ai/grok-4.7', name: 'Grok 4.7' },
+  { id: 'deepseek/deepseek-v4-pro-0813', name: 'DeepSeek V4 Pro' },
+  { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+  { id: 'google/gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
+  { id: 'openai/gpt-6-luna', name: 'GPT-6 Luna' },
+  { id: 'z-ai/glm-5.3', name: 'GLM 5.3' },
+  { id: 'moonshotai/kimi-k3', name: 'Kimi K3' },
+  { id: 'mistralai/mistral-large-4-0', name: 'Mistral Large 4' },
+  { id: 'qwen/qwen3.8-flash', name: 'Qwen3.8 Flash' },
+] as const;
+export const DEFAULT_OPENROUTER_MODEL = 'anthropic/claude-sonnet-5.5';
+/** An OpenRouter model id: author/slug, with an optional :variant. */
+export const OPENROUTER_MODEL_RE = /^[a-z0-9][\w.-]*\/[\w.-]+(:[\w.-]+)?$/i;
+
+/**
+ * What powers the assistant: 'default' is the model this server is set up with (the hosted app's); the
+ * others run on the user's own API key. The desktop app has no model of its own, so its user brings a key.
+ */
+export type AssistantProvider = 'default' | 'anthropic' | 'openai' | 'openrouter';
+
+/** A user's choice of what powers the assistant. The keys themselves never leave the server. */
 export interface AssistantSettings {
-  /** 'default' is the model this server is set up with; 'openai' uses the user's own key. */
-  provider: 'default' | 'openai';
+  provider: AssistantProvider;
+  /** Whether this server has a model of its own ('default' can be chosen). */
+  builtIn: boolean;
+  anthropicModel: AnthropicModelId;
   openaiModel: OpenAIModelId;
-  /** The saved key, masked ("••••abcd"), or null when there is none. */
+  openrouterModel: string;
+  /** Each saved key, masked ("••••abcd"), or null when there is none. */
+  anthropicKey: string | null;
   openaiKey: string | null;
+  openrouterKey: string | null;
 }
 
-/** Body of PUT /api/settings/assistant. A new key replaces the saved one; null removes it; omitted keeps it. */
+/**
+ * Body of PUT /api/settings/assistant. A new key replaces the saved one, null removes it, omitted keeps it;
+ * an omitted model keeps the saved one.
+ */
 export interface AssistantSettingsUpdate {
-  provider: 'default' | 'openai';
-  openaiModel: OpenAIModelId;
+  provider: AssistantProvider;
+  anthropicModel?: AnthropicModelId;
+  openaiModel?: OpenAIModelId;
+  openrouterModel?: string;
+  anthropicKey?: string | null;
   openaiKey?: string | null;
+  openrouterKey?: string | null;
 }

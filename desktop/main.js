@@ -185,6 +185,31 @@ async function connectAgent() {
   if (agents.length && res.response === 1) mcpAuth.revokeAll();
 }
 
+// --- The assistant's API keys ------------------------------------------------------------------------------
+// The app has no model of its own: the assistant runs on the user's Anthropic, OpenAI or OpenRouter key. On
+// the first run a key already set where the user works is used (the server keeps it once it has settings,
+// server/agent/settings.ts). Started from Finder or the Dock, the app does not get the login shell's
+// environment, so it is read from the shell, once.
+const KEY_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'];
+const keysCheckedFile = () => path.join(app.getPath('userData'), 'assistant-keys-checked');
+let shellKeys = {};
+
+/** The keys set in the user's login shell (or already in this process's environment), by name. */
+function readShellKeys() {
+  const found = Object.fromEntries(KEY_NAMES.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+  if (process.platform === 'win32') return Promise.resolve(found);
+  return new Promise((resolve) => {
+    // An interactive login shell reads the same files a terminal does (.zprofile, .zshrc, ...).
+    execFile(process.env.SHELL || '/bin/zsh', ['-ilc', 'env'], { timeout: 5000, maxBuffer: 1 << 20 }, (_e, out) => {
+      for (const line of String(out ?? '').split('\n')) {
+        const m = /^([A-Z_]+)=(\S+)$/.exec(line);
+        if (m && KEY_NAMES.includes(m[1]) && !found[m[1]]) found[m[1]] = m[2];
+      }
+      resolve(found);
+    });
+  });
+}
+
 /** Start a server for the folder; resolves to its origin once it is listening. */
 function startServer(dir) {
   const token = randomBytes(32).toString('base64url');
@@ -194,7 +219,7 @@ function startServer(dir) {
   // Electron runs as plain Node in a forked child. The working directory is the app's, where .env is.
   const child = fork(path.join(root, 'desktop', 'server.ts'), [], {
     cwd: root,
-    env: { ...process.env, LOCAL_DIR: dir, DATA_DIR: dataDir, LOCAL_TOKEN: token, PORT: '0', MCP_TOKEN: MCP_SECRET, MCP_URL },
+    env: { ...process.env, ...shellKeys, LOCAL_DIR: dir, DATA_DIR: dataDir, APP_DATA_DIR: app.getPath('userData'), LOCAL_TOKEN: token, PORT: '0', MCP_TOKEN: MCP_SECRET, MCP_URL },
   });
   return new Promise((resolve, reject) => {
     child.once('message', (msg) => resolve({ child, dir, token, port: msg.port, origin: `http://127.0.0.1:${msg.port}` }));
@@ -255,10 +280,91 @@ async function openFolder(dir, landing = '/') {
   for (const w of windows) w.destroy();
 }
 
-/** Show a file that is not in the open folder: its own folder becomes the open one, and the window starts on the file. */
-async function openFile(file) {
+/**
+ * Show a file that is not in the open folder: its own folder becomes the open one, and the window starts on
+ * the file. One of Recents (`fromRecents`) keeps Recents as the list its breadcrumbs lead back to.
+ */
+async function openFile(file, fromRecents = true) {
   if (!isDir(path.dirname(file))) throw new Error(`"${file}" is no longer there.`);
-  await openFolder(path.dirname(file), `/open?file=${encodeURIComponent(path.basename(file))}&from=recents`);
+  await openFolder(path.dirname(file), `/open?file=${encodeURIComponent(path.basename(file))}${fromRecents ? '&from=recents' : ''}`);
+}
+
+/** Show a file the system asked the app to open (Finder): in the open folder when it is there, else in its own. */
+async function showFile(file) {
+  const rel = current ? path.relative(current.dir, file) : '';
+  const parts = rel.split(path.sep);
+  // The open folder's server lists no hidden files or folders, so a file among them opens in its own folder.
+  if (rel && !path.isAbsolute(rel) && !parts.some((p) => p === '..' || p.startsWith('.'))) showPage(`/open?file=${encodeURIComponent(parts.join('/'))}`);
+  else await openFile(file, false);
+}
+
+// Finder asks for a file (a double-click when the app is the file's default, Open With, a file dropped on the
+// Dock icon) with open-file, which comes before the app is ready when that is what started it.
+let launchFile = null;
+let started = false;
+app.on('open-file', (e, file) => {
+  e.preventDefault();
+  if (!started) launchFile = file;
+  else void showFile(file).catch((err) => dialog.showErrorBox('Universal Docs', String(err.message ?? err)));
+});
+
+// --- Default app (macOS) ----------------------------------------------------------------------------------
+// The app owns its own formats, but for the standard ones the system prefers Apple's apps whatever the app
+// declares, so becoming their default is the person's choice, set as Get Info › Change All… would set it.
+const DEFAULT_TYPES = [
+  'org.openxmlformats.wordprocessingml.document',
+  'org.openxmlformats.spreadsheetml.sheet',
+  'com.microsoft.excel.xls',
+  'org.openxmlformats.presentationml.presentation',
+  'com.adobe.pdf',
+  'public.comma-separated-values-text',
+  'net.daringfireball.markdown',
+];
+const canBeDefault = () => process.platform === 'darwin' && app.isPackaged;
+const defaultAskedFile = () => path.join(app.getPath('userData'), 'default-app-asked');
+
+/**
+ * Make the app (its bundle id is `build.appId` in package.json) the default for DEFAULT_TYPES, with
+ * LSSetDefaultRoleHandlerForContentType through JavaScript for Automation. Each call answers 0 when it worked.
+ */
+function setDefaultApp() {
+  const script = `ObjC.import('CoreServices');
+ObjC.bindFunction('LSSetDefaultRoleHandlerForContentType', ['int', ['id', 'unsigned int', 'id']]);
+${JSON.stringify(DEFAULT_TYPES)}.map((t) => $.LSSetDefaultRoleHandlerForContentType($(t), 0xFFFFFFFF, $('im.freeflow.docs'))).join(',')`;
+  return new Promise((resolve, reject) =>
+    execFile('osascript', ['-l', 'JavaScript', '-e', script], (e, out) => {
+      if (e) return reject(e);
+      const failed = out.trim().split(',').filter((code) => code !== '0').length;
+      if (failed) reject(new Error(`${failed} of the ${DEFAULT_TYPES.length} file types could not be changed.`));
+      else resolve();
+    }),
+  );
+}
+
+/** Ask, then make the app the default. `first` is the one offer at the first start, which can be declined for good. */
+async function offerDefaultApp(first = false) {
+  const res = await dialog.showMessageBox({
+    type: 'question',
+    title: 'Default App',
+    message: 'Open Word, Excel, PowerPoint, PDF, CSV and Markdown files in Universal Docs?',
+    detail: 'Double-clicking one of these files in Finder will open it here. You can change it back for a type with Get Info › Open with › Change All… in Finder.',
+    buttons: [first ? 'Use Universal Docs' : 'Make Default', first ? 'Not Now' : 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (first) {
+    try {
+      writeFileSync(defaultAskedFile(), '');
+    } catch {
+      // Asked again next time, that's all.
+    }
+  }
+  if (res.response !== 0) return;
+  try {
+    await setDefaultApp();
+  } catch (e) {
+    dialog.showErrorBox('Universal Docs', `The app could not be made the default: ${e.message ?? e}`);
+  }
 }
 
 async function chooseFolder() {
@@ -272,7 +378,25 @@ function buildMenu() {
   const mac = process.platform === 'darwin';
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      ...(mac ? [{ role: 'appMenu' }] : []),
+      ...(mac
+        ? [
+            {
+              role: 'appMenu',
+              submenu: [
+                { role: 'about' },
+                ...(canBeDefault() ? [{ type: 'separator' }, { label: 'Make Default App…', click: () => void offerDefaultApp() }] : []),
+                { type: 'separator' },
+                { role: 'services' },
+                { type: 'separator' },
+                { role: 'hide' },
+                { role: 'hideOthers' },
+                { role: 'unhide' },
+                { type: 'separator' },
+                { role: 'quit' },
+              ],
+            },
+          ]
+        : []),
       {
         label: 'File',
         submenu: [
@@ -299,9 +423,21 @@ app.whenReady().then(async () => {
     dialog.showErrorBox('Universal Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
     return app.quit();
   }
+  if (!existsSync(keysCheckedFile())) {
+    shellKeys = await readShellKeys();
+    try {
+      writeFileSync(keysCheckedFile(), '');
+    } catch {
+      // Looked for again next time, that's all.
+    }
+  }
   // electron [flags] desktop/main.js [folder]: the folder is the argument that is neither a flag nor this script.
   const arg = process.argv.slice(1).find((a) => !a.startsWith('-') && path.resolve(a) !== import.meta.filename);
   try {
+    if (launchFile) {
+      await openFile(launchFile, false);
+      return;
+    }
     if (!arg && app.isPackaged) {
       const last = lastFolder();
       if (last) await openFolder(last);
@@ -317,6 +453,10 @@ app.whenReady().then(async () => {
   } catch (e) {
     dialog.showErrorBox('Universal Docs', `The app could not start: ${e.message ?? e}`);
     app.quit();
+  } finally {
+    started = true;
+    // The installed app offers once to open the standard formats too.
+    if (current && canBeDefault() && !existsSync(defaultAskedFile())) void offerDefaultApp(true);
   }
 });
 

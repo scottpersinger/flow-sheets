@@ -3,6 +3,8 @@
 // reference. An undo step records whole slides before and after, which keeps the patch set tiny.
 import { migrateArcs, type Deck, type Slide, type ThemeId } from '../../../shared/deck.ts';
 import { reconnectLines } from '../../../shared/lines.ts';
+import { newPptxGap } from '../../../shared/pptxFormat.ts';
+import { TransactionRefused } from '../state/store.ts';
 
 export type DeckPatch =
   | { k: 'theme'; before: ThemeId; after: ThemeId }
@@ -102,6 +104,11 @@ export class DeckStore<M = unknown> {
   private undoStack: DeckUndoEntry<M>[] = [];
   private redoStack: DeckUndoEntry<M>[] = [];
   private listeners = new Set<() => void>();
+  /**
+   * When set, every change is checked before it takes effect (the deck before and after): a string refuses it
+   * (the reason), the change is undone and transact throws TransactionRefused. A PowerPoint file's (desktop app).
+   */
+  guard: ((before: Deck, after: Deck) => string | null) | null = null;
 
   constructor(deck: Deck) {
     this.deck = migrateArcs(deck);
@@ -124,9 +131,15 @@ export class DeckStore<M = unknown> {
 
   /** Run a mutation as one undoable step (merged into the previous step when both share a group). */
   transact(fn: (tx: DeckTx) => void, meta?: { before?: M; after?: M }, group?: string): boolean {
+    const prev = this.deck;
     const tx = new DeckTx(this);
     fn(tx);
     if (!tx.patches.length) return false;
+    const refused = this.guard?.(prev, this.deck);
+    if (refused) {
+      this.deck = prev;
+      throw new TransactionRefused(refused);
+    }
     const top = this.undoStack[this.undoStack.length - 1];
     if (group && top?.group === group && !this.redoStack.length) {
       top.patches.push(...tx.patches);
@@ -171,3 +184,6 @@ export class DeckStore<M = unknown> {
     return e;
   }
 }
+
+/** The guard of a PowerPoint file (shared/pptxFormat.ts): refuses adding what the file can only approximate. */
+export const pptxGuard = (before: Deck, after: Deck): string | null => newPptxGap(before, after);

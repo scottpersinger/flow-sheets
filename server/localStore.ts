@@ -1,36 +1,53 @@
 // The desktop app's storage: a folder on the user's disk instead of the server's own data directory. The
 // files in the folder are the library. Markdown and CSV files are read and written as the plain text they
-// are; spreadsheets, presentations and documents are JSON files with their own extensions; every other file
-// is listed as a stored file (PDFs, images and videos are shown, Office files converted, the rest only
-// listed), and its directories are the library's folders. SQLite still
+// are, and Excel, PowerPoint and Word files as Office files (imported when read, written back with the
+// exports); a document that does not fit in its Office file is a JSON file with the app's own extension;
+// every other file is listed as a stored file (PDFs, images and videos are shown, older .xls files
+// converted, the rest only listed), and its directories are the library's folders. SQLite still
 // holds the metadata (ids, branch links), brought in line with a directory each time it is listed, so
 // everything built on SheetStore and FileStore works as is.
-import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
-import { mkdir, readdir, rename, stat } from 'node:fs/promises';
+import { existsSync, mkdirSync, openSync, readdirSync, readSync, closeSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
+import { copyFile, mkdir, readdir, rename, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { newCsvDoc, type CsvDoc } from '../shared/csv.ts';
 import { newMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
 import { joinFolder, parentFolder } from '../shared/folders.ts';
-import { fileTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile } from '../shared/types.ts';
+import type { Deck } from '../shared/deck.ts';
+import type { Doc } from '../shared/doc.ts';
+import { docxProblem } from '../shared/docxFormat.ts';
+import { pptxGaps } from '../shared/pptxFormat.ts';
+import { fileTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile, type Workbook } from '../shared/types.ts';
+import { xlsxProblem } from '../shared/xlsxFormat.ts';
 import type { DB } from './db.ts';
+import { docDocx } from './docxExport.ts';
+import { importDocx } from './docxImport.ts';
+import { deckPptx, type ImageSource } from './export.ts';
+import { workbookXlsx } from './export.ts';
+import { importPptx } from './pptxImport.ts';
 import { FileStore, renamed, splitName, type StoredFileRow } from './files.ts';
 import { byName, SEARCH_LIMIT, type Folders } from './folders.ts';
-import { SheetStore, writeAtomic, type SheetRow, type Stored } from './sheets.ts';
+import { SheetStore, writeAtomic, type SheetFormat, type SheetRow, type Stored } from './sheets.ts';
+import { importXlsx } from './xlsxImport.ts';
 
 /** Extensions of the files that open in an editor. */
-const DOC_TYPES: Record<string, { kind: DocKind; format: 'csv' | null }> = {
+const DOC_TYPES: Record<string, { kind: DocKind; format: SheetFormat | null }> = {
   '.md': { kind: 'markdown', format: null },
   '.markdown': { kind: 'markdown', format: null },
   '.csv': { kind: 'sheet', format: 'csv' },
+  '.xlsx': { kind: 'sheet', format: 'xlsx' },
+  '.pptx': { kind: 'deck', format: 'pptx' },
+  '.docx': { kind: 'doc', format: 'docx' },
   '.ffsheet': { kind: 'sheet', format: null },
   '.ffslides': { kind: 'deck', format: null },
   '.ffdoc': { kind: 'doc', format: null },
 };
-/** The extension a new document of each kind gets. */
+/** The extension of a document of each kind in the app's own format. */
 const NEW_EXT: Record<DocKind, string> = { sheet: '.ffsheet', deck: '.ffslides', doc: '.ffdoc', markdown: '.md' };
+/** The extension of a document's file, by its kind and format. */
+const extFor = (kind: DocKind, format: SheetFormat | null) => (format ? `.${format}` : NEW_EXT[kind]);
 
-/** Other files that are listed: previews for PDFs, images and videos, and Office files, which can be converted. */
+/** Other files that are listed: previews for PDFs, images and videos, and older Excel files, which can be converted. */
 const FILE_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.png': 'image/png',
@@ -38,10 +55,7 @@ const FILE_TYPES: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.xls': 'application/vnd.ms-excel',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   ...Object.fromEntries(Object.entries(VIDEO_TYPES).map(([ext, type]) => [`.${ext}`, type])),
 };
 
@@ -238,12 +252,22 @@ export class LocalFolder {
     return rel;
   }
 
+  private trashPath(rel: string): string {
+    return path.join(this.trashDir, `${new Date().toISOString().replace(/[:.]/g, '-')} ${path.basename(rel)}`);
+  }
+
   /** Move a deleted file out of the folder, into the trash directory. */
   async trash(rel: string): Promise<void> {
     const from = this.abs(rel);
     if (!existsSync(from)) return;
     await mkdir(this.trashDir, { recursive: true });
-    await rename(from, path.join(this.trashDir, `${new Date().toISOString().replace(/[:.]/g, '-')} ${path.basename(rel)}`));
+    await rename(from, this.trashPath(rel));
+  }
+
+  /** Put a copy of a file as it is now in the trash directory, before it is written over. */
+  async keepCopy(rel: string): Promise<void> {
+    await mkdir(this.trashDir, { recursive: true });
+    await copyFile(this.abs(rel), this.trashPath(rel));
   }
 }
 
@@ -301,9 +325,38 @@ export class LocalFolders implements Folders {
   }
 }
 
+/** True if the file starts as a zip archive does (an Office file), false if not or if it cannot be read. */
+function isZip(file: string): boolean {
+  try {
+    const fd = openSync(file, 'r');
+    try {
+      const head = Buffer.alloc(2);
+      return readSync(fd, head, 0, 2, 0) === 2 && head.toString('latin1') === 'PK';
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 export class LocalSheetStore extends SheetStore {
   private folder: LocalFolder;
   private baseDir: string;
+  /** The modification time of each file as this store last wrote it: one with another time was written by something else. */
+  private written = new Map<string, string>();
+  /** What each Office file read holds that writing it back would remove (what its import dropped, and what its export approximates). */
+  private lost = new Map<string, string[]>();
+  /**
+   * Where the pictures of PowerPoint and Word files go when they are read (stored once however often the file
+   * is opened), and where they come from when one is written. Set by the app, which has the image store.
+   */
+  media: { store(type: string, data: Buffer): Promise<string>; source: ImageSource } | null = null;
+
+  private get pictures(): NonNullable<LocalSheetStore['media']> {
+    if (!this.media) throw new Error('No image store for PowerPoint and Word files');
+    return this.media;
+  }
 
   /** `dataDir` holds what does not belong in the user's folder (branch snapshots). */
   constructor(db: DB, folder: LocalFolder, dataDir: string) {
@@ -408,20 +461,62 @@ export class LocalSheetStore extends SheetStore {
     return this.folder.abs(file);
   }
 
-  protected override newFile(_id: string, kind: DocKind, format: 'csv' | null, title: string, folder: string): { file: string; title: string } {
-    const file = this.folder.freePath(folder, title, format === 'csv' ? '.csv' : NEW_EXT[kind]);
+  protected override newFile(_id: string, kind: DocKind, format: SheetFormat | null, title: string, folder: string): { file: string; title: string } {
+    const file = this.folder.freePath(folder, title, extFor(kind, format));
     return { file, title: titleOf(file) };
   }
 
-  protected override encode(file: string, doc: Stored): string {
+  /** Documents are Office files whenever they fit in one, so the app's own formats stay out of sight. */
+  protected override richFormat(kind: DocKind, doc: Stored): SheetFormat | null {
+    if (kind === 'sheet') return xlsxProblem(doc as Workbook) ? null : 'xlsx';
+    if (kind === 'deck') return pptxGaps(doc as Deck).length ? null : 'pptx';
+    if (kind === 'doc') return docxProblem(doc as Doc) ? null : 'docx';
+    return null;
+  }
+
+  /** Only what an Office file written by something else holds counts: the app's own writing lost nothing more. */
+  protected override notKept(r: SheetRow): string[] | undefined {
+    return r.format && r.format !== 'csv' && this.written.get(r.file) !== r.updated_at ? this.lost.get(r.file) : undefined;
+  }
+
+  protected override async encode(file: string, doc: Stored): Promise<string | Buffer> {
     const type = DOC_TYPES[extOf(file)];
     if (type?.kind === 'markdown') return (doc as MarkdownDoc).text;
     if (type?.format === 'csv') return (doc as CsvDoc).csv;
+    if (type?.format) {
+      // The first time an Office file made elsewhere is written over, a copy of it as it was is kept (writing
+      // drops what the app does not read). A file that was something else just before (a CSV file being
+      // converted) is not one.
+      if (this.written.get(file) !== this.folder.mtime(file) && isZip(this.folder.abs(file))) await this.folder.keepCopy(file);
+      if (type.format === 'xlsx') return workbookXlsx(doc as Workbook, titleOf(file));
+      if (type.format === 'pptx') return deckPptx(doc as Deck, titleOf(file), this.pictures.source);
+      return docDocx(doc as Doc, titleOf(file), async (src) => {
+        const img = await this.pictures.source.stored(src);
+        return img && { type: img.type, data: img.bytes };
+      });
+    }
     return JSON.stringify(doc);
   }
 
-  protected override decode(file: string, text: string): Stored {
+  protected override async decode(file: string, data: Buffer): Promise<Stored> {
     const type = DOC_TYPES[extOf(file)];
+    if (type?.format === 'xlsx') {
+      const { workbook, lost } = await importXlsx(data);
+      this.lost.set(file, lost);
+      return workbook;
+    }
+    // What the import reports is what it dropped; what the export approximates is lost on saving too.
+    if (type?.format === 'pptx') {
+      const { deck, warnings } = await importPptx(data, (t, d) => this.pictures.store(t, d));
+      this.lost.set(file, [...warnings, ...pptxGaps(deck)]);
+      return deck;
+    }
+    if (type?.format === 'docx') {
+      const { doc, warnings } = await importDocx(data, (t, d) => this.pictures.store(t, d));
+      this.lost.set(file, warnings);
+      return doc;
+    }
+    const text = data.toString('utf8');
     if (type?.kind === 'markdown') return newMarkdownDoc(text);
     if (type?.format === 'csv') return newCsvDoc(text);
     return JSON.parse(text) as Stored;
@@ -431,17 +526,20 @@ export class LocalSheetStore extends SheetStore {
     return path.join(this.baseDir, `${id}.json`);
   }
 
+  /** Called right after the store writes a file, so the time is the one of its own writing. */
   protected override stamp(file: string): string {
-    return this.folder.mtime(file) ?? new Date().toISOString();
+    const mtime = this.folder.mtime(file) ?? new Date().toISOString();
+    this.written.set(file, mtime);
+    return mtime;
   }
 
   protected override async removeFile(r: SheetRow): Promise<void> {
     await this.folder.trash(r.file);
   }
 
-  /** The format is the extension: a CSV file that becomes a native spreadsheet is renamed to match. */
-  protected override setFormat(r: SheetRow, format: 'csv' | null): void {
-    const want = format === 'csv' ? '.csv' : NEW_EXT.sheet;
+  /** The format is the extension: a CSV file that becomes an Excel file, say, is renamed to match. */
+  protected override setFormat(r: SheetRow, format: SheetFormat | null): void {
+    const want = extFor(r.kind, format);
     if (extOf(r.file) !== want) this.moveFile(r, this.folder.freePath(r.folder, r.title, want));
     super.setFormat(r, format);
   }
@@ -449,6 +547,11 @@ export class LocalSheetStore extends SheetStore {
   /** Move the document's file; its title and folder follow from where it ends up. */
   private moveFile(r: SheetRow, to: string): void {
     renameSync(this.folder.abs(r.file), this.folder.abs(to));
+    // A move keeps the file's time: what is known of it moves with it.
+    for (const known of [this.written, this.lost] as Map<string, unknown>[]) {
+      if (known.has(r.file)) known.set(to, known.get(r.file));
+      known.delete(r.file);
+    }
     r.file = to;
     r.title = titleOf(to);
     r.folder = parentFolder(to);
@@ -524,7 +627,8 @@ export class LocalFileStore extends FileStore {
     }
     if (adoptOnly) return;
     // A file name holds no folder: such a row is left over from a version that kept the whole path there.
-    for (const [rel, r] of byRel) if (r.filename.includes('/') || (!seen.has(rel) && !existsSync(this.folder.abs(rel)))) this.db.prepare('DELETE FROM stored_files WHERE id = ?').run(r.id);
+    // One of a kind that is now a document (Excel files were stored files once) is listed as the document.
+    for (const [rel, r] of byRel) if (r.filename.includes('/') || extOf(r.filename) in DOC_TYPES || (!seen.has(rel) && !existsSync(this.folder.abs(rel)))) this.db.prepare('DELETE FROM stored_files WHERE id = ?').run(r.id);
   }
 
   override async search(ownerId: string, text: string): Promise<StoredFile[]> {

@@ -196,7 +196,7 @@ function xlsxValue(engine: Engine, tab: Tab, r: number, c: number, raw: string):
   return v;
 }
 
-/** The workbook as an Excel file: values, formulas, styles, widths, heights and frozen panes. */
+/** The workbook as an Excel file: values, formulas, styles, widths, heights, frozen panes and the filtered range. */
 export async function workbookXlsx(wb: Workbook, title: string): Promise<Buffer> {
   const engine = new Engine(wb);
   const book = new ExcelJS.Workbook();
@@ -235,6 +235,9 @@ export async function workbookXlsx(wb: Workbook, title: string): Promise<Buffer>
     for (const [c, px] of Object.entries(tab.colWidths)) ws.getColumn(Number(c) + 1).width = Math.max(1, (px - 5) / 7);
     for (const [r, px] of Object.entries(tab.rowHeights)) ws.getRow(Number(r) + 1).height = (px * 72) / 96;
     if (tab.frozenRows || tab.frozenCols) ws.views = [{ state: 'frozen', xSplit: tab.frozenCols ?? 0, ySplit: tab.frozenRows ?? 0 }];
+    // The filtered range, without its criteria (as the import reads it).
+    const f = tab.filter;
+    if (f) ws.autoFilter = { from: { row: f.r1 + 1, column: f.c1 + 1 }, to: { row: f.r2 + 1, column: f.c2 + 1 } };
   }
   return Buffer.from(await book.xlsx.writeBuffer());
 }

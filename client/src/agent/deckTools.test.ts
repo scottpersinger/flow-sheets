@@ -4,6 +4,8 @@ import { newDeck, slideContent, slideTitle, type TextElement } from '../../../sh
 import { DeckController } from '../deck/controller.ts';
 import { confirmationFor, runClientTool, type ClientToolEnv } from './clientTools.ts';
 import { keepDeckPictures } from './deckTools.ts';
+import { pptxGuard } from '../deck/store.ts';
+import { lockedGuard } from '../state/store.ts';
 
 function setup() {
   const deck = new DeckController(newDeck(), async () => {});
@@ -335,5 +337,29 @@ describe('pictures from the web on a slide', () => {
       throw new Error('The server answered 403.');
     });
     await expect(failing).rejects.toThrow('The picture at https://logos.example/openai.png could not be fetched (The server answered 403.) Use another picture');
+  });
+});
+
+describe('PowerPoint files (desktop app)', () => {
+  it('take plain changes, but refuse what a PowerPoint file only approximates and say to keep it as a presentation of the app', async () => {
+    const { deck, call } = setup();
+    deck.store.guard = pptxGuard;
+    await call('update_slide', { slide: 1, background: '#123456' });
+    expect(deck.deck.slides[0].bg).toBe('#123456');
+    await expect(call('update_slide', { slide: 1, background: 'linear-gradient(90deg, #ff0000, #0000ff)' })).rejects.toThrow(/PowerPoint file.*gradient fills.*Universal Docs presentation/s);
+    expect(deck.deck.slides[0].bg).toBe('#123456');
+  });
+
+  it('refuse every change until the user allows editing, and the user is asked with a retry', async () => {
+    const { deck, call } = setup();
+    deck.store.guard = lockedGuard;
+    await expect(call('update_slide', { slide: 1, notes: 'x' })).rejects.toThrow(/read-only until the user allows editing/);
+    let retry: (() => void) | null = null;
+    deck.onRefused = (_reason, r) => (retry = r);
+    deck.run((tx) => tx.updateSlide(0, (sl) => ({ ...sl, notes: 'mine' })));
+    expect(deck.deck.slides[0].notes).toBeUndefined();
+    deck.store.guard = pptxGuard;
+    retry!();
+    expect(deck.deck.slides[0].notes).toBe('mine');
   });
 });

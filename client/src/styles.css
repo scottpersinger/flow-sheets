@@ -1443,6 +1443,19 @@ textarea {
   white-space: nowrap;
   cursor: default;
 }
+.modal-list-item {
+  display: block;
+  margin: 2px 0 2px 12px;
+}
+.modal-list-item::before {
+  content: '• ';
+}
+.format-chip.locked {
+  color: #8a5a00;
+  background: #fdf1d8;
+  border: 0;
+  cursor: pointer;
+}
 .branch-chip a {
   color: inherit;
   font-weight: 500;

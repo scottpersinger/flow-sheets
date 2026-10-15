@@ -20,7 +20,7 @@ import { markdownConfirmationFor, markdownOutline, markdownToolProblem, runMarkd
 import type { MarkdownController } from '../markdown/controller.ts';
 import { docOutline } from '../../../shared/agent/docRead.ts';
 import type { DocController } from '../doc/controller.ts';
-import { TransactionRefused } from '../state/store.ts';
+import { EDIT_NOT_ALLOWED, TransactionRefused, xlsxGuard } from '../state/store.ts';
 import { withFilePictures } from './filePictures.ts';
 import { IMAGE_TOOLS, replacesImageFile, runImageTool, type ImageToolEnv } from './imageTools.ts';
 import { ToolError } from './toolError.ts';
@@ -301,7 +301,18 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     try {
       return ctl.runAgent(env.group, fn);
     } catch (e) {
-      // A CSV file refuses what CSV cannot store (see csvGuard); converting it is the user's decision.
+      // A CSV or Excel file refuses what it cannot store (see csvGuard, xlsxGuard), and an Excel file holding
+      // things the app cannot keep refuses everything until the user allows editing it: their decisions.
+      if (e instanceof TransactionRefused && e.message === EDIT_NOT_ALLOWED) {
+        throw new ToolError(
+          'Nothing was changed: this Excel file holds things the app cannot keep (such as charts, borders or comments), so it is read-only until the user allows editing it, which removes those from the file. Tell the user, and that they allow it with the "Read-only" button next to its name; continue only after they have.',
+        );
+      }
+      if (e instanceof TransactionRefused && ctl.store.guard === xlsxGuard) {
+        throw new ToolError(
+          `Nothing was changed: this is an Excel file, which cannot hold ${e.message.toLowerCase()}. Tell the user that this needs the file kept as a Universal Docs spreadsheet instead of an Excel file (they are offered that when they make such a change themselves), and continue only after they have.`,
+        );
+      }
       if (e instanceof TransactionRefused) {
         throw new ToolError(
           `Nothing was changed: this file is a CSV file, which can only hold plain cell values, and this needs ${e.message.toLowerCase()}. Tell the user it has to be converted to a spreadsheet first (File → Convert to spreadsheet), and continue only after they have converted it.`,

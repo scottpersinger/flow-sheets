@@ -21,6 +21,9 @@ import { MOD } from '../commands.ts';
 import { DocIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
+import { useOfficeFile } from '../components/OfficeFile.tsx';
+import { lockedGuard } from '../state/store.ts';
+import { docxGuard } from '../doc/store.ts';
 import { DocController, useDocController } from '../doc/controller.ts';
 import { DocEditor, DocPrint } from '../doc/DocEditor.tsx';
 import { PageThumbnails } from '../doc/PageThumbnails.tsx';
@@ -56,7 +59,7 @@ function docToHtml(ctl: DocController, title: string): string {
 
 export function DocPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: DocController; sync: RevisionSync<Doc> } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; notKept?: string[]; ctl: DocController; sync: RevisionSync<Doc> } | { error: string } | null>(null);
   const { docFailed } = useAgent();
 
   useEffect(() => {
@@ -66,19 +69,30 @@ export function DocPage() {
     setState(null);
     api
       .getDoc(id!)
-      .then(({ meta, doc }) => {
+      .then(({ meta, doc, notKept }) => {
         if (cancelled) return;
         // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
         const sync = new RevisionSync<Doc>(meta.id, meta.updatedAt, {
           save: (d, rev) => api.saveDoc(meta.id, d, rev),
           load: async () => {
             const latest = await api.getDoc(meta.id);
+            if (ctl) {
+              // The newer version is put in place as a change, which the guard must let through; then the
+              // guard of its format applies. A Word file not yet allowed editing stays read-only.
+              const c = ctl;
+              const locked = c.store.guard === lockedGuard && latest.meta.format === meta.format;
+              c.store.guard = null;
+              setTimeout(() => (c.store.guard = locked ? lockedGuard : guardFor(latest.meta, undefined)));
+            }
             return { meta: latest.meta, doc: latest.doc };
           },
         });
         ctl = new DocController(doc, sync.save);
         stopSync = sync.attach(ctl);
-        setState({ meta, ctl, sync });
+        // A Word file only takes the changes it can hold, and none while it waits for the user's
+        // yes to removing what the app cannot keep (useOfficeFile).
+        ctl.store.guard = guardFor(meta, notKept);
+        setState({ meta, notKept, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -107,7 +121,13 @@ export function DocPage() {
       </div>
     );
   }
-  return <DocWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
+  return <DocWorkbench key={state.meta.id} initialMeta={state.meta} initialNotKept={state.notKept} ctl={state.ctl} sync={state.sync} />;
+}
+
+/** The guard of the file's format (desktop app): what a Word file cannot hold, or everything until editing is allowed. */
+function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
+  if (meta.format !== 'docx') return null;
+  return notKept?.length ? lockedGuard : docxGuard;
 }
 
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'link'; initial: string } | { kind: 'pageSetup' } | { kind: 'docStyle' } | null;
@@ -125,7 +145,7 @@ function loadShowThumbs(): boolean {
   }
 }
 
-function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: DocController; sync: RevisionSync<Doc> }) {
+function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: DocController; sync: RevisionSync<Doc> }) {
   useDocController(ctl);
   useDocFonts(ctl.doc);
   useFavicon('doc');
@@ -189,6 +209,27 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  const office = useOfficeFile({
+    meta,
+    initialNotKept,
+    own: 'document',
+    allow: () => (ctl.store.guard = docxGuard),
+    keepOwn: async () => {
+      await ctl.saver.flush();
+      const { meta: kept } = await api.convertDoc(meta.id);
+      // Keeping it is a new revision with the same content: the change that asked for it saves on top of it.
+      sync.rev = kept.updatedAt;
+      ctl.store.guard = null;
+      setMeta(kept);
+    },
+    notify,
+  });
+  useEffect(() => {
+    ctl.onRefused = office.onRefused;
+    return () => {
+      ctl.onRefused = null;
+    };
+  });
   // The file was saved somewhere else (another tab, the ChatGPT plugin) and the editor took that version.
   useEffect(
     () =>
@@ -452,6 +493,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
               }}
             />
             <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
+            {office.chip}
           </div>
           <nav className="menubar" onMouseDown={(e) => e.stopPropagation()}>
             {menus.map((m) => (
@@ -516,7 +558,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
             if (e.dataTransfer.types.includes('Files')) e.preventDefault();
           }}
         >
-          <DocEditor ctl={ctl} onImageFiles={(files) => void addImageFiles(files)} onScale={setPageScale} onEditImage={editImage} />
+          <DocEditor ctl={ctl} readOnly={office.locked} onImageFiles={(files) => void addImageFiles(files)} onScale={setPageScale} onEditImage={editImage} />
         </div>
         {/* Pages have a size to zoom; a pageless document always fills the window. */}
         {ctl.pageSetup().mode === 'pages' && (
@@ -566,6 +608,7 @@ function DocWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl:
           onClose={() => setDialog(null)}
         />
       )}
+      {office.dialogs}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

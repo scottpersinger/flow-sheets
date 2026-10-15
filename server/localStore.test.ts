@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,14 @@ import { buildApp, LOCAL_COOKIE } from './app.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { LISTED_EXTS } from './localStore.ts';
 import { listable, parseRecents, recentFiles } from './recents.ts';
+import { importXlsx } from './xlsxImport.ts';
+import { importPptx } from './pptxImport.ts';
+import { newId, type Deck, type TextElement } from '../shared/deck.ts';
+import { docText, docNode, type Doc } from '../shared/doc.ts';
+import { markdownToDoc } from '../shared/docMarkdown.ts';
+import JSZip from 'jszip';
+import { docDocx } from './docxExport.ts';
+import { importDocx } from './docxImport.ts';
 
 // The desktop app's storage: a folder of real files instead of the data directory (server/localStore.ts).
 let folder: string;
@@ -109,7 +118,7 @@ describe('a mounted folder', () => {
     expect(readFileSync(at('notes.md'), 'utf8')).toBe('edited in another program');
   });
 
-  it('keeps a CSV file as CSV, and renames it when it becomes a spreadsheet', async () => {
+  it('keeps a CSV file as CSV, and makes it an Excel file when it becomes a spreadsheet', async () => {
     const [meta] = await sheets();
     const { workbook } = (await call<{ workbook: Workbook }>('GET', `/api/sheets/${meta.id}`)).body;
     workbook.tabs[0].cells.B2 = { v: '4' };
@@ -117,11 +126,13 @@ describe('a mounted folder', () => {
     expect(readFileSync(at('reports', 'stock.csv'), 'utf8')).toBe('name,qty\r\napple,4\r\n');
 
     const converted = await call<{ sheet: SheetMeta }>('POST', `/api/sheets/${meta.id}/convert`, {});
-    expect(converted.body.sheet.format).toBeUndefined();
+    expect(converted.body.sheet.format).toBe('xlsx');
     expect(existsSync(at('reports', 'stock.csv'))).toBe(false);
-    expect((JSON.parse(readFileSync(at('reports', 'stock.ffsheet'), 'utf8')) as Workbook).tabs[0].cells.B2.v).toBe('4');
+    expect((await importXlsx(readFileSync(at('reports', 'stock.xlsx')))).workbook.tabs[0].cells.B2.v).toBe('4');
     // Same document, same place in the list.
-    expect((await sheets()).map((s) => [s.id, s.title, s.folder, s.format])).toEqual([[meta.id, 'stock', 'reports', undefined]]);
+    expect((await sheets()).map((s) => [s.id, s.title, s.folder, s.format])).toEqual([[meta.id, 'stock', 'reports', 'xlsx']]);
+    // Nothing of the CSV file was kept as an Excel file's original.
+    expect(existsSync(path.join(dataDir, 'trash'))).toBe(false);
   });
 
   it('creates new documents as files named by their title, without overwriting', async () => {
@@ -130,7 +141,7 @@ describe('a mounted folder', () => {
     expect(readFileSync(at('notes 2.md'), 'utf8')).toBe('second');
     const deck = await call<{ deck: SheetMeta }>('POST', '/api/decks', { title: 'Q3: kickoff', folder: 'reports' });
     expect([deck.body.deck.title, deck.body.deck.folder]).toEqual(['Q3 kickoff', 'reports']);
-    expect(existsSync(at('reports', 'Q3 kickoff.ffslides'))).toBe(true);
+    expect(existsSync(at('reports', 'Q3 kickoff.pptx'))).toBe(true);
     // Neither a title nor a folder can reach outside the mounted folder.
     const out = await call<{ doc: SheetMeta }>('POST', '/api/markdown', { title: '../../escape' });
     expect(out.body.doc.title).toBe('-..-escape');
@@ -218,6 +229,133 @@ describe('a mounted folder', () => {
     const up = await app.inject({ method: 'POST', url: '/api/files', headers: { 'content-type': 'application/pdf', 'x-filename': 'scan.pdf' }, payload: Buffer.from('%PDF-1.4 other') });
     expect((up.json() as { file: StoredFile }).file.filename).toBe('scan 2.pdf');
     expect(readFileSync(at('scan 2.pdf'), 'utf8')).toBe('%PDF-1.4 other');
+  });
+
+  it('opens an Excel file as a spreadsheet and saves it as one, keeping the original the first time', async () => {
+    const book = new ExcelJS.Workbook();
+    const ws = book.addWorksheet('Budget');
+    ws.getCell('A1').value = 'Item';
+    ws.getCell('A2').value = 'Rent';
+    ws.getCell('B2').value = 1200;
+    ws.getCell('B3').value = { formula: 'SUM(B2:B2)', result: 1200 };
+    ws.getCell('A1').border = { bottom: { style: 'thin' } };
+    ws.getCell('B2').note = 'Monthly';
+    writeFileSync(at('budget.xlsx'), Buffer.from(await book.xlsx.writeBuffer()));
+
+    const top = await library();
+    const meta = top.docs.find((d) => d.title === 'budget')!;
+    expect([meta.kind, meta.format]).toEqual(['sheet', 'xlsx']);
+    expect(top.files.some((f) => f.filename === 'budget.xlsx')).toBe(false);
+    type Loaded = { sheet: SheetMeta; workbook: Workbook; notKept?: string[] };
+    const loaded = (await call<Loaded>('GET', `/api/sheets/${meta.id}`)).body;
+    expect(loaded.workbook.tabs[0].cells.B2.v).toBe('1200');
+    // What saving would remove is said before anything is saved.
+    expect(loaded.notKept?.sort()).toEqual(['Cell borders', 'Comments']);
+
+    const trash = () => (existsSync(path.join(dataDir, 'trash')) ? readdirSync(path.join(dataDir, 'trash')) : []);
+    const before = trash();
+    loaded.workbook.tabs[0].cells.B2 = { v: '1300' };
+    expect((await call('PUT', `/api/sheets/${meta.id}`, { workbook: loaded.workbook, rev: loaded.sheet.updatedAt })).status).toBe(200);
+    const saved = (await importXlsx(readFileSync(at('budget.xlsx')))).workbook.tabs[0];
+    expect([saved.name, saved.cells.B2.v, saved.cells.B3.v]).toEqual(['Budget', '1300', '=SUM(B2:B2)']);
+    // The file as it was is in the trash, once.
+    const kept = trash().filter((f) => !before.includes(f));
+    expect(kept).toHaveLength(1);
+    expect((await importXlsx(readFileSync(path.join(dataDir, 'trash', kept[0])))).workbook.tabs[0].cells.B2.v).toBe('1200');
+
+    // The app's own writing lost nothing, so nothing is said when it opens again, and no other copy is kept.
+    const again = (await call<Loaded>('GET', `/api/sheets/${meta.id}`)).body;
+    expect(again.notKept).toBeUndefined();
+    again.workbook.tabs[0].cells.B2 = { v: '1400' };
+    await call('PUT', `/api/sheets/${meta.id}`, { workbook: again.workbook, rev: again.sheet.updatedAt });
+    expect(trash().filter((f) => !before.includes(f))).toHaveLength(1);
+  });
+
+  it('makes new spreadsheets Excel files, and one with a picture in a cell a spreadsheet of its own', async () => {
+    const created = (await call<{ sheet: SheetMeta }>('POST', '/api/sheets', { title: 'Plan' })).body.sheet;
+    expect(created.format).toBe('xlsx');
+    expect(existsSync(at('Plan.xlsx'))).toBe(true);
+    const { workbook } = (await call<{ workbook: Workbook }>('GET', `/api/sheets/${created.id}`)).body;
+    workbook.tabs[0].cells.A1 = { v: '', img: 'https://example.com/logo.png' };
+    const saved = (await call<{ sheet: SheetMeta }>('PUT', `/api/sheets/${created.id}`, { workbook })).body.sheet;
+    expect(saved.format).toBeUndefined();
+    expect(existsSync(at('Plan.xlsx'))).toBe(false);
+    expect((JSON.parse(readFileSync(at('Plan.ffsheet'), 'utf8')) as Workbook).tabs[0].cells.A1.img).toBe('https://example.com/logo.png');
+  });
+
+  it('opens a PowerPoint file as a presentation and saves it as one, storing its pictures once', async () => {
+    const { default: PptxGen } = await import('pptxgenjs');
+    const pres = new PptxGen();
+    pres.layout = 'LAYOUT_16x9';
+    const slide = pres.addSlide();
+    slide.addText('Quarterly review', { x: 1, y: 1, w: 8, h: 1, fontSize: 32 });
+    // A 1×1 PNG.
+    slide.addImage({ data: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', x: 1, y: 2.5, w: 1, h: 1 });
+    slide.addChart(pres.ChartType.bar, [{ name: 'Sales', labels: ['Q1', 'Q2'], values: [1, 2] }], { x: 4, y: 2.5, w: 4, h: 2 });
+    writeFileSync(at('review.pptx'), (await pres.write({ outputType: 'nodebuffer' })) as Buffer);
+
+    const meta = (await library()).docs.find((d) => d.title === 'review')!;
+    expect([meta.kind, meta.format]).toEqual(['deck', 'pptx']);
+    type Loaded = { meta: SheetMeta; deck: Deck; notKept?: string[] };
+    const loaded = (await call<Loaded>('GET', `/api/decks/${meta.id}`)).body;
+    expect(loaded.notKept).toEqual(['Charts were dropped.']);
+    const picture = loaded.deck.slides[0].elements.find((e) => e.type === 'image');
+    expect(picture && 'src' in picture && picture.src).toMatch(/^\/api\/images\//);
+    // Opening it again stores no picture again.
+    const images = () => readdirSync(path.join(dataDir, 'images')).length;
+    const stored = images();
+    await call('GET', `/api/decks/${meta.id}`);
+    expect(images()).toBe(stored);
+
+    const text = loaded.deck.slides[0].elements.find((e): e is TextElement => e.type === 'text')!;
+    text.paragraphs = [{ text: 'Annual review' }];
+    expect((await call('PUT', `/api/decks/${meta.id}`, { deck: loaded.deck, rev: loaded.meta.updatedAt })).status).toBe(200);
+    const saved = (await importPptx(readFileSync(at('review.pptx')), async () => '/api/images/00000000-0000-0000-0000-000000000000')).deck;
+    expect(saved.slides[0].elements.some((e) => e.type === 'text' && e.paragraphs.some((p) => p.text === 'Annual review'))).toBe(true);
+    expect(saved.slides[0].elements.some((e) => e.type === 'image')).toBe(true);
+    // The original, chart and all, was kept; opened again, the app's own file holds nothing it drops.
+    expect(readdirSync(path.join(dataDir, 'trash')).some((f) => f.endsWith(' review.pptx'))).toBe(true);
+    expect((await call<Loaded>('GET', `/api/decks/${meta.id}`)).body.notKept).toBeUndefined();
+  });
+
+  it('makes new presentations PowerPoint files, unless they have what PowerPoint files only approximate', async () => {
+    const plain = (await call<{ deck: SheetMeta }>('POST', '/api/decks', { title: 'Pitch' })).body.deck;
+    expect(plain.format).toBe('pptx');
+    expect(existsSync(at('Pitch.pptx'))).toBe(true);
+    const deck: Deck = { version: 1, theme: 'light', slides: [{ id: newId(), bg: 'linear-gradient(90deg, #ff0000, #0000ff)', elements: [] }] };
+    const fancy = (await call<{ deck: SheetMeta }>('POST', '/api/decks', { title: 'Fancy', deck })).body.deck;
+    expect(fancy.format).toBeUndefined();
+    expect(existsSync(at('Fancy.ffslides'))).toBe(true);
+  });
+
+  it('opens a Word file as a document and saves it as one, saying first what it would remove', async () => {
+    // A file made elsewhere: the app's own writing, with a table added, which the import flattens.
+    const zip = await JSZip.loadAsync(await docDocx(markdownToDoc('Dear team,\n\nSee below.'), 'letter', async () => null));
+    const xml = await zip.file('word/document.xml')!.async('string');
+    const table = '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+    zip.file('word/document.xml', xml.replace('<w:sectPr', `${table}<w:sectPr`));
+    writeFileSync(at('letter.docx'), await zip.generateAsync({ type: 'nodebuffer' }));
+
+    const meta = (await library()).docs.find((d) => d.title === 'letter')!;
+    expect([meta.kind, meta.format]).toEqual(['doc', 'docx']);
+    type Loaded = { meta: SheetMeta; doc: Doc; notKept?: string[] };
+    const loaded = (await call<Loaded>('GET', `/api/docs/${meta.id}`)).body;
+    expect(loaded.notKept).toEqual([expect.stringMatching(/^Tables were converted/)]);
+
+    const edited = markdownToDoc('Dear all,\n\nSee below.');
+    expect((await call('PUT', `/api/docs/${meta.id}`, { doc: edited, rev: loaded.meta.updatedAt })).status).toBe(200);
+    const saved = (await importDocx(readFileSync(at('letter.docx')), async () => '/api/images/00000000-0000-0000-0000-000000000000')).doc;
+    expect(docText(docNode(saved))).toContain('Dear all,');
+    expect((await call<Loaded>('GET', `/api/docs/${meta.id}`)).body.notKept).toBeUndefined();
+  });
+
+  it('makes new documents Word files, and one with a video a document of its own', async () => {
+    const plain = (await call<{ doc: SheetMeta }>('POST', '/api/docs', { title: 'Memo' })).body.doc;
+    expect(plain.format).toBe('docx');
+    expect(existsSync(at('Memo.docx'))).toBe(true);
+    const video = (await call<{ doc: SheetMeta }>('POST', '/api/docs', { title: 'Demo', doc: markdownToDoc('![Demo](https://www.youtube.com/watch?v=dQw4w9WgXcQ)') })).body.doc;
+    expect(video.format).toBeUndefined();
+    expect(existsSync(at('Demo.ffdoc'))).toBe(true);
   });
 
   it('renames a stored file on disk, keeping its extension and never taking a name in use', async () => {

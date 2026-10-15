@@ -19,6 +19,9 @@ import { isMac, MOD } from '../commands.ts';
 import { DeckIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
+import { useOfficeFile } from '../components/OfficeFile.tsx';
+import { lockedGuard } from '../state/store.ts';
+import { pptxGuard } from '../deck/store.ts';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { DeckController, useDeckController } from '../deck/controller.ts';
 import { DeckEditor } from '../deck/DeckEditor.tsx';
@@ -56,7 +59,7 @@ const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagNa
 
 export function DeckPage() {
   const { id } = useParams<{ id: string }>();
-  const [state, setState] = useState<{ meta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> } | { error: string } | null>(null);
+  const [state, setState] = useState<{ meta: SheetMeta; notKept?: string[]; ctl: DeckController; sync: RevisionSync<Deck> } | { error: string } | null>(null);
   const { deckFailed } = useAgent();
 
   useEffect(() => {
@@ -66,19 +69,30 @@ export function DeckPage() {
     setState(null);
     api
       .getDeck(id!)
-      .then(({ meta, deck }) => {
+      .then(({ meta, deck, notKept }) => {
         if (cancelled) return;
         // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
         const sync = new RevisionSync<Deck>(meta.id, meta.updatedAt, {
           save: (d, rev) => api.saveDeck(meta.id, d, rev),
           load: async () => {
             const latest = await api.getDeck(meta.id);
+            if (ctl) {
+              // The newer version is put in place as a change, which the guard must let through; then the
+              // guard of its format applies. A PowerPoint file not yet allowed editing stays read-only.
+              const c = ctl;
+              const locked = c.store.guard === lockedGuard && latest.meta.format === meta.format;
+              c.store.guard = null;
+              setTimeout(() => (c.store.guard = locked ? lockedGuard : guardFor(latest.meta, undefined)));
+            }
             return { meta: latest.meta, doc: latest.deck };
           },
         });
         ctl = new DeckController(deck, sync.save);
         stopSync = sync.attach(ctl);
-        setState({ meta, ctl, sync });
+        // A PowerPoint file only takes the changes it can hold, and none while it waits for the user's
+        // yes to removing what the app cannot keep (useOfficeFile).
+        ctl.store.guard = guardFor(meta, notKept);
+        setState({ meta, notKept, ctl, sync });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -107,12 +121,18 @@ export function DeckPage() {
       </div>
     );
   }
-  return <DeckWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
+  return <DeckWorkbench key={state.meta.id} initialMeta={state.meta} initialNotKept={state.notKept} ctl={state.ctl} sync={state.sync} />;
+}
+
+/** The guard of the file's format (desktop app): what a PowerPoint file cannot hold, or everything until editing is allowed. */
+function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
+  if (meta.format !== 'pptx') return null;
+  return notKept?.length ? lockedGuard : pptxGuard;
 }
 
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | null;
 
-function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> }) {
+function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: DeckController; sync: RevisionSync<Deck> }) {
   useDeckController(ctl);
   useDeckFonts(ctl.deck);
   useFavicon('deck');
@@ -164,6 +184,27 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  const office = useOfficeFile({
+    meta,
+    initialNotKept,
+    own: 'presentation',
+    allow: () => (ctl.store.guard = pptxGuard),
+    keepOwn: async () => {
+      await ctl.saver.flush();
+      const { meta: kept } = await api.convertDeck(meta.id);
+      // Keeping it is a new revision with the same content: the change that asked for it saves on top of it.
+      sync.rev = kept.updatedAt;
+      ctl.store.guard = null;
+      setMeta(kept);
+    },
+    notify,
+  });
+  useEffect(() => {
+    ctl.onRefused = office.onRefused;
+    return () => {
+      ctl.onRefused = null;
+    };
+  });
   // The file was saved somewhere else (another tab, the ChatGPT plugin) and the editor took that version.
   useEffect(
     () =>
@@ -483,6 +524,7 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
                   }}
                 />
                 <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
+                {office.chip}
               </div>
               <nav className="menubar" onMouseDown={(e) => e.stopPropagation()}>
                 {menus.map((m) => (
@@ -569,6 +611,7 @@ function DeckWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl
           onClose={() => setDialog(null)}
         />
       )}
+      {office.dialogs}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

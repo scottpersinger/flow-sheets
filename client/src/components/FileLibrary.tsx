@@ -40,6 +40,9 @@ export const KIND_NAMES: Record<LibraryKind, string> = { sheet: 'spreadsheet', d
 /** The Type column: a short label per kind (stored files show their file type). */
 export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title' | 'format'>): string {
   if (item.format === 'csv') return 'CSV';
+  if (item.format === 'xlsx') return 'Excel';
+  if (item.format === 'pptx') return 'PowerPoint';
+  if (item.format === 'docx') return 'Word';
   if (item.kind === 'file') {
     const ext = /\.([a-z0-9]+)$/i.exec(item.title)?.[1];
     return ext ? ext.toUpperCase() : 'File';

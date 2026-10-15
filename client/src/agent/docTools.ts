@@ -9,7 +9,8 @@ import { markdownToNodes } from '../../../shared/docMarkdown.ts';
 import { safeLinkUrl } from '../../../shared/links.ts';
 import { checkCellImage } from '../../../shared/types.ts';
 import type { DocController } from '../doc/controller.ts';
-import { ToolError } from './toolError.ts';
+import { refusedChange, ToolError } from './toolError.ts';
+import { TransactionRefused } from '../state/store.ts';
 
 export const DOC_TOOLS: ReadonlySet<string> = new Set(['read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text', 'format_text', 'format_blocks', 'insert_image', 'set_page_setup', 'set_doc_style']);
 
@@ -217,7 +218,14 @@ export function docConfirmationFor(call: ClientToolCall, doc: DocController | nu
 export function runDocTool(call: ClientToolCall, env: DocToolEnv): string {
   const i = call.input;
   const ctl = requireDoc(env);
-  const run = (fn: (tr: Transaction) => void) => ctl.runAgent(env.group, fn);
+  const run = (fn: (tr: Transaction) => void) => {
+    try {
+      return ctl.runAgent(env.group, fn);
+    } catch (e) {
+      if (e instanceof TransactionRefused) throw refusedChange(e.message, 'Word', 'Universal Docs document');
+      throw e;
+    }
+  };
 
   switch (call.name) {
     case 'read_doc':

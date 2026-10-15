@@ -165,7 +165,8 @@ export const api = {
   importCsv: (title: string, csv: string, folder?: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, csv, folder: folder || undefined }),
   /** Turn a CSV file into a native spreadsheet. */
   convertSheet: (id: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/convert`, {}),
-  getSheet: (id: string) => request<{ sheet: SheetMeta; workbook: Workbook }>('GET', `/api/sheets/${encodeURIComponent(id)}`),
+  /** `notKept`: what an Excel file made elsewhere holds that saving it would remove (desktop app). */
+  getSheet: (id: string) => request<{ sheet: SheetMeta; workbook: Workbook; notKept?: string[] }>('GET', `/api/sheets/${encodeURIComponent(id)}`),
   /** rev is the updatedAt the editor loaded; the server refuses (409) when the spreadsheet changed since. */
   saveSheet: (id: string, workbook: Workbook, rev?: string, keepalive = false) =>
     request<{ sheet: SheetMeta }>('PUT', `/api/sheets/${encodeURIComponent(id)}`, { workbook, rev }, keepalive ? { keepalive: true } : undefined),
@@ -184,7 +185,10 @@ export const api = {
   /** The user's copy of the Getting started guide; the first call makes it. */
   gettingStarted: () => request<{ deck: SheetMeta }>('POST', '/api/getting-started'),
   createDeck: (title: string, deck?: Deck, folder?: string) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck, folder: folder || undefined }),
-  getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck }>('GET', `/api/decks/${encodeURIComponent(id)}`),
+  /** `notKept`: what a PowerPoint file made elsewhere holds that saving it would remove (desktop app). */
+  getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck; notKept?: string[] }>('GET', `/api/decks/${encodeURIComponent(id)}`),
+  /** Keep a presentation stored as a PowerPoint file in the app's own format (desktop app). */
+  convertDeck: (id: string) => request<{ meta: SheetMeta }>('POST', `/api/decks/${encodeURIComponent(id)}/convert`, {}),
   /** rev is the updatedAt the editor loaded; the server refuses (409) when the presentation changed since. */
   saveDeck: (id: string, deck: Deck, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/decks/${encodeURIComponent(id)}`, { deck, rev }, keepalive ? { keepalive: true } : undefined),
@@ -197,7 +201,10 @@ export const api = {
 
   listDocs: () => request<{ docs: SheetMeta[] }>('GET', '/api/docs'),
   createDoc: (title: string, doc?: Doc, folder?: string) => request<{ doc: SheetMeta }>('POST', '/api/docs', { title, doc, folder: folder || undefined }),
-  getDoc: (id: string) => request<{ meta: SheetMeta; doc: Doc }>('GET', `/api/docs/${encodeURIComponent(id)}`),
+  /** `notKept`: what a Word file made elsewhere holds that saving it would remove (desktop app). */
+  getDoc: (id: string) => request<{ meta: SheetMeta; doc: Doc; notKept?: string[] }>('GET', `/api/docs/${encodeURIComponent(id)}`),
+  /** Keep a document stored as a Word file in the app's own format (desktop app). */
+  convertDoc: (id: string) => request<{ meta: SheetMeta }>('POST', `/api/docs/${encodeURIComponent(id)}/convert`, {}),
   /** rev is the updatedAt the editor loaded; the server refuses (409) when the document changed since. */
   saveDoc: (id: string, doc: Doc, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/docs/${encodeURIComponent(id)}`, { doc, rev }, keepalive ? { keepalive: true } : undefined),
