@@ -36,7 +36,7 @@ export default defineRailway(() => {
     replicas: { sfo: 1 },
   });
 
-  return project("flow-sheets", {
+  return project("universal-docs", {
     resources: [web],
   });
 });
