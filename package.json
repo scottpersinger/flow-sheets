@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "mcp-docs": "desktop/cli.js"
+    "mcp-docs-dev": "desktop/cli.js"
   },
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",

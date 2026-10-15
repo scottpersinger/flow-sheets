@@ -72,6 +72,9 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   (`POST /api/local/open`) has the server ask `main.js` (a message to its parent) to open the file's own
   folder instead; the new window starts at `/open?file=…&from=recents` (`pages/OpenLocalFile.tsx`), which
   finds the file (`GET /api/local/resolve`) and makes Recents the first breadcrumb (`client/src/listing.ts`).
+  The folder button left of the open folder's name (`LocalFolderMenu`) offers Open Folder… (`POST /api/local/choose-folder`,
+  `main.js`'s dialog) and Open file by path… (`POST /api/local/open-path`: a file or folder, absolute, `~/` or
+  relative to the open folder; one outside it has `main.js` open it, or the file's own folder).
   The desktop app is also an MCP server for agents on the same machine (Claude Code, say), named MCP Docs
   (`mcp-docs`; the hosted one is Universal Docs, `universal-docs`, from version 2): `server/localMcp.ts`
   serves the ChatGPT plugin's model tools (`plugin/server`, the newest version, no UI parts) over the open
@@ -79,7 +82,10 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   passing requests to whichever folder's server is running with a secret made for each run. Agents sign in
   with OAuth 2.1 (`desktop/mcpAuth.js`: registration, PKCE, refresh; the person allows each agent in a native
   dialog, not on the web page; tokens hashed in `mcp-auth.json` in the app's data folder), and File › Connect
-  an Agent (MCP)… shows the `claude mcp add` command and disconnects them. A file
+  an Agent (MCP)… shows the `claude mcp add` command and disconnects them. For Claude Code it is also a plugin,
+  `claude-plugin/` (the server and a skill, `skills/mcp-docs/SKILL.md`; the marketplace is `.claude-plugin/marketplace.json`
+  at the root), installed with the app by `npx mcp-docs` (`installer/`, its own npm package; keep its version,
+  the plugin's and the marketplace entry's with the desktop release they go with). A file
   the model opens, creates or imports is shown in the window (`FileHub.onShow`, a `show` message to `main.js`,
   a `universal-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
   `client/src/desktopBridge.ts`), which the tools act on when no id is given.

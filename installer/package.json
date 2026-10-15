@@ -1,0 +1,34 @@
+{
+  "name": "mcp-docs",
+  "version": "0.2.7",
+  "description": "Install the MCP Docs desktop app and its Claude Code plugin: office files on your Mac, edited by Claude Code.",
+  "type": "module",
+  "bin": {
+    "mcp-docs": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "claude-code-plugin",
+    "documents",
+    "office"
+  ],
+  "author": "Scott Persinger",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scottpersinger/universal-docs.git",
+    "directory": "installer"
+  },
+  "homepage": "https://github.com/scottpersinger/universal-docs#readme"
+}
