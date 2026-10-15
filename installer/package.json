@@ -1,5 +1,5 @@
 {
-  "name": "mcp-docs",
+  "name": "@scottpersinger/mcp-docs",
   "version": "0.2.7",
   "description": "Install the MCP Docs desktop app and its Claude Code plugin: office files on your Mac, edited by Claude Code.",
   "type": "module",
@@ -30,5 +30,8 @@
     "url": "git+https://github.com/scottpersinger/universal-docs.git",
     "directory": "installer"
   },
-  "homepage": "https://github.com/scottpersinger/universal-docs#readme"
+  "homepage": "https://github.com/scottpersinger/universal-docs#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }

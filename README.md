@@ -27,12 +27,12 @@ The same app, called MCP Docs on the desktop, runs on your machine with a folder
 To install the app and connect Claude Code to it in one step:
 
 ```
-npx mcp-docs
+npx @scottpersinger/mcp-docs
 ```
 
 That installs the latest app and the **mcp-docs** Claude Code plugin (in `claude-plugin/`: the app's MCP server and a
 skill on using it; the marketplace is `.claude-plugin/marketplace.json`). In Claude Code the plugin alone is
-`/plugin install mcp-docs --marketplace scottpersinger/universal-docs`. The installer is the `mcp-docs` npm package in
+`/plugin install mcp-docs --marketplace scottpersinger/universal-docs`. The installer is the `@scottpersinger/mcp-docs` npm package in
 `installer/`; publish it with `cd installer && npm publish` after the release it installs is on GitHub.
 
 To run it from a clone of this repository:

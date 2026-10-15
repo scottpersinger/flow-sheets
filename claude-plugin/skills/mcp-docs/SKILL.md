@@ -18,7 +18,7 @@ The server is the app itself, at `http://127.0.0.1:39217/mcp`. It only answers w
 
 - **Tools missing or failing to connect:** the app is probably not running. Start it with
   `open -a "MCP Docs"`, then ask the person to run `/mcp` and reconnect `mcp-docs` (or just retry the tool).
-- **Not installed** (`open -a` says it cannot find the app): ask the person to run `npx mcp-docs`, which
+- **Not installed** (`open -a` says it cannot find the app): ask the person to run `npx @scottpersinger/mcp-docs`, which
   installs the latest app and this plugin.
 - **Signing in:** the first time, `/mcp` signs in with OAuth. The app shows a dialog asking the person to
   allow the agent; nothing is entered in the browser. If a tool says the token was refused, have them run

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `npx mcp-docs`: install (or update) the MCP Docs desktop app from the latest GitHub release, then the
+// `npx @scottpersinger/mcp-docs`: install (or update) the MCP Docs desktop app from the latest GitHub release, then the
 // Claude Code plugin that connects Claude Code to it (the claude-plugin folder of the same repository,
 // whose marketplace is .claude-plugin/marketplace.json there).
 import { spawnSync } from 'node:child_process';
@@ -19,7 +19,7 @@ const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
 
 if (flag('help') || flag('h') || args.some((a) => !a.startsWith('--'))) {
-  console.log(`Usage: npx mcp-docs [--skip-app] [--skip-plugin]
+  console.log(`Usage: npx @scottpersinger/mcp-docs [--skip-app] [--skip-plugin]
 
 Installs the latest MCP Docs desktop app into /Applications (or ~/Applications), and the mcp-docs
 plugin into Claude Code, which connects Claude Code to the app. Run it again to update both.
@@ -135,7 +135,7 @@ function claude(argv) {
 function installPlugin() {
   say('\nClaude Code plugin');
   if (run('claude', ['--version']).status !== 0) {
-    say('  Claude Code was not found (the `claude` command). Install it, then run `npx mcp-docs --skip-app`.');
+    say('  Claude Code was not found (the `claude` command). Install it, then run `npx @scottpersinger/mcp-docs --skip-app`.');
     return false;
   }
   const listed = claude(['plugin', 'marketplace', 'list', '--json']);
