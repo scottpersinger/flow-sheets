@@ -1889,6 +1889,12 @@ button.agent-tool-label:hover {
   flex-direction: column;
   gap: 10px;
 }
+.agent-confirm > div:first-child {
+  /* A question may hold paragraphs: the spec of an app change. */
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow-y: auto;
+}
 .agent-confirm-actions {
   display: flex;
   justify-content: flex-end;

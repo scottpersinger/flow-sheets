@@ -120,6 +120,41 @@ describe('git for app-change jobs', () => {
     expect((await git.git(['rev-list', '--count', 'HEAD'])).trim()).not.toBe('1');
   });
 
+  it('puts back the files a failed job changed, and only those', async () => {
+    const dir = path.join(root, 'restore');
+    sh(root, ['clone', '-q', origin, dir]);
+    const git = new Git(dir);
+    writeFileSync(path.join(dir, 'mine.txt'), 'the user was working on this\n');
+    sh(dir, ['add', 'mine.txt']);
+    const original = readFileSync(path.join(dir, 'a.txt'), 'utf8');
+    const before = await git.snapshotTree();
+    writeFileSync(path.join(dir, 'a.txt'), 'broken\n');
+    writeFileSync(path.join(dir, 'made-by-job.txt'), 'x');
+    expect(await git.restoreTree(before)).toEqual(['a.txt', 'made-by-job.txt']);
+    expect(readFileSync(path.join(dir, 'a.txt'), 'utf8')).toBe(original);
+    expect(existsSync(path.join(dir, 'made-by-job.txt'))).toBe(false);
+    expect(readFileSync(path.join(dir, 'mine.txt'), 'utf8')).toBe('the user was working on this\n');
+    expect(sh(dir, ['diff', '--cached', '--name-only'])).toBe('mine.txt'); // the index is left as it was
+    expect(await git.restoreTree(before)).toEqual([]);
+  });
+
+  it('commits only the job files on the branch checked out', async () => {
+    const dir = path.join(root, 'local');
+    sh(root, ['clone', '-q', origin, dir]);
+    sh(dir, ['checkout', '-q', '-b', 'my-changes']);
+    const git = new Git(dir);
+    expect(await git.currentBranch()).toBe('my-changes');
+    writeFileSync(path.join(dir, 'staged-by-user.txt'), 'not the job\n');
+    sh(dir, ['add', 'staged-by-user.txt']);
+    writeFileSync(path.join(dir, 'a.txt'), 'from the job\n');
+    writeFileSync(path.join(dir, 'tool.txt'), 'new\n');
+    const commit = await git.commitFiles(['a.txt', 'tool.txt'], 'Add a tool\n\nRecord.\n');
+    expect(sh(dir, ['show', '--name-only', '--format=%an %s', commit]).split('\n').filter(Boolean)).toEqual(['Sheets Assistant Add a tool', 'a.txt', 'tool.txt']);
+    expect(sh(dir, ['diff', '--cached', '--name-only'])).toBe('staged-by-user.txt'); // still staged, not committed
+    sh(dir, ['checkout', '-q', '--detach']);
+    expect(await git.currentBranch()).toBeNull();
+  });
+
   it('reads the GitHub configuration from the environment', () => {
     expect(githubConfig({})).toBeNull();
     expect(githubConfig({ GITHUB_TOKEN: 't' })).toBeNull();

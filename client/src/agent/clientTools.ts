@@ -132,7 +132,10 @@ function nonEmptyCount(tab: Tab, rg: Range): number {
 export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null, markdown: MarkdownController | null = null): string | null {
   const i = call.input;
   if (call.name === 'request_app_change') {
-    return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.`;
+    // The spec is what the coding agent acts on, and the assistant may have written it after reading a web
+    // page or a document: show it, so the user approves the change itself and not only its name.
+    const spec = String(i.spec ?? '').trim();
+    return `Change the app: ${String(i.title ?? '')}? A coding agent will edit the app's source code, run its tests and restart it. This takes a few minutes.\n\nWhat it will be asked to do:\n${spec.length > 1200 ? `${spec.slice(0, 1200)}…` : spec}`;
   }
   if (replacesImageFile(call)) return 'Save the edited picture over the original file? The version before it is kept, and can be put back once.';
   if (DECK_TOOLS.has(call.name)) return deckConfirmationFor(call, deck);

@@ -242,6 +242,8 @@ describe('agent sheet tools', () => {
     const input = { title: 'Add set_filter_values', spec: 'Let the assistant choose which values a filter shows.' };
     expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, ctl)).toMatch(/Change the app: Add set_filter_values\?/);
     expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, null)).toMatch(/Change the app/);
+    // The user sees what the coding agent will be asked to do, not only the change's name.
+    expect(confirmationFor({ id: 'x', name: 'request_app_change', input }, ctl)).toContain('Let the assistant choose which values a filter shows.');
     expect(await call('request_app_change', input)).toMatchObject({ job_id: 'job-1', status: 'queued' });
   });
 

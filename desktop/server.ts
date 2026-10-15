@@ -31,6 +31,8 @@ const app = await buildApp({
     // already in the user's environment (main.js passes on the login shell's) is used.
     settingsDir: process.env.APP_DATA_DIR || undefined,
     env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: process.env.OPENAI_API_KEY, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY },
+    // Run from a git checkout (main.js decides), the assistant can change the app's own code.
+    appChanges: process.env.APP_CHANGES === '1',
   },
   blob: null,
 });
@@ -40,6 +42,9 @@ const address = app.server.address();
 const port = typeof address === 'object' && address ? address.port : 0;
 if (process.send) process.send({ port });
 else console.log(`Serving ${dir} at http://127.0.0.1:${port}`);
+// An app-change job (server/agent/worker.ts) inherits this environment and checks this port for the server
+// coming back after its restart, which main.js starts on the same port.
+process.env.PORT = String(port);
 
 const close = () => {
   app.close().then(
@@ -51,3 +56,11 @@ process.once('SIGTERM', close);
 process.once('SIGINT', close);
 // The window is gone: finish in-flight saves and stop.
 process.once('disconnect', close);
+// An app-change job has verified new code: exit code 75 asks main.js to start the server again, as
+// server/supervise.ts does for the hosted app.
+process.once('SIGUSR2', () => {
+  app.close().then(
+    () => process.exit(75),
+    () => process.exit(75),
+  );
+});

@@ -29,7 +29,7 @@ export default defineRailway(() => {
       LEGACY_HOSTS: "sheets.freeflow.im",
     },
     volumeMounts: {
-      "/data": volume("flow-sheets-data", { region: "sfo", sizeMB: 5000 }),
+      "/data": volume("universal-docs-data", { region: "sfo", sizeMB: 5000 }),
     },
     domains: ["docs.freeflow.im", "sheets.freeflow.im"],
     // A volume can only be attached to a single replica.

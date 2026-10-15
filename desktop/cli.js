@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `freeflow [folder]`: open the desktop app on a folder (the current directory by default).
+// `universal-docs [folder]`: open the desktop app on a folder (the current directory by default).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';

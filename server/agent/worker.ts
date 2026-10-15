@@ -5,6 +5,11 @@
 // with typecheck and tests → in production rebuild the client and ask the server to restart → publish the
 // change to GitHub as a pull request that is merged at once → record the change. Progress goes to the
 // agent_jobs table. Launched detached by JobRunner so it survives the server restarting.
+//
+// In the desktop app (a checkout run with `universal-docs`, LOCAL_DIR set) the same steps run against the
+// checkout: the client is rebuilt, desktop/main.js restarts the server, and the change is committed on the
+// `my-changes` branch when that is the one checked out (else it stays in the working tree). Nothing goes to
+// GitHub. A job that fails puts the files it changed back the way they were.
 import '../env.ts';
 import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { execFile } from 'node:child_process';
@@ -44,9 +49,14 @@ if (!job) {
 }
 
 const production = process.env.NODE_ENV === 'production';
-/** The server runs under server/supervise.ts and can be asked to restart. */
+/** The desktop app's server (desktop/server.ts) for a folder: the checkout is the user's own copy of the app. */
+const local = !!process.env.LOCAL_DIR;
+/** The server runs under server/supervise.ts (or desktop/main.js) and can be asked to restart. */
 const supervised = process.env.SUPERVISED === '1' && !!process.env.AGENT_SERVER_PID;
-const github = githubConfig();
+/** A local job never publishes, even with a GITHUB_TOKEN in the developer's .env. */
+const github = local ? null : githubConfig();
+/** The branch a local checkout keeps its own changes on; a job commits there when it is checked out. */
+const LOCAL_BRANCH = 'my-changes';
 const git = new Git(REPO_ROOT);
 
 const log = (line: string) => {
@@ -65,6 +75,10 @@ const RULES = `## Requirements
 
 const abort = new AbortController();
 const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
+/** The working tree before the job touched it, so a failure can put it back. */
+let before: string | null = null;
+/** Whether dist/client was rebuilt from the job's files (it is not in git, so a rollback rebuilds it). */
+let built = false;
 
 try {
   store.setStatus(jobId, 'coding', { pid: process.pid });
@@ -88,7 +102,7 @@ try {
   } else if (!git.hasRepo()) {
     throw new Error('The source tree is not a git repository and GITHUB_TOKEN is not set, so changes could not be recorded.');
   }
-  const before = await git.snapshotTree();
+  before = await git.snapshotTree();
 
   // 2. Make the change.
   let summary = '';
@@ -125,16 +139,17 @@ try {
   summary = summary || (job.kind === 'revert' ? `Reverted "${original!.title}".` : 'The change was made.');
   store.setStatus(jobId, 'verifying', { summary, files, patch, costUsd: cost });
 
-  // 5. Production: rebuild the client and restart the server so the change is live right away.
-  if (production) {
+  // 5. Rebuild the client and restart the server so the change is live right away.
+  if (production || local) {
     store.setStatus(jobId, 'building');
     log('Building the client…');
+    built = true;
     await run('npm', ['run', 'build'], { cwd: REPO_ROOT, maxBuffer: 16 * 1024 * 1024, signal: abort.signal });
     log('Build finished.');
   }
   if (supervised) {
     store.setStatus(jobId, 'restarting');
-    await restartServer();
+    if (!(await restartServer())) throw new Error('The app did not start again with the change.');
   }
 
   // 6. Publish: commit on a branch, push, open a pull request and merge it. The change is already live, so a
@@ -150,8 +165,22 @@ try {
       if (original) store.markReverted(original.id, jobId);
       process.exit();
     }
+  } else if (local && files.length && (await git.currentBranch()) === LOCAL_BRANCH) {
+    // The change is already live, so a failure here is recorded rather than undoing it.
+    const title = job.kind === 'revert' ? `Revert: ${original!.title}` : job.title;
+    try {
+      const sha = await git.commitFiles(files, `${title}\n\n${changeRecord(job, original, summary, files)}\n`);
+      store.setStatus(jobId, 'publishing', { branch: LOCAL_BRANCH, commitSha: sha });
+      log(`Committed on ${LOCAL_BRANCH} as ${sha.slice(0, 7)}.`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message.split('\n')[0] : String(e);
+      log(`Committing failed: ${message}`);
+      store.setStatus(jobId, 'done', { error: `The change is live but could not be committed: ${message}` });
+      if (original) store.markReverted(original.id, jobId);
+      process.exit();
+    }
   } else {
-    log('GITHUB_TOKEN is not set; leaving the change uncommitted in the working tree.');
+    log(local ? `The checkout is not on ${LOCAL_BRANCH}; leaving the change uncommitted in the working tree.` : 'GITHUB_TOKEN is not set; leaving the change uncommitted in the working tree.');
   }
 
   if (original) store.markReverted(original.id, jobId);
@@ -160,6 +189,19 @@ try {
 } catch (e) {
   const message = e instanceof Error ? e.message : String(e);
   log(`Failed: ${message}`);
+  // Leave nothing half-done on disk: the server loads its code from these files the next time it starts.
+  if (before) {
+    try {
+      const restored = await git.restoreTree(before);
+      if (restored.length) log(`Put back ${restored.length} file${restored.length === 1 ? '' : 's'} the job changed.`);
+      if (built) {
+        log('Building the client again without the change…');
+        await run('npm', ['run', 'build'], { cwd: REPO_ROOT, maxBuffer: 16 * 1024 * 1024 });
+      }
+    } catch (err) {
+      log(`Could not put back the files the job changed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    }
+  }
   store.setStatus(jobId, 'failed', { error: message });
   process.exitCode = 1;
 } finally {
@@ -463,8 +505,8 @@ async function verify(): Promise<string | null> {
   return null;
 }
 
-/** Ask the supervised server to restart, then wait until it answers again on its port. */
-async function restartServer(): Promise<void> {
+/** Ask the supervised server to restart, then wait until it answers again on its port; false when it did not come back. */
+async function restartServer(): Promise<boolean> {
   const pid = Number(process.env.AGENT_SERVER_PID);
   const port = process.env.PORT ?? '3001';
   log('Restarting the server…');
@@ -472,7 +514,7 @@ async function restartServer(): Promise<void> {
     process.kill(pid, 'SIGUSR2');
   } catch {
     log('The server process was not found; it may already have restarted.');
-    return;
+    return true;
   }
   // Wait for it to go away and come back.
   const deadline = Date.now() + 90_000;
@@ -483,10 +525,11 @@ async function restartServer(): Promise<void> {
     if (!up) wentDown = true;
     else if (wentDown) {
       log('The server is back with the new code.');
-      return;
+      return true;
     }
   }
   log(wentDown ? 'The server did not come back in time.' : 'The server never went down; continuing anyway.');
+  return !wentDown;
 }
 
 async function healthy(port: string): Promise<boolean> {

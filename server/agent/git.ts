@@ -1,7 +1,7 @@
 // Git and GitHub for app-change jobs: turning the deployed source tree into a checkout, snapshotting the
 // working tree before and after a job, and publishing a change as a pull request that is merged at once.
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -96,6 +96,33 @@ export class Git {
 
   async diff(fromTree: string, toTree: string): Promise<string> {
     return this.git(['diff', '--binary', fromTree, toTree]);
+  }
+
+  /**
+   * Put the working tree back the way it was in a snapshot, for the files that differ from it now: a failed
+   * job's edits are undone (files it created are deleted). The index is not touched.
+   */
+  async restoreTree(tree: string): Promise<string[]> {
+    const files = await this.changedFiles(tree, await this.snapshotTree());
+    if (!files.length) return [];
+    const inTree = new Set((await this.git(['ls-tree', '-r', '--name-only', tree, '--', ...files])).split('\n').filter(Boolean));
+    const existed = files.filter((f) => inTree.has(f));
+    if (existed.length) await this.git(['restore', `--source=${tree}`, '--worktree', '--', ...existed]);
+    for (const f of files) if (!inTree.has(f)) rmSync(path.join(this.root, f), { force: true });
+    return files;
+  }
+
+  /** The branch checked out, or null when HEAD is detached. */
+  async currentBranch(): Promise<string | null> {
+    const name = (await this.git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    return name === 'HEAD' ? null : name;
+  }
+
+  /** Commit just these files on the branch checked out, whatever else is staged or changed; returns the sha. */
+  async commitFiles(files: string[], message: string): Promise<string> {
+    await this.git(['add', '-A', '--', ...files]);
+    await this.git(['commit', '-q', '-F', '-', '--only', '--', ...files], { input: message });
+    return (await this.git(['rev-parse', 'HEAD'])).trim();
   }
 
   /** Apply a patch in reverse. Throws when it no longer applies cleanly. */

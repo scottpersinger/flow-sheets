@@ -210,16 +210,45 @@ function readShellKeys() {
   });
 }
 
-/** Start a server for the folder; resolves to its origin once it is listening. */
-function startServer(dir) {
-  const token = randomBytes(32).toString('base64url');
+// --- Self-improvement ------------------------------------------------------------------------------------
+// Run from a git checkout (the self-improving install: `universal-docs`, `npm run desktop`), the assistant can
+// change the app's own code (server/agent/worker.ts). The packaged app's code is fixed. A job rebuilds the
+// client and asks the server to restart, which exits with RESTART_EXIT_CODE and is started again here.
+const selfImproving = !app.isPackaged && existsSync(path.join(root, '.git'));
+const RESTART_EXIT_CODE = 75;
+/** The login shell's PATH, for the npm and git a job runs: started through LaunchServices, the app has only the system's. */
+let shellPath = null;
+
+function readShellPath() {
+  if (process.platform === 'win32') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(process.env.SHELL || '/bin/zsh', ['-ilc', 'printf "%s" "$PATH"'], { timeout: 5000 }, (_e, out) => resolve(String(out ?? '').trim().split('\n').pop() || null));
+  });
+}
+
+/**
+ * Start a server for the folder; resolves to its origin once it is listening. A restart passes the port and
+ * token it had, so the windows stay valid and a job finds the server where it left it.
+ */
+function startServer(dir, { port = 0, token = randomBytes(32).toString('base64url') } = {}) {
   // What the app keeps for a folder (chat history, settings, pasted images, deleted files) lives with the
   // app's own data, not in the folder.
   const dataDir = path.join(app.getPath('userData'), 'folders', createHash('sha256').update(dir).digest('hex').slice(0, 16));
   // Electron runs as plain Node in a forked child. The working directory is the app's, where .env is.
   const child = fork(path.join(root, 'desktop', 'server.ts'), [], {
     cwd: root,
-    env: { ...process.env, ...shellKeys, LOCAL_DIR: dir, DATA_DIR: dataDir, APP_DATA_DIR: app.getPath('userData'), LOCAL_TOKEN: token, PORT: '0', MCP_TOKEN: MCP_SECRET, MCP_URL },
+    env: {
+      ...process.env,
+      ...shellKeys,
+      ...(selfImproving ? { APP_CHANGES: '1', SUPERVISED: '1', ...(shellPath ? { PATH: shellPath } : {}) } : {}),
+      LOCAL_DIR: dir,
+      DATA_DIR: dataDir,
+      APP_DATA_DIR: app.getPath('userData'),
+      LOCAL_TOKEN: token,
+      PORT: String(port),
+      MCP_TOKEN: MCP_SECRET,
+      MCP_URL,
+    },
   });
   return new Promise((resolve, reject) => {
     child.once('message', (msg) => resolve({ child, dir, token, port: msg.port, origin: `http://127.0.0.1:${msg.port}` }));
@@ -232,6 +261,43 @@ function startServer(dir) {
     child.once('error', reject);
     child.once('exit', (code) => reject(new Error(`The server stopped while starting (exit code ${code}).`)));
   });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Watch the running server: it may ask to restart (an app change went live), else its stopping ends the app. */
+function watchServer(server) {
+  server.child.once('exit', (code) => {
+    if (current !== server) return;
+    if (code === RESTART_EXIT_CODE) void restartServer(server);
+    else {
+      dialog.showErrorBox('Universal Docs', 'The local server stopped unexpectedly. The app will close.');
+      app.quit();
+    }
+  });
+}
+
+/**
+ * Start the server again on the same folder, port and token after it exited to load new code. The windows
+ * reload themselves once the job is done (client/src/agent/AgentProvider.tsx). New code that does not start
+ * is put back by the job (server/agent/worker.ts), so starting is retried until it does, for a few minutes.
+ */
+async function restartServer(old) {
+  for (let attempt = 0; current === old; attempt++) {
+    try {
+      const next = await startServer(old.dir, { port: old.port, token: old.token });
+      if (current !== old) return void next.child.kill('SIGTERM'); // another folder was opened meanwhile
+      current = next;
+      watchServer(next);
+      return;
+    } catch {
+      if (attempt >= 60) {
+        dialog.showErrorBox('Universal Docs', 'The app could not start again after a change to its code. The app will close.');
+        return void app.quit();
+      }
+      await sleep(3000);
+    }
+  }
 }
 
 function stopServer() {
@@ -270,10 +336,7 @@ async function openFolder(dir, landing = '/') {
   stopServer();
   current = await startServer(dir);
   rememberFolder(dir);
-  current.child.once('exit', () => {
-    dialog.showErrorBox('Universal Docs', 'The local server stopped unexpectedly. The app will close.');
-    app.quit();
-  });
+  watchServer(current);
   // Only this app's windows hold the token, so nothing else on the machine can use the server.
   await session.defaultSession.cookies.set({ url: current.origin, name: 'local', value: current.token, httpOnly: true, sameSite: 'strict' });
   createWindow(`${current.origin}${landing}`);
@@ -423,6 +486,7 @@ app.whenReady().then(async () => {
     dialog.showErrorBox('Universal Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
     return app.quit();
   }
+  if (selfImproving) shellPath = await readShellPath();
   if (!existsSync(keysCheckedFile())) {
     shellKeys = await readShellKeys();
     try {

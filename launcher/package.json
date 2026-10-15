@@ -1,0 +1,24 @@
+{
+  "name": "universal-docs",
+  "version": "0.1.0",
+  "description": "Universal Docs, the self-improving install: spreadsheets, documents and presentations in a desktop app whose assistant can change the app's own code",
+  "type": "module",
+  "bin": {
+    "universal-docs": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "author": "FreeFlow",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scottpersinger/universal-docs.git",
+    "directory": "launcher"
+  },
+  "homepage": "https://github.com/scottpersinger/universal-docs#desktop-app"
+}

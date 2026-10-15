@@ -20,14 +20,23 @@ Requires Node 22.18+. The server runs TypeScript directly through Node's built-i
 
 ## Desktop app
 
-The same app runs on your machine with a folder as its library, in Electron (`desktop/`):
+The same app, Universal Docs, runs on your machine with a folder as its library, in Electron (`desktop/`). There are two ways to install it.
+
+**Bundled**: the packaged app, ready to run. Its code is fixed; updates come as new releases.
+
+[![Download Universal Docs for macOS](https://img.shields.io/badge/Download-Universal%20Docs%20for%20macOS-2ea44f?logo=apple)](https://github.com/scottpersinger/universal-docs/releases/latest)
+
+**Self-improving**: the app runs from its own source, so when the assistant lacks a capability it can add it to the app (see [Self-improvement](#self-improvement)), and you or your own coding agent can change it too. Requires Node 24+ and git.
 
 ```
-npm run desktop                 # build the client, then open the current directory
-npm run desktop -- ~/Documents  # or a folder you name
-npm link                        # once, to get the `freeflow` command:
-cd ~/Documents && freeflow      # open the directory you are in (after `npm run build`)
+npm install -g universal-docs
+cd ~/Documents && universal-docs      # open the directory you are in, or name one: universal-docs ~/Documents
+universal-docs update                 # later: move your changes onto the newest release
 ```
+
+The `universal-docs` package (`launcher/`) clones this repository at the newest release (`desktop-v*` tag) into `~/.universal-docs/app` on a `my-changes` branch, installs and builds it on the first run, then opens the app from there. Each change the assistant makes is a commit on `my-changes`; `update` rebases them onto the newest release and stops, changing nothing, when they conflict.
+
+From a clone of this repository the app is self-improving too: `npm run desktop` builds the client and opens the current directory (`npm run desktop -- ~/Documents` opens a folder you name), and `npm link` once gives the `universal-docs` command for this checkout. Changes stay uncommitted unless the checkout is on a branch named `my-changes`.
 
 The folder's files are the file list and its directories are the library's folders (see Folders below; hidden entries and `node_modules` are skipped). A file's name in the list is its file name without the extension. **File → Open Folder…** switches to another folder. There is no account and nothing to sign in to.
 
@@ -37,7 +46,7 @@ The folder's files are the file list and its directories are the library's folde
 - Renaming a file in the app renames it on disk, and **Move to…** moves it into another directory. Deleting moves the file out of the folder into the app's data directory (`trash/`), not the system trash.
 - A file changed by another program while it is open in the app is not overwritten: the save is refused.
 
-The app's own data for a folder (the assistant's chat, settings, pasted images, branch snapshots, deleted files) is kept under Electron's user data directory (`~/Library/Application Support/Universal Docs/folders/` on macOS), not in the folder. Images pasted into a file are therefore not part of the file. The assistant uses `ANTHROPIC_API_KEY` from the environment or the project's `.env`, or an OpenAI key from Settings. On macOS the `freeflow` command starts the app through LaunchServices, so the app itself (listed as Electron until it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a folder it may not read shows a message saying so. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows.
+The app's own data for a folder (the assistant's chat, settings, pasted images, branch snapshots, deleted files) is kept under Electron's user data directory (`~/Library/Application Support/Universal Docs/folders/` on macOS), not in the folder. Images pasted into a file are therefore not part of the file. The assistant uses `ANTHROPIC_API_KEY` from the environment or the project's `.env`, or an OpenAI key from Settings. On macOS the `universal-docs` command starts the app through LaunchServices, so the app itself (listed as Electron until it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a folder it may not read shows a message saying so. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows.
 
 ### Packaging
 
@@ -70,6 +79,8 @@ The assistant can also hand off **research**: `request_research` queues a job th
 Every job is a record of the change (request, the coding agent's summary, files, cost, pull request) in the `agent_jobs` table, listed on the **Changes** page (`/changes`), where any finished change has a **Revert** button. A revert is a job that applies the change's patch in reverse (or asks the coding agent to undo it when the code has moved on) and goes through the same checks, restart and publishing. One job runs at a time; full Claude Code output is in `data/jobs/<id>.log`.
 
 - **Local development**: the dev server restarts and Vite hot-reloads as files change. Without `GITHUB_TOKEN` the change is left uncommitted in the working tree for review.
+- **Desktop app (self-improving install)**: when the app runs from a git checkout rather than as the packaged app, `desktop/main.js` turns jobs on (`APP_CHANGES`) and acts as the supervisor: the worker rebuilds the client and sends the server SIGUSR2, the server exits with code 75 and `main.js` starts it again on the same port. The change is committed on `my-changes` when that branch is checked out, and never published to GitHub. Claude Code runs on `CODING_API_KEY`, else the Anthropic key saved in Settings, else its own sign-in on the machine. The app gets the login shell's `PATH` so the worker finds `npm` and `git`.
+- **A failed job** (checks still failing after the fix rounds, the time limit, or the server not starting again with the change) puts back every file it changed, and rebuilds the client if it had rebuilt it, so nothing unverified is left for the next start to load.
 - **Production (Railway)**: the app edits its own source in the container. The worker makes the source tree a git checkout of the deployed commit (`RAILWAY_GIT_COMMIT_SHA`), runs Claude Code, verifies, rebuilds the client (`npm run build`), asks the server to restart (`npm start` runs `server/supervise.ts`, which restarts it on exit code 75), then commits the job's files plus an entry in `CHANGELOG.md` on a branch, pushes it, opens a pull request and squash-merges it. Railway then redeploys main with the same code. Needs `GITHUB_TOKEN` (a fine-grained token with Contents and Pull requests read/write on the repo) and, if not deploying from GitHub, `GITHUB_REPO=owner/name`. The image needs git and the dev dependencies: `RAILPACK_DEPLOY_APT_PACKAGES=git` and `RAILPACK_PRUNE_DEPS=false` (set in `.railway/railway.ts`).
 
 Password reset: **Forgot your password?** on the sign-in page emails a one-time link (valid for an hour) that opens `/reset` to set a new password and signs the user in; other sessions are signed out. Email goes through Cloudflare Email Service when `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are set (`MAIL_FROM` must then be an address on a domain verified for sending in that account), else through Resend when `RESEND_API_KEY` (and optionally `MAIL_FROM`) is set; otherwise the message, link included, is written to the server log, so on a single-operator deployment the link can be copied from the Railway logs.

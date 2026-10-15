@@ -415,6 +415,25 @@ describe('the desktop token', () => {
   });
 });
 
+describe("changes to the app's own code", () => {
+  it('runs only in the self-improving install, a checkout', async () => {
+    const spec = { title: 'Add a tool', spec: 'A tool that sets the filter criteria of a column.' };
+    expect((await call<{ error: string }>('POST', '/api/agent/jobs', spec)).body.error).toMatch(/self-improving install/);
+
+    const data = mkdtempSync(path.join(tmpdir(), 'sheetsweb-localdata-'));
+    // Queued only: the worker starts after an assistant turn, and tests never run Claude Code.
+    const checkout = await buildApp({ dataDir: data, local: { dir: folder, appChanges: true }, launchJob: () => undefined });
+    try {
+      const res = await checkout.inject({ method: 'POST', url: '/api/agent/jobs', payload: spec });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ job: { kind: 'change', title: 'Add a tool', status: 'queued' } });
+    } finally {
+      await checkout.close();
+      rmSync(data, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('recents: the files last opened on the machine', () => {
   it('reads the files and their dates from Spotlight, newest first, and keeps the ones to list', () => {
     const out = [
