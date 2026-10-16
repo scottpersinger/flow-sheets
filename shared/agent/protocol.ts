@@ -158,6 +158,8 @@ export type AgentEvent =
   | { type: 'tool_end'; id: string; ok: boolean }
   /** The turn is paused until the browser runs these and posts their results. */
   | { type: 'client_tools'; calls: ClientToolCall[] }
+  /** The user's own agent asks to use one of its tools: answer with POST /api/agent/permission. */
+  | { type: 'permission'; id: string; question: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
@@ -347,15 +349,21 @@ export const OPENROUTER_MODEL_RE = /^[a-z0-9][\w.-]*\/[\w.-]+(:[\w.-]+)?$/i;
 
 /**
  * What powers the assistant: 'default' is the model this server is set up with (the hosted app's); the
- * others run on the user's own API key. The desktop app has no model of its own, so its user brings a key.
+ * key providers run on the user's own API key. The desktop app has no model of its own, so its user brings a
+ * key, or picks 'claude-agent': the Claude Code they have installed and signed in to, run through the Claude
+ * Agent SDK (server/agent/claudeAgent.ts).
  */
-export type AssistantProvider = 'default' | 'anthropic' | 'openai' | 'openrouter';
+export type AssistantProvider = 'default' | 'anthropic' | 'openai' | 'openrouter' | 'claude-agent';
+/** The providers that run on the user's own API key. */
+export type KeyProvider = Exclude<AssistantProvider, 'default' | 'claude-agent'>;
 
 /** A user's choice of what powers the assistant. The keys themselves never leave the server. */
 export interface AssistantSettings {
   provider: AssistantProvider;
   /** Whether this server has a model of its own ('default' can be chosen). */
   builtIn: boolean;
+  /** Whether the user's own installed agent can run the assistant ('claude-agent'; the desktop app). */
+  agents: boolean;
   anthropicModel: AnthropicModelId;
   openaiModel: OpenAIModelId;
   openrouterModel: string;

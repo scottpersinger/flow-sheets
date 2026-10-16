@@ -30,6 +30,16 @@ export class WindowTools implements LiveEditor {
   private readonly shownIn = new Map<string, string>();
   private readonly pending = new Map<string, Pending>();
   private group = { id: '', at: 0 };
+  /** The undo group of the assistant panel's turn in progress (pinGroup), which all its calls share. */
+  private pinned: string | null = null;
+
+  /**
+   * While a turn of the user's own agent runs in the assistant panel, every call it makes is one undo step,
+   * however far apart; null goes back to grouping calls by how close together they are.
+   */
+  pinGroup(id: string | null): void {
+    this.pinned = id;
+  }
 
   /** A window connected; `send` delivers calls to it. Returns what to call when it disconnects. */
   connect(windowId: string, send: (call: WindowToolCall) => void): () => void {
@@ -58,11 +68,12 @@ export class WindowTools implements LiveEditor {
     const now = Date.now();
     if (now - this.group.at > GROUP_GAP_MS) this.group.id = `mcp-${now}`;
     this.group.at = now;
+    const group = this.pinned ?? this.group.id;
     const id = randomUUID();
     const answer = await new Promise<WindowToolAnswer>((resolve, reject) => {
       const timer = setTimeout(() => this.settle(id)?.reject(new ToolError('The app did not answer in time. Check the file and try again.')), CALL_TIMEOUT_MS);
       this.pending.set(id, { windowId, resolve, reject, timer });
-      send({ id, kind: file.kind, fileId: file.id, name, input, group: this.group.id });
+      send({ id, kind: file.kind, fileId: file.id, name, input, group });
     });
     return 'unavailable' in answer ? null : answer;
   }

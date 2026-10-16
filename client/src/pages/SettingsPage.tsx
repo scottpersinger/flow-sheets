@@ -4,14 +4,13 @@
 // the account's files with a device code, each of which can be disconnected.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '../../../shared/agent/protocol.ts';
+import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate, type KeyProvider } from '../../../shared/agent/protocol.ts';
 import type { ConnectedAgent } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { Account } from '../components/Account.tsx';
 import { appName } from '../brand.ts';
 
-type KeyProvider = Exclude<AssistantProvider, 'default'>;
 const PROVIDERS: { id: KeyProvider; name: string; placeholder: string; keysAt: string }[] = [
   { id: 'anthropic', name: 'Anthropic (Claude)', placeholder: 'sk-ant-…', keysAt: 'console.anthropic.com' },
   { id: 'openai', name: 'OpenAI', placeholder: 'sk-…', keysAt: 'platform.openai.com' },
@@ -29,8 +28,8 @@ export function SettingsPage() {
 
   const show = (s: AssistantSettings) => {
     setSaved(s);
-    // Without a model of its own and nothing chosen yet, start on the first provider rather than on nothing.
-    setProvider(s.provider === 'default' && !s.builtIn ? 'anthropic' : s.provider);
+    // Without a model of its own and nothing chosen yet, start on the user's own agent, or the first provider, rather than on nothing.
+    setProvider(s.provider === 'default' && !s.builtIn ? (s.agents ? 'claude-agent' : 'anthropic') : s.provider);
     setModels({ anthropic: s.anthropicModel, openai: s.openaiModel, openrouter: s.openrouterModel });
     setKeys({ anthropic: '', openai: '', openrouter: '' });
   };
@@ -92,7 +91,9 @@ export function SettingsPage() {
             Keys are stored encrypted and never shown again.
           </p>
         )}
-        {saved && saved.provider === 'default' && !saved.builtIn && <div className="form-error">The assistant needs an API key: choose a provider, enter your key and save.</div>}
+        {saved && saved.provider === 'default' && !saved.builtIn && (
+          <div className="form-error">{saved.agents ? 'Choose what the assistant runs on: your own Claude Code, or a provider with your API key, and save.' : 'The assistant needs an API key: choose a provider, enter your key and save.'}</div>
+        )}
         {saved === null ? (
           !error && <div className="page-loading">Loading…</div>
         ) : (
@@ -108,6 +109,7 @@ export function SettingsPage() {
               <span>The assistant runs on</span>
               <select value={provider} onChange={(e) => setProvider(e.target.value as AssistantProvider)}>
                 {saved.builtIn && <option value="default">Built-in model</option>}
+                {saved.agents && <option value="claude-agent">Claude Agent, with my Claude Code</option>}
                 {PROVIDERS.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}, with my API key
@@ -115,6 +117,12 @@ export function SettingsPage() {
                 ))}
               </select>
             </label>
+            {provider === 'claude-agent' && (
+              <p className="field-hint">
+                The assistant runs on the Claude Code installed on this Mac, signed in as you are there: no key is needed here, and its use counts against your Claude plan.
+                It works in the open folder with all of Claude Code’s own tools; it asks here before using one that needs your permission.
+              </p>
+            )}
             {current && (
               <>
                 <label className="field">

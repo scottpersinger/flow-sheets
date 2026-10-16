@@ -117,7 +117,7 @@
       "!**/*.test.tsx",
       "!server/fixtures/**",
       "!server/scripts/**",
-      "!node_modules/@anthropic-ai/claude-agent-sdk*/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**",
       "!node_modules/pdfjs-dist/**",
       "!node_modules/@napi-rs/**",
       "!node_modules/@llamaindex/liteparse/*.node",

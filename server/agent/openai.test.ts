@@ -155,6 +155,7 @@ describe('assistant settings', () => {
   const fresh = {
     provider: 'default',
     builtIn: true,
+    agents: false,
     anthropicModel: 'claude-sonnet-5-5',
     openaiModel: 'gpt-6.1-sol',
     openrouterModel: 'anthropic/claude-sonnet-5.5',

@@ -20,9 +20,14 @@ export interface Pending {
   clientIds: string[];
 }
 
+/** What runs a conversation's turns: the assistant's own loop, or the user's own agent (claudeAgent.ts). */
+export type Driver = 'builtin' | 'claude-agent';
+
 export interface Conversation {
   id: string;
   pending: Pending | null;
+  /** The user's own agent's session, resumed on each turn ('claude-agent'). */
+  sessionId: string | null;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -34,15 +39,23 @@ export class AgentStore {
     this.db = db;
   }
 
-  /** The user's active conversation, created if there is none. */
-  active(userId: string): Conversation {
-    const row = this.db.prepare('SELECT id, pending FROM agent_conversations WHERE user_id = ? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1').get(userId) as
-      | { id: string; pending: string | null }
+  /**
+   * The user's active conversation, created if there is none. One run by another driver ends: its history is
+   * that driver's (the built-in loop replays its messages to the model; an agent keeps its own session).
+   */
+  active(userId: string, driver: Driver = 'builtin'): Conversation {
+    const row = this.db.prepare('SELECT id, pending, driver, session_id FROM agent_conversations WHERE user_id = ? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1').get(userId) as
+      | { id: string; pending: string | null; driver: string | null; session_id: string | null }
       | undefined;
-    if (row) return { id: row.id, pending: row.pending ? (JSON.parse(row.pending) as Pending) : null };
+    if (row && (row.driver ?? 'builtin') === driver) return { id: row.id, pending: row.pending ? (JSON.parse(row.pending) as Pending) : null, sessionId: row.session_id };
+    if (row) this.reset(userId);
     const id = randomUUID();
-    this.db.prepare('INSERT INTO agent_conversations (id, user_id, created_at) VALUES (?, ?, ?)').run(id, userId, new Date().toISOString());
-    return { id, pending: null };
+    this.db.prepare('INSERT INTO agent_conversations (id, user_id, created_at, driver) VALUES (?, ?, ?, ?)').run(id, userId, new Date().toISOString(), driver === 'builtin' ? null : driver);
+    return { id, pending: null, sessionId: null };
+  }
+
+  setSession(conversationId: string, sessionId: string): void {
+    this.db.prepare('UPDATE agent_conversations SET session_id = ? WHERE id = ?').run(sessionId, conversationId);
   }
 
   /** End the active conversation; the next message starts a new one. Old conversations are kept. */

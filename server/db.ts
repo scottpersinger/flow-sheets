@@ -163,6 +163,11 @@ function migrate(db: DB): void {
   if (!cols.has('format')) db.exec('ALTER TABLE sheets ADD COLUMN format TEXT');
   // Folders (shared/folders.ts): each file is in one, named by its path; '' is the top of the library.
   if (!cols.has('folder')) db.exec("ALTER TABLE sheets ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
+  // A conversation is run by one driver: the assistant's own loop (null, 'builtin') or the user's own agent
+  // ('claude-agent', server/agent/claudeAgent.ts), whose session it resumes (session_id).
+  const convCols = new Set((db.prepare('PRAGMA table_info(agent_conversations)').all() as { name: string }[]).map((c) => c.name));
+  if (!convCols.has('driver')) db.exec('ALTER TABLE agent_conversations ADD COLUMN driver TEXT');
+  if (!convCols.has('session_id')) db.exec('ALTER TABLE agent_conversations ADD COLUMN session_id TEXT');
   // The assistant on the user's own Anthropic or OpenRouter key, beside OpenAI's (server/agent/settings.ts).
   const settingsCols = new Set((db.prepare('PRAGMA table_info(assistant_settings)').all() as { name: string }[]).map((c) => c.name));
   for (const col of ['anthropic_model', 'anthropic_key', 'anthropic_key_masked', 'openrouter_model', 'openrouter_key', 'openrouter_key_masked']) {

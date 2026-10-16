@@ -53,6 +53,7 @@ import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 import { WindowTools, type WindowToolAnswer, type WindowToolCall } from './windowTools.ts';
+import { ClaudeAgentDriver, type ClaudeAgentOptions } from './agent/claudeAgent.ts';
 import { mountLocalMcp } from './localMcp.ts';
 import { MAX_OFFICE_ENTRY_BYTES, openZip, ZipError, zipEntries, zipEntryBytes, zipOfficeView } from './zipView.ts';
 import { isZipName } from '../shared/zip.ts';
@@ -131,6 +132,8 @@ export interface AppOptions {
     openFolder?: (dir: string) => void;
     /** Ask the person for a folder to open, in the desktop app's Open Folder dialog. */
     chooseFolder?: () => void;
+    /** Options for the assistant run on the user's own Claude Code (tests pass a stub query and executable). */
+    claudeAgent?: Partial<ClaudeAgentOptions>;
     /** Show how to connect an agent to the app's MCP server, in the desktop app's dialog. */
     connectAgent?: () => void;
     /** The files last opened on this machine (server/recents.ts); null where there is no such list. Tests give their own. */
@@ -222,8 +225,22 @@ export async function buildApp(opts: AppOptions) {
   const settingsDir = opts.local?.settingsDir ?? opts.dataDir;
   const settingsDb = settingsDir === opts.dataDir ? db : openDb(path.join(settingsDir, 'settings.db'));
   if (settingsDb !== db) settingsDb.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES ('local', 'local', '', ?)").run(new Date().toISOString());
-  const assistantSettings = new AssistantSettingsStore(settingsDb, path.join(settingsDir, 'connector.key'), { builtIn: !opts.local });
-  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles });
+  // In the desktop app the assistant can also run on the user's own Claude Code (server/agent/claudeAgent.ts),
+  // working in the open folder through this server's MCP endpoint, whose edits run in the window.
+  const claudeAgent =
+    opts.local?.mcp && folder
+      ? new ClaudeAgentDriver({
+          cwd: () => folder.root,
+          mcp: () => {
+            const address = app.server.address();
+            return { url: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/mcp`, token: opts.local!.mcp!.token };
+          },
+          pinGroup: (group) => windowTools?.pinGroup(group),
+          ...opts.local.claudeAgent,
+        })
+      : undefined;
+  const assistantSettings = new AssistantSettingsStore(settingsDb, path.join(settingsDir, 'connector.key'), { builtIn: !opts.local, agents: !!claudeAgent });
+  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, claudeAgent });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.
@@ -1515,6 +1532,14 @@ export async function buildApp(opts: AppOptions) {
     r.addHook('preHandler', requireUser);
 
     r.get('/api/agent', async (req) => ({ items: agent.transcript(req.user!.id) }));
+
+    // The user's answer to a permission their own agent asked for in the panel (AgentEvent 'permission').
+    r.post('/api/agent/permission', async (req, reply) => {
+      const { id, allow } = (req.body ?? {}) as { id?: unknown; allow?: unknown };
+      if (typeof id !== 'string' || typeof allow !== 'boolean') return reply.code(400).send({ error: 'Give the question’s id and allow.' });
+      if (!agent.answerPermission(id, allow)) return reply.code(404).send({ error: 'That question is no longer open.' });
+      return { ok: true };
+    });
 
     r.post('/api/agent/reset', async (req, reply) => {
       try {

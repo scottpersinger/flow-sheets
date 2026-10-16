@@ -13,13 +13,13 @@ import {
   type AssistantProvider,
   type AssistantSettings,
   type AssistantSettingsUpdate,
+  type KeyProvider,
   type OpenAIModelId,
 } from '../../shared/agent/protocol.ts';
 import { decrypt, encrypt, loadKey, mask } from '../connectors/secrets.ts';
 import type { DB } from '../db.ts';
 
-/** The providers that run on the user's own key. */
-export type KeyProvider = Exclude<AssistantProvider, 'default'>;
+export type { KeyProvider };
 const KEY_PROVIDERS: KeyProvider[] = ['anthropic', 'openai', 'openrouter'];
 const PROVIDER_NAMES: Record<KeyProvider, string> = { anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter' };
 /** The environment variables a key is looked for in, by provider. */
@@ -67,21 +67,33 @@ export class AssistantSettingsStore {
   private key: Buffer;
   /** Whether this server has a model of its own; without one, the assistant needs the user's key. */
   readonly builtIn: boolean;
+  /** Whether the user's own installed agent can run the assistant ('claude-agent'; the desktop app). */
+  readonly agents: boolean;
 
-  constructor(db: DB, keyFile: string, opts: { builtIn?: boolean } = {}) {
+  constructor(db: DB, keyFile: string, opts: { builtIn?: boolean; agents?: boolean } = {}) {
     this.db = db;
     this.key = loadKey(keyFile);
     this.builtIn = opts.builtIn ?? true;
+    this.agents = opts.agents ?? false;
   }
 
   private row(userId: string): Row | undefined {
     return this.db.prepare('SELECT * FROM assistant_settings WHERE user_id = ?').get(userId) as Row | undefined;
   }
 
-  /** The provider in effect: the chosen one if its key is saved, else the server's model (or none, without one). */
+  /**
+   * The provider in effect: the user's own agent when chosen here, a key provider if its key is saved, else the
+   * server's model (or none, without one).
+   */
   private provider(row: Row | undefined): AssistantProvider {
     const p = row?.provider as AssistantProvider | undefined;
+    if (p === 'claude-agent') return this.agents ? p : 'default';
     return p && p !== 'default' && KEY_PROVIDERS.includes(p) && row?.[keyCol(p)] ? p : 'default';
+  }
+
+  /** What runs the user's turns: the assistant's own loop, or their own installed agent. */
+  driver(userId: string): 'builtin' | 'claude-agent' {
+    return this.provider(this.row(userId)) === 'claude-agent' ? 'claude-agent' : 'builtin';
   }
 
   get(userId: string): AssistantSettings {
@@ -90,6 +102,7 @@ export class AssistantSettingsStore {
     return {
       provider: this.provider(row),
       builtIn: this.builtIn,
+      agents: this.agents,
       anthropicModel: modelOf(row, 'anthropic') as AnthropicModelId,
       openaiModel: modelOf(row, 'openai') as OpenAIModelId,
       openrouterModel: modelOf(row, 'openrouter'),
@@ -103,7 +116,7 @@ export class AssistantSettingsStore {
   choice(userId: string): ModelChoice | null {
     const row = this.row(userId);
     const p = this.provider(row);
-    if (p === 'default') return null;
+    if (p === 'default' || p === 'claude-agent') return null;
     return { provider: p, apiKey: decrypt(this.key, row![keyCol(p)]!).api_key, model: modelOf(row, p) };
   }
 
@@ -119,7 +132,8 @@ export class AssistantSettingsStore {
    */
   async update(userId: string, body: Partial<AssistantSettingsUpdate>, check: KeyCheck): Promise<AssistantSettings> {
     const provider = body.provider;
-    if (provider !== 'default' && !KEY_PROVIDERS.includes(provider as KeyProvider)) throw new SettingsError('Choose what the assistant runs on.');
+    if (provider === 'claude-agent' && !this.agents) throw new SettingsError('Your own agent can only run the assistant in the desktop app.');
+    if (provider !== 'default' && provider !== 'claude-agent' && !KEY_PROVIDERS.includes(provider as KeyProvider)) throw new SettingsError('Choose what the assistant runs on.');
     // Without a model of its own, 'default' is no model at all (a key was removed): the assistant asks for one.
     if (body.anthropicModel !== undefined && !isAnthropicModel(body.anthropicModel)) throw new SettingsError('Choose one of the listed Claude models.');
     if (body.openaiModel !== undefined && !isOpenAIModel(body.openaiModel)) throw new SettingsError('Choose one of the listed OpenAI models.');
@@ -148,7 +162,7 @@ export class AssistantSettingsStore {
         }
       }
     }
-    if (provider !== 'default') {
+    if (provider !== 'default' && provider !== 'claude-agent') {
       const p = provider as KeyProvider;
       const apiKey = keys[p].plain;
       if (!apiKey) throw new SettingsError(`Enter your ${PROVIDER_NAMES[p]} API key to use ${PROVIDER_NAMES[p]}.`);

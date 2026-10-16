@@ -238,6 +238,8 @@ export const api = {
 
   agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
   agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),
+  /** Answer a permission the user's own agent asked for (AgentEvent 'permission'). */
+  answerAgentPermission: (id: string, allow: boolean) => request<{ ok: true }>('POST', '/api/agent/permission', { id, allow }),
   agentTurn: streamAgentTurn,
   createJob: (title: string, spec: string, opts: { kind?: 'change' | 'research'; sheetId?: string | null } = {}) =>
     request<{ job: AgentJob }>('POST', '/api/agent/jobs', { title, spec, ...opts }),

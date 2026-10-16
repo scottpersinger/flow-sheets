@@ -176,6 +176,45 @@ export function toolLabel(name: string, i: Input): string {
     case 'image_search':
       return `Searched for images of “${i.query}”`;
     default:
-      return name;
+      return agentToolLabel(name, i) ?? name;
+  }
+}
+
+/** The file a tool of Claude Code's names, by its name alone. */
+const fileName = (p: unknown) => (typeof p === 'string' ? (p.split('/').pop() ?? p) : 'a file');
+const short = (s: unknown, n = 60) => {
+  const t = typeof s === 'string' ? s.replace(/\s+/g, ' ').trim() : '';
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
+/** Claude Code's own tools, when the user's Claude Code runs the assistant (server/agent/claudeAgent.ts). */
+function agentToolLabel(name: string, i: Input): string | null {
+  switch (name) {
+    case 'Bash':
+      return i.description ? String(i.description) : `Ran ${short(i.command)}`;
+    case 'Read':
+      return `Read ${fileName(i.file_path)}`;
+    case 'Write':
+      return `Wrote ${fileName(i.file_path)}`;
+    case 'Edit':
+    case 'MultiEdit':
+      return `Edited ${fileName(i.file_path)}`;
+    case 'Glob':
+      return `Looked for files matching ${short(i.pattern)}`;
+    case 'Grep':
+      return `Searched files for “${short(i.pattern, 40)}”`;
+    case 'WebSearch':
+      return `Searched the web for “${short(i.query)}”`;
+    case 'WebFetch':
+      return `Read ${short(i.url)}`;
+    case 'Task':
+    case 'Agent':
+      return i.description ? `Asked a subagent: ${short(i.description)}` : 'Asked a subagent';
+    case 'TodoWrite':
+      return 'Updated its to-do list';
+    case 'ToolSearch':
+      return 'Looked up its tools';
+    default:
+      return null;
   }
 }

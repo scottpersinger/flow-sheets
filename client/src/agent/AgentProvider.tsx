@@ -659,6 +659,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
               else if (e.type === 'tool_start') setItems((prev) => [...prev, { kind: 'tool', id: e.id, name: e.name, input: e.input, status: 'running' }]);
               else if (e.type === 'tool_end') updateTool(e.id, { status: e.ok ? 'ok' : 'error' });
               else if (e.type === 'client_tools') calls = e.calls;
+              // The user's own agent asks before using one of its tools (Claude Code's permissions).
+              else if (e.type === 'permission') void ask(e.question).then((allow) => api.answerAgentPermission(e.id, allow).catch(() => {}));
               else if (e.type === 'error') setError(e.message);
             });
           try {

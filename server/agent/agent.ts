@@ -8,7 +8,8 @@ import type { SheetStore } from '../sheets.ts';
 import { ownModel } from './providers.ts';
 import { PROMPT_WITHOUT_JOBS, renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
 import type { AssistantSettingsStore, ModelChoice } from './settings.ts';
-import { AgentStore, type MessageParam, type Pending } from './store.ts';
+import { AgentStore, type Driver, type MessageParam, type Pending } from './store.ts';
+import { AgentNotFoundError, type ClaudeAgentDriver } from './claudeAgent.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import { runServerTool, TOOL_DEFS, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from './tools.ts';
@@ -40,6 +41,8 @@ export interface AgentOptions {
   files?: FileStore;
   /** Whether the assistant can file background jobs (app changes, research); the desktop app cannot. Default true. */
   jobs?: boolean;
+  /** Runs the turns of a user who chose their own Claude Code (the desktop app; claudeAgent.ts). */
+  claudeAgent?: ClaudeAgentDriver;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -67,6 +70,7 @@ export class AgentService {
   private images: ImageStore | undefined;
   private files: FileStore | undefined;
   private jobs: boolean;
+  private claudeAgent: ClaudeAgentDriver | null;
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -79,6 +83,7 @@ export class AgentService {
     this.images = opts.images;
     this.files = opts.files;
     this.jobs = opts.jobs ?? true;
+    this.claudeAgent = opts.claudeAgent ?? null;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -88,9 +93,19 @@ export class AgentService {
     return this.model;
   }
 
+  /** What runs this user's turns: the user's own agent when they chose it and it is here, else the loop below. */
+  private driver(userId: string): Driver {
+    return this.claudeAgent && this.settings.driver(userId) === 'claude-agent' ? 'claude-agent' : 'builtin';
+  }
+
   transcript(userId: string): ChatItem[] {
-    const conv = this.store.active(userId);
+    const conv = this.store.active(userId, this.driver(userId));
     return toChatItems(this.store.messages(conv.id));
+  }
+
+  /** The user's answer to a permission their own agent asked for; false when there is no such question. */
+  answerPermission(id: string, allow: boolean): boolean {
+    return this.claudeAgent?.answerPermission(id, allow) ?? false;
   }
 
   reset(userId: string): void {
@@ -112,6 +127,11 @@ export class AgentService {
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
     if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
+    if (this.driver(userId) === 'claude-agent') {
+      if (!message && !images.length) throw new AgentError(400, 'Send a message.');
+      return;
+    }
     const own = this.settings.choice(userId);
     // Without a model of its own (the desktop app), the server runs the assistant only on the user's key.
     if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
@@ -126,14 +146,24 @@ export class AgentService {
     this.checkTurn(userId, req);
     this.busy.add(userId);
     try {
-      await this.loop(userId, req, emit, signal);
+      const driver = this.driver(userId);
+      if (driver === 'claude-agent') {
+        try {
+          await this.claudeAgent!.run(this.store.active(userId, driver), this.store, req, emit, signal);
+        } catch (e) {
+          if (e instanceof AgentNotFoundError) throw new AgentError(400, e.message);
+          if (signal.aborted) return;
+          // It is the user's own Claude Code: what it said is the useful part (not signed in, for one).
+          throw new AgentError(500, `Claude Code stopped: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else await this.loop(userId, req, emit, signal);
     } finally {
       this.busy.delete(userId);
     }
   }
 
   private async loop(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal): Promise<void> {
-    const conv = this.store.active(userId);
+    const conv = this.store.active(userId, 'builtin');
 
     // 1. The new user message: results for any tool calls still pending, then the context, images and text.
     const content: (ToolResult | Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam)[] = [];

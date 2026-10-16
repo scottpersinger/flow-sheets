@@ -158,6 +158,18 @@ message format; `server/agent/openai.ts` translates each request to OpenAI's Res
 (`local.settingsDir`), and on the first run a key found in the user's login shell (`desktop/main.js`) is used
 (`adoptFromEnvironment`: Anthropic's, then OpenAI's, then OpenRouter's).
 
+In the desktop app the assistant can instead run on the user's own Claude Code (provider `claude-agent`,
+`AssistantSettings.agents`): `AgentService` hands those turns to `ClaudeAgentDriver` (`server/agent/claudeAgent.ts`)
+instead of its loop. Each turn is a Claude Agent SDK `query` on the `claude` the user installed and signed in
+to (`findClaude`: their login shell's PATH; no key or sign-in in the app), in the open folder, resuming the
+conversation's session (`agent_conversations.session_id`; a conversation belongs to one `driver`, and switching
+starts a new one). It keeps all of Claude Code's own tools and gets the app's MCP server (`mcp-docs-app`, this
+server's `/mcp` with its own token; the user's plugin's copy is disallowed), whose edits on the open file run in
+the window (`windowTools.ts`, one undo group per turn: `pinGroup`). Its text and tool calls stream to the panel
+as the loop's do (labels for Claude Code's tools in `describe.ts`'s `agentToolLabel`) and are stored for the
+transcript; a permission Claude Code asks for is an AgentEvent `permission`, answered in the panel
+(`POST /api/agent/permission`). The desktop build ships the SDK's JavaScript but not its bundled binaries.
+
 Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
 model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,
 `server/imageEdit.ts`) for an edited copy from OpenAI's image model, with the user's OpenAI key or the
