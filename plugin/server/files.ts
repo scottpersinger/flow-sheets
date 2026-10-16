@@ -64,6 +64,8 @@ export interface LiveResult {
  */
 export interface LiveEditor {
   run(file: { kind: FileKind; id: string }, tool: string, input: Record<string, unknown>): Promise<LiveResult | null>;
+  /** Run a tool on a stored file in the window in front, whatever it shows (transform_image); null with no window. */
+  runInFront?(fileId: string, tool: string, input: Record<string, unknown>): Promise<LiveResult | null>;
 }
 
 /** Where an edit tool's result keeps the pictures it returned (not part of its JSON), for the MCP layer to attach. */
@@ -814,6 +816,14 @@ export class FileService {
     // The assistant's tools say where their picture is in its own conversation; here it comes with the result.
     if (r.images?.length && typeof parsed.image === 'string') parsed.image = 'The picture comes with this result. Look at it before reporting back.';
     return { [idKey]: id, title: this.sheets.get(this.userId, id)?.title ?? '', ...parsed, ...(r.images?.length ? { [RESULT_IMAGES]: r.images } : {}) };
+  }
+
+  /**
+   * Edit a stored picture in the app's window (the desktop app), with the built-in assistant's transform_image
+   * and its full image editor, background removal included. Null when there is no window to do it.
+   */
+  async editImageInWindow(input: { file_id: string; operations: unknown[]; save?: 'copy' | 'replace' }): Promise<LiveResult | null> {
+    return (await this.hub.live?.runInFront?.(input.file_id, 'transform_image', input)) ?? null;
   }
 
   /**

@@ -625,9 +625,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
    * then answered to the server (server/windowTools.ts).
    */
   const runWindowCall = async (call: WindowToolCall): Promise<void> => {
-    const open = { sheet: sheetRef.current, deck: deckRef.current, doc: docRef.current, markdown: markdownRef.current }[call.kind];
-    // The page moved on since the server asked: it runs the tool on the stored file instead.
-    if (open?.meta.id !== call.fileId) return void (await api.answerToolCall(call.id, { unavailable: true }));
+    // A stored picture is edited here whatever the page shows (off screen when it is not open in the editor).
+    if (call.kind !== 'file') {
+      const open = { sheet: sheetRef.current, deck: deckRef.current, doc: docRef.current, markdown: markdownRef.current }[call.kind];
+      // The page moved on since the server asked: it runs the tool on the stored file instead.
+      if (open?.meta.id !== call.fileId) return void (await api.answerToolCall(call.id, { unavailable: true }));
+    }
     const tool: ClientToolCall = { id: call.id, name: call.name, input: call.input };
     const question = confirmationFor(tool, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null, markdownRef.current?.ctl ?? null);
     if (question) {

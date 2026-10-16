@@ -14,7 +14,7 @@ import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
 import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
 import { appName } from '../../shared/brand.ts';
-import type { ImageJobResult, ToolImage } from './files.ts';
+import type { ImageJobResult, LiveResult, ToolImage } from './files.ts';
 import { ConflictError, DECK_EDIT_TOOLS, RESULT_IMAGES, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, UPLOAD_TICKET_MS, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
@@ -213,6 +213,28 @@ function okEdit(result: Record<string | symbol, unknown>): CallToolResult {
   const { [RESULT_IMAGES]: images, ...data } = result as Record<string, unknown> & { [RESULT_IMAGES]?: ToolImage[] };
   const r = ok(data);
   return images?.length ? { ...r, content: [...r.content, ...images.map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mediaType }))] } : r;
+}
+
+/** A tool run in the desktop app's window: its JSON and the pictures it returned, or its error. */
+function windowResult(r: LiveResult): CallToolResult {
+  if (r.isError) return fail(r.content);
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(r.content) as Record<string, unknown>;
+  } catch {
+    data = { result: r.content };
+  }
+  // The assistant's tools say where their picture is in its own conversation; here it comes with the result.
+  if (r.images?.length && typeof data.image === 'string') data.image = 'The picture comes with this result. Look at it before reporting back.';
+  return { content: [{ type: 'text', text: JSON.stringify(data) }, ...(r.images ?? []).map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mediaType }))], structuredContent: data };
+}
+
+/** The operations with remove_background added when asked for: after the crop, rotation and flip, before colors, marks and resizing. */
+function withBackgroundRemoval(operations: Record<string, unknown>[], remove: boolean): Record<string, unknown>[] {
+  if (!remove) return operations;
+  const at = operations.findIndex((o) => !['crop', 'rotate', 'straighten', 'flip'].includes(String(o.op)));
+  const i = at < 0 ? operations.length : at;
+  return [...operations.slice(0, i), { op: 'remove_background' }, ...operations.slice(i)];
 }
 
 function fail(message: string): CallToolResult {
@@ -772,7 +794,14 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       .optional()
       .describe('Text to write on the picture.'),
     resize_width: z.number().positive().optional().describe('Scale the finished picture down to this width in pixels; the height follows. Never up.'),
-    remove_background: z.boolean().optional().describe('Not available here: when true nothing is changed, and the answer says where in the full app the background can be removed.'),
+    remove_background: z
+      .boolean()
+      .optional()
+      .describe(
+        opts.local
+          ? 'Make the background transparent, around the subject: after any crop, rotation or flip, before the other changes. PNG and WebP keep the transparency; a copy of a JPEG is saved as a PNG so it can (saved over the JPEG, the background turns black).'
+          : 'Not available here: when true nothing is changed, and the answer says where in the full app the background can be removed.',
+      ),
     save: schemas.transform_image.shape.save,
   };
   /** The edit as the app's operations, in the order they are applied. */
@@ -806,6 +835,14 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         const operations = operationsOf(edit);
         const f = await service.editableImage(file_id);
         if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) throw new ToolError(`${f.meta.filename} cannot be edited: only PNG, JPEG and WebP pictures can.`);
+        // In the desktop app its window edits the picture with the app's full image editor, background removal included.
+        if (opts.local) {
+          const steps = withBackgroundRemoval(operations, !!remove_background);
+          if (!steps.length) throw new ToolError('Give at least one change to make: crop, rotate, straighten, flip, adjust, filter, redact, shapes, text, resize_width or remove_background.');
+          const r = await service.editImageInWindow({ file_id, operations: steps, save: save === 'replace' ? 'replace' : 'copy' });
+          if (!r) return fail(`The ${appName(true)} window is not open, and it edits the picture. Open the app, then try again.`);
+          return windowResult(r);
+        }
         // Removing a background takes a model the app here cannot load. Said at once, before anything is done,
         // with where it can be done.
         if (remove_background) {

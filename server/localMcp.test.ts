@@ -152,6 +152,45 @@ describe("the desktop app's MCP server", () => {
     await client.close();
   });
 
+  it('edits a picture in the window, background removal included', async () => {
+    // A 1×1 PNG.
+    writeFileSync(path.join(folder, 'logo.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
+    const client = await connect();
+    const found = JSON.parse(text(await client.callTool({ name: 'search_files', arguments: { query: 'logo' } })));
+    const logo = (found.files as { id: string; kind: string }[]).find((f) => f.kind === 'file')!;
+
+    // No window: nothing to edit it with.
+    const none = await client.callTool({ name: 'transform_image', arguments: { file_id: logo.id, remove_background: true } });
+    expect(none.isError).toBe(true);
+    expect(text(none)).toContain('window is not open');
+
+    const stop = new AbortController();
+    const res = await fetch(`${origin}/api/local/tool-calls?window=w2`, { signal: stop.signal });
+    const reader = res.body!.getReader();
+    let buffer = '';
+    try {
+      const pending = client.callTool({ name: 'transform_image', arguments: { file_id: logo.id, crop: { x: 0, y: 0, width: 1, height: 1 }, filter: 'grayscale', remove_background: true } });
+      let call: { id: string; kind: string; fileId: string; name: string; input: { operations: { op: string }[]; save: string } } | null = null;
+      while (!call) {
+        const { value } = await reader.read();
+        buffer += new TextDecoder().decode(value);
+        const event = /^data: (.*)$/m.exec(buffer);
+        if (event) call = JSON.parse(event[1]);
+      }
+      // After the crop, before the filter; saved as a copy.
+      expect(call).toMatchObject({ kind: 'file', fileId: logo.id, name: 'transform_image', input: { save: 'copy' } });
+      expect(call.input.operations.map((o) => o.op)).toEqual(['crop', 'remove_background', 'filter']);
+      await app.inject({ method: 'POST', url: `/api/local/tool-calls/${call.id}`, payload: { content: JSON.stringify({ edited: true, file_id: 'copy1', image: 'Attached to this message.' }), images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] } });
+      const r = await pending;
+      expect(r.isError).not.toBe(true);
+      expect(JSON.parse(text(r))).toMatchObject({ edited: true, file_id: 'copy1', image: 'The picture comes with this result. Look at it before reporting back.' });
+      expect(r.content).toContainEqual({ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' });
+    } finally {
+      stop.abort();
+      await client.close();
+    }
+  });
+
   it("edits a text file of the folder in place, and tells the window", async () => {
     const client = await connect();
     const found = JSON.parse(text(await client.callTool({ name: 'search_files', arguments: { query: 'LICENSE' } })));

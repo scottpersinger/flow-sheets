@@ -17,8 +17,12 @@ export interface HiddenEngine {
 
 export async function openHiddenEngine(source: Blob, opts: { /** Makes remove_background available (see ImageEditorHost). */ backgroundRemovalLoader?: AspBackgroundRemovalLoader } = {}): Promise<HiddenEngine> {
   const { EditorEngine } = await import('@ascentsparksoftware/react-image-editor');
+  // The canvas is no bigger than the picture: the engine exports a picture smaller than its canvas at the size
+  // it is drawn there, enlarged, so a 400 pixel picture would come back 942 pixels wide. A larger one is drawn
+  // reduced and exported at its own size.
+  const { width, height } = await canvasSize(source);
   const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed;left:-20000px;top:0;width:1024px;height:768px;visibility:hidden;pointer-events:none';
+  holder.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none`;
   holder.setAttribute('aria-hidden', 'true');
   const canvas = document.createElement('canvas');
   holder.append(canvas);
@@ -26,8 +30,8 @@ export async function openHiddenEngine(source: Blob, opts: { /** Makes remove_ba
   let engine;
   try {
     engine = await EditorEngine.create(canvas, {
-      width: 1024,
-      height: 768,
+      width,
+      height,
       exportBounds: 'image',
       maxImportDim: MAX_EDIT_IMAGE_DIM,
       maxExportPixels: MAX_EDIT_IMAGE_PIXELS,
@@ -55,4 +59,19 @@ export async function openHiddenEngine(source: Blob, opts: { /** Makes remove_ba
       holder.remove();
     },
   };
+}
+
+/** The off-screen canvas for a picture: its own size, at most 1024×768 (and at least 64 on a side). */
+async function canvasSize(source: Blob): Promise<{ width: number; height: number }> {
+  const max = { width: 1024, height: 768 };
+  try {
+    const bitmap = await createImageBitmap(source);
+    const scale = Math.min(1, max.width / bitmap.width, max.height / bitmap.height);
+    const size = { width: Math.max(64, Math.round(bitmap.width * scale)), height: Math.max(64, Math.round(bitmap.height * scale)) };
+    bitmap.close();
+    return size;
+  } catch {
+    // Not a picture the browser decodes itself (the engine may still): the usual canvas.
+    return max;
+  }
 }

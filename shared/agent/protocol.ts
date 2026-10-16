@@ -114,7 +114,8 @@ export interface ClientToolCall {
  * open editor (server/windowTools.ts). `group` is the undo step: a run of the agent's calls undoes as one.
  */
 export interface WindowToolCall extends ClientToolCall {
-  kind: 'doc' | 'deck' | 'sheet' | 'markdown';
+  /** The kind of the file it acts on: one open in the window, or ('file') a stored picture, edited off screen if need be. */
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file';
   fileId: string;
   group: string;
 }

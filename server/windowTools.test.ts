@@ -54,6 +54,21 @@ describe('WindowTools', () => {
     expect(await tools.run({ kind: 'doc', id: 'd1' }, 'read_doc', {})).toBeNull();
   });
 
+  it('runs a tool on a stored picture in the window in front, whatever it shows', async () => {
+    const tools = new WindowTools();
+    expect(await tools.runInFront('p1', 'transform_image', {})).toBeNull();
+    const one: WindowToolCall[] = [];
+    const two: WindowToolCall[] = [];
+    tools.connect('w1', (c) => one.push(c));
+    tools.connect('w2', (c) => two.push(c));
+    tools.showing('w2', null);
+    const result = tools.runInFront('p1', 'transform_image', { file_id: 'p1', operations: [{ op: 'remove_background' }] });
+    expect(one).toHaveLength(0);
+    expect(two[0]).toMatchObject({ kind: 'file', fileId: 'p1', name: 'transform_image', input: { operations: [{ op: 'remove_background' }] } });
+    tools.answer(two[0].id, { content: '{"edited":true}' });
+    expect(await result).toEqual({ content: '{"edited":true}' });
+  });
+
   it('puts calls close together in one undo group', async () => {
     vi.useFakeTimers();
     try {

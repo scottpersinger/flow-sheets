@@ -97,6 +97,9 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   the editor. A window that no longer has the file answers `unavailable`, and the tool runs headless on the
   stored file (`FileService.editDoc`/`editDeck`/`editSheet`). `render_slide`, `export_deck` and `select_range`
   only run in the window, and only the desktop MCP server has them (`McpOptions.local`).
+  There `transform_image` (remove_background included) runs in the window in front too, whatever it shows
+  (`WindowTools.runInFront`, `FileService.editImageInWindow`), with the built-in assistant's image tool; the
+  hosted plugin's goes to its app's job queue (`runImageJob`) and cannot remove a background.
 - The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
   (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
   `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;
