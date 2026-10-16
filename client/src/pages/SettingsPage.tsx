@@ -57,6 +57,8 @@ export function SettingsPage() {
 
   const savedKey = (p: KeyProvider) => (saved ? { anthropic: saved.anthropicKey, openai: saved.openaiKey, openrouter: saved.openrouterKey }[p] : null);
   const current = PROVIDERS.find((p) => p.id === provider);
+  // Choosing "Use an API key" again goes back to the key provider in use, or the first with a saved key.
+  const keyProvider: KeyProvider = (PROVIDERS.find((p) => p.id === saved?.provider) ?? PROVIDERS.find((p) => savedKey(p.id)) ?? PROVIDERS[0]).id;
   const modelHint = provider === 'anthropic' ? ANTHROPIC_MODELS.find((m) => m.id === models.anthropic)?.hint : provider === 'openai' ? OPENAI_MODELS.find((m) => m.id === models.openai)?.hint : undefined;
   const update = (): AssistantSettingsUpdate => ({
     provider,
@@ -85,14 +87,17 @@ export function SettingsPage() {
         <h2>Assistant</h2>
         {saved && (
           <p className="changes-intro">
-            {saved.builtIn
-              ? 'The assistant runs on the built-in model unless you choose Anthropic, OpenAI or OpenRouter here, billed to your own API key.'
-              : 'The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, billed to that account. A key already set in your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY) is used the first time the app starts.'}{' '}
-            Keys are stored encrypted and never shown again.
+            {saved.agents ? (
+              'Choose what powers the assistant: an API key, or a coding agent you already use on this Mac.'
+            ) : saved.builtIn ? (
+              'The assistant runs on the built-in model unless you choose Anthropic, OpenAI or OpenRouter here, billed to your own API key. Keys are stored encrypted and never shown again.'
+            ) : (
+              'The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, billed to that account. Keys are stored encrypted and never shown again.'
+            )}
           </p>
         )}
         {saved && saved.provider === 'default' && !saved.builtIn && (
-          <div className="form-error">{saved.agents ? 'Choose what the assistant runs on: your own Claude Code, or a provider with your API key, and save.' : 'The assistant needs an API key: choose a provider, enter your key and save.'}</div>
+          <div className="form-error">{saved.agents ? 'Choose what the assistant uses, an API key or a local coding agent, and save.' : 'The assistant needs an API key: choose a provider, enter your key and save.'}</div>
         )}
         {saved === null ? (
           !error && <div className="page-loading">Loading…</div>
@@ -105,23 +110,66 @@ export function SettingsPage() {
               void save(update(), 'Saved.');
             }}
           >
-            <label className="field">
-              <span>The assistant runs on</span>
-              <select value={provider} onChange={(e) => setProvider(e.target.value as AssistantProvider)}>
-                {saved.builtIn && <option value="default">Built-in model</option>}
-                {saved.agents && <option value="claude-agent">Claude Agent, with my Claude Code</option>}
-                {PROVIDERS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}, with my API key
-                  </option>
-                ))}
-              </select>
-            </label>
-            {provider === 'claude-agent' && (
-              <p className="field-hint">
-                The assistant runs on the Claude Code installed on this Mac, signed in as you are there: no key is needed here, and its use counts against your Claude plan.
-                It works in the open folder with all of Claude Code’s own tools, in its auto permission mode: routine steps go ahead, and it asks here only when it is unsure.
-              </p>
+            {saved.agents ? (
+              <>
+                <fieldset className="field run-choice">
+                  <legend>The assistant uses</legend>
+                  <label className="run-option">
+                    <input type="radio" name="runs-on" checked={provider !== 'claude-agent'} onChange={() => setProvider(keyProvider)} />
+                    <span>
+                      <strong>Use an API key</strong>
+                      <span className="field-hint">Anthropic, OpenAI or OpenRouter, with your key, billed for each use to your account there.</span>
+                    </span>
+                  </label>
+                  <label className="run-option">
+                    <input type="radio" name="runs-on" checked={provider === 'claude-agent'} onChange={() => setProvider('claude-agent')} />
+                    <span>
+                      <strong>Use a local coding agent</strong>
+                      <span className="field-hint">A coding agent installed and signed in on this Mac, on your own plan with it. No key is needed.</span>
+                    </span>
+                  </label>
+                </fieldset>
+                {provider === 'claude-agent' ? (
+                  <label className="field">
+                    <span>Agent</span>
+                    <select value="claude-agent" onChange={() => {}}>
+                      <option value="claude-agent">Claude Code</option>
+                    </select>
+                    <span className="field-hint">
+                      For each message, {appName()} starts the Claude Code installed on this Mac, signed in as you are there, in the folder open here. It has all of
+                      Claude Code’s own tools and settings, and its use counts against your Claude plan. Routine steps go ahead on their own; it asks here only when it
+                      is unsure.
+                    </span>
+                  </label>
+                ) : (
+                  <label className="field">
+                    <span>API key from</span>
+                    <select value={provider} onChange={(e) => setProvider(e.target.value as AssistantProvider)}>
+                      {PROVIDERS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="field-hint">
+                      A key already set in your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY) is used the first time the app starts. Keys are
+                      stored encrypted and never shown again.
+                    </span>
+                  </label>
+                )}
+              </>
+            ) : (
+              <label className="field">
+                <span>The assistant runs on</span>
+                <select value={provider} onChange={(e) => setProvider(e.target.value as AssistantProvider)}>
+                  {saved.builtIn && <option value="default">Built-in model</option>}
+                  {PROVIDERS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}, with my API key
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             {current && (
               <>

@@ -8,4 +8,6 @@ export const appName = (): string => name;
 
 export function setLocalApp(local: boolean): void {
   name = nameFor(local);
+  // index.html names the hosted app; a page that sets no title of its own (Settings) shows this one's.
+  if (document.title === HOSTED_NAME) document.title = name;
 }
