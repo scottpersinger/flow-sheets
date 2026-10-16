@@ -126,6 +126,22 @@ describe('signing in agents to the desktop app', () => {
     expect(asked).toEqual([]);
   });
 
+  it('takes in again an agent registered before the app forgot it, once the person allows it', async () => {
+    // The id an agent was given before the app's data was removed (an uninstall and a new install).
+    const back = await authorize('an-id-from-before-0123');
+    expect(asked).toEqual(['An agent that was connected before']);
+    const code = back.searchParams.get('code')!;
+    const t = await (await token({ grant_type: 'authorization_code', code, code_verifier: VERIFIER, client_id: 'an-id-from-before-0123', redirect_uri: REDIRECT })).json();
+    expect(auth.verify(`Bearer ${t.access_token}`)).toBe('An agent that was connected before');
+
+    // Not one whose address is off this computer, and not without an address.
+    const away = new URLSearchParams({ response_type: 'code', client_id: 'another-old-id-0123', redirect_uri: 'https://evil.example/cb', code_challenge: CHALLENGE, code_challenge_method: 'S256' });
+    expect((await fetch(`${origin}/oauth/authorize?${away}`, { redirect: 'manual' })).status).toBe(400);
+    const noAddress = new URLSearchParams({ response_type: 'code', client_id: 'another-old-id-0123', code_challenge: CHALLENGE, code_challenge_method: 'S256' });
+    expect((await fetch(`${origin}/oauth/authorize?${noAddress}`, { redirect: 'manual' })).status).toBe(400);
+    expect(asked).toHaveLength(1);
+  });
+
   it('accepts only addresses on this computer, and names fit to show', () => {
     expect(allowedRedirect('http://127.0.0.1:5000/cb')).toBe(true);
     expect(allowedRedirect('http://localhost/cb')).toBe(true);

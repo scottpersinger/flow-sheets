@@ -153,7 +153,13 @@ export class LocalOAuth {
 
     if (p === '/oauth/authorize' && req.method === 'GET') {
       const q = Object.fromEntries(url.searchParams);
-      const client = this.state.clients[q.client_id];
+      let client = this.state.clients[q.client_id];
+      // An agent registered before the app's data was removed (an uninstall) still signs in with the id it was given:
+      // it is taken in again at its address on this computer, and the person is asked, as for any new agent.
+      if (!client && typeof q.client_id === 'string' && /^[\w.-]{8,100}$/.test(q.client_id) && typeof q.redirect_uri === 'string' && allowedRedirect(q.redirect_uri)) {
+        client = this.state.clients[q.client_id] = { name: 'An agent that was connected before', redirectUris: [q.redirect_uri], created: new Date(this.now()).toISOString() };
+        this.save();
+      }
       // A request that names no known client or address is never sent anywhere: the address may not be the client's.
       if (!client) return page(400, 'Unknown agent', '<p>This sign-in link is from an agent the app does not know. Start the connection again from the agent.</p>');
       const redirect = q.redirect_uri ?? (client.redirectUris.length === 1 ? client.redirectUris[0] : undefined);
