@@ -147,6 +147,12 @@ Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a cha
 The server runs the Claude loop (`server/agent/agent.ts`). Tools are defined once as Zod schemas in
 `server/agent/tools.ts`; the server validates every tool input and sends the JSON Schema to Claude.
 
+Each file has its own chat, and the home page one (`chatScope`, `HOME_CHAT` in `shared/agent/protocol.ts`;
+`agent_conversations.scope`, null for home): `GET /api/agent?scope=` is a chat with the file's title, and reset
+and turns name the chat (`AgentTurnRequest.scope`). The panel shows the open page's chat (`AgentProvider`'s
+`pageScope`), except that a turn stays in the chat it was sent from: when the assistant opens another file the
+turn's chat stays shown, with a link to the page's (`showPageChat`), until the user moves on.
+
 A user can run the assistant on their own Anthropic, OpenAI or OpenRouter API key instead (the Settings page,
 `/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`; `server/agent/providers.ts` makes
 the model call and checks a key before it is saved). The loop and the stored history stay in the Claude

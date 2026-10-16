@@ -236,8 +236,9 @@ export const api = {
   listTrash: () => request<{ files: DeletedFile[]; available: boolean }>('GET', '/api/trash'),
   restoreFromTrash: (id: string) => request<{ file: SheetMeta }>('POST', `/api/trash/${encodeURIComponent(id)}/restore`),
 
-  agentTranscript: () => request<{ items: ChatItem[] }>('GET', '/api/agent'),
-  agentReset: () => request<{ ok: true }>('POST', '/api/agent/reset', {}),
+  /** A chat: a file's (scope = its id) or the home page's, with the file's name. */
+  agentTranscript: (scope: string) => request<{ items: ChatItem[]; title: string | null }>('GET', `/api/agent?scope=${encodeURIComponent(scope)}`),
+  agentReset: (scope: string) => request<{ ok: true }>('POST', '/api/agent/reset', { scope }),
   /** Answer a permission the user's own agent asked for (AgentEvent 'permission'). */
   answerAgentPermission: (id: string, allow: boolean) => request<{ ok: true }>('POST', '/api/agent/permission', { id, allow }),
   agentTurn: streamAgentTurn,

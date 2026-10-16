@@ -2,7 +2,7 @@
 // the browser. Account tools run here; sheet tools run in the browser against the live spreadsheet,
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
-import { CLIENT_TOOLS, IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
+import { chatScope, CLIENT_TOOLS, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { ownModel } from './providers.ts';
@@ -98,8 +98,9 @@ export class AgentService {
     return this.claudeAgent && this.settings.driver(userId) === 'claude-agent' ? 'claude-agent' : 'builtin';
   }
 
-  transcript(userId: string): ChatItem[] {
-    const conv = this.store.active(userId, this.driver(userId));
+  /** A chat's transcript: a file's (its id), or the home page's. */
+  transcript(userId: string, scope: string = HOME_CHAT): ChatItem[] {
+    const conv = this.store.active(userId, this.driver(userId), scope);
     return toChatItems(this.store.messages(conv.id));
   }
 
@@ -108,9 +109,9 @@ export class AgentService {
     return this.claudeAgent?.answerPermission(id, allow) ?? false;
   }
 
-  reset(userId: string): void {
+  reset(userId: string, scope: string = HOME_CHAT): void {
     if (this.busy.has(userId)) throw new AgentError(409, 'The assistant is still working. Stop it first.');
-    this.store.reset(userId);
+    this.store.reset(userId, scope);
   }
 
   /** Check a turn request before streaming starts; throws AgentError with an HTTP status. */
@@ -127,6 +128,7 @@ export class AgentService {
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
     if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    if (req.scope !== undefined && !isChatScope(req.scope)) throw new AgentError(400, 'That is not a chat.');
     // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
     if (this.driver(userId) === 'claude-agent') {
       if (!message && !images.length) throw new AgentError(400, 'Send a message.');
@@ -149,7 +151,7 @@ export class AgentService {
       const driver = this.driver(userId);
       if (driver === 'claude-agent') {
         try {
-          await this.claudeAgent!.run(this.store.active(userId, driver), this.store, req, emit, signal);
+          await this.claudeAgent!.run(this.store.active(userId, driver, req.scope ?? chatScope(req.context)), this.store, req, emit, signal);
         } catch (e) {
           if (e instanceof AgentNotFoundError) throw new AgentError(400, e.message);
           if (signal.aborted) return;
@@ -163,7 +165,8 @@ export class AgentService {
   }
 
   private async loop(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal): Promise<void> {
-    const conv = this.store.active(userId, 'builtin');
+    // The turn's chat: the one it was sent from, even after the assistant opened another file.
+    const conv = this.store.active(userId, 'builtin', req.scope ?? chatScope(req.context));
 
     // 1. The new user message: results for any tool calls still pending, then the context, images and text.
     const content: (ToolResult | Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam)[] = [];

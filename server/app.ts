@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
-import type { AgentEvent, AgentTurnRequest, AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
+import { HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
@@ -1531,7 +1531,14 @@ export async function buildApp(opts: AppOptions) {
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
-    r.get('/api/agent', async (req) => ({ items: agent.transcript(req.user!.id) }));
+    // A chat: a file's (scope = its id) or the home page's, with the file's name for the panel to show.
+    r.get('/api/agent', async (req, reply) => {
+      const scope = (req.query as { scope?: unknown }).scope ?? HOME_CHAT;
+      if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
+      const userId = req.user!.id;
+      const title = scope === HOME_CHAT ? null : (sheets.get(userId, scope)?.title ?? (isFileId(scope) ? storedFiles.get(userId, scope)?.meta.filename : undefined) ?? null);
+      return { items: agent.transcript(userId, scope), title };
+    });
 
     // The user's answer to a permission their own agent asked for in the panel (AgentEvent 'permission').
     r.post('/api/agent/permission', async (req, reply) => {
@@ -1542,8 +1549,10 @@ export async function buildApp(opts: AppOptions) {
     });
 
     r.post('/api/agent/reset', async (req, reply) => {
+      const scope = (req.body as { scope?: unknown } | undefined)?.scope ?? HOME_CHAT;
+      if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
       try {
-        agent.reset(req.user!.id);
+        agent.reset(req.user!.id, scope);
       } catch (e) {
         if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
         throw e;

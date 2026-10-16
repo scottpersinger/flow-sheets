@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
+import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
 import { FileChip, fileOfResult } from '../components/FileChip.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
@@ -99,6 +99,17 @@ export function AgentPanel() {
         <button className="agent-close" onClick={() => agent.setOpen(false)} aria-label="Close assistant" title={`Close (${MOD}K)`}>
           ×
         </button>
+      </div>
+      {/* Each file has its own chat, and the home page one: which this is, and the way back to the open page's. */}
+      <div className="agent-chat">
+        <span className="agent-chat-name" title={agent.chatTitle ?? undefined}>
+          {agent.chatScope === HOME_CHAT ? 'Home chat' : (agent.chatTitle ?? 'This file’s chat')}
+        </span>
+        {agent.chatScope !== agent.pageScope && !agent.running && (
+          <button className="link" onClick={agent.showPageChat}>
+            {agent.pageScope === HOME_CHAT ? 'Go to the home chat' : 'Go to this file’s chat'}
+          </button>
+        )}
       </div>
 
       <div className="agent-list" ref={listRef}>

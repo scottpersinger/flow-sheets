@@ -187,9 +187,28 @@ const short = (s: unknown, n = 60) => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
-/** Claude Code's own tools, when the user's Claude Code runs the assistant (server/agent/claudeAgent.ts). */
+/**
+ * Claude Code's own tools, when the user's Claude Code runs the assistant (server/agent/claudeAgent.ts), and
+ * the app's MCP tools the built-in assistant does not have.
+ */
 function agentToolLabel(name: string, i: Input): string | null {
   switch (name) {
+    case 'search_files':
+      return `Looked for “${short(i.query, 40)}”`;
+    case 'create_folder':
+      return `Made the folder ${short(i.path ?? i.name)}`;
+    case 'move_file':
+      return typeof i.folder === 'string' && i.folder ? `Moved a file to ${short(i.folder)}` : 'Moved a file to the top folder';
+    case 'rename_file':
+      return `Renamed a file to “${short(i.title ?? i.name, 40)}”`;
+    case 'delete_file':
+      return 'Deleted a file';
+    case 'upload_file':
+      return `Uploaded ${short(i.file_name)}`;
+    case 'convert_pdf_to_markdown':
+      return 'Made a Markdown copy of a PDF';
+    case 'get_profile':
+      return 'Checked the account';
     case 'Bash':
       return i.description ? String(i.description) : `Ran ${short(i.command)}`;
     case 'Read':

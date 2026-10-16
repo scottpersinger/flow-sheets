@@ -5156,3 +5156,25 @@ img.thumb-image {
 .agent-tile:hover {
   box-shadow: 0 2px 4px rgba(60, 64, 67, 0.3), 0 8px 18px rgba(15, 155, 142, 0.4);
 }
+
+/* Which chat the assistant panel shows (each file has its own, and the home page one). */
+.agent-chat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 6px 16px;
+  border-bottom: 1px solid #f1f3f4;
+  font-size: 12px;
+  color: var(--muted);
+}
+.agent-chat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-chat .link {
+  flex: none;
+  margin-left: auto;
+  font-size: 12px;
+}

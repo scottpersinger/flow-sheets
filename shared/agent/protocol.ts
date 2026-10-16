@@ -148,7 +148,35 @@ export interface AgentTurnRequest {
   context: AgentContext;
   toolResults?: ClientToolResult[];
   images?: AgentImage[];
+  /**
+   * The chat the turn belongs to (chatScope of the page it was sent from): every request of a turn names it,
+   * so the turn stays in its chat when the assistant opens another file. Defaults to the context's.
+   */
+  scope?: string;
 }
+
+/** The home page's chat (every folder of the library shares it). */
+export const HOME_CHAT = 'home';
+
+/** Which chat a page has: each file its own (by its id), and the home page one. */
+export function chatScope(ctx: AgentContext): string {
+  switch (ctx.page) {
+    case 'sheet':
+      return ctx.sheetId;
+    case 'deck':
+      return ctx.deckId;
+    case 'doc':
+    case 'markdown':
+      return ctx.docId;
+    case 'file':
+      return ctx.fileId;
+    default:
+      return HOME_CHAT;
+  }
+}
+
+/** A chat's scope as the API takes it: home, or a file id. */
+export const isChatScope = (s: unknown): s is string => typeof s === 'string' && /^[\w-]{1,100}$/.test(s);
 
 /** Server-sent events streamed by POST /api/agent/turn. */
 export type AgentEvent =

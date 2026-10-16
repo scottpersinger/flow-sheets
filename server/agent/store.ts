@@ -3,6 +3,7 @@
 // thinking-block replay valid across turns.
 import type Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'node:crypto';
+import { HOME_CHAT } from '../../shared/agent/protocol.ts';
 import type { DB } from '../db.ts';
 
 export type MessageParam = Anthropic.Beta.BetaMessageParam;
@@ -40,17 +41,20 @@ export class AgentStore {
   }
 
   /**
-   * The user's active conversation, created if there is none. One run by another driver ends: its history is
-   * that driver's (the built-in loop replays its messages to the model; an agent keeps its own session).
+   * The user's active conversation in a chat (`scope`: a file's id, or HOME_CHAT), created if there is none.
+   * One run by another driver ends: its history is that driver's (the built-in loop replays its messages to
+   * the model; an agent keeps its own session).
    */
-  active(userId: string, driver: Driver = 'builtin'): Conversation {
-    const row = this.db.prepare('SELECT id, pending, driver, session_id FROM agent_conversations WHERE user_id = ? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1').get(userId) as
-      | { id: string; pending: string | null; driver: string | null; session_id: string | null }
-      | undefined;
+  active(userId: string, driver: Driver = 'builtin', scope: string = HOME_CHAT): Conversation {
+    const row = this.db
+      .prepare("SELECT id, pending, driver, session_id FROM agent_conversations WHERE user_id = ? AND COALESCE(scope, 'home') = ? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1")
+      .get(userId, scope) as { id: string; pending: string | null; driver: string | null; session_id: string | null } | undefined;
     if (row && (row.driver ?? 'builtin') === driver) return { id: row.id, pending: row.pending ? (JSON.parse(row.pending) as Pending) : null, sessionId: row.session_id };
-    if (row) this.reset(userId);
+    if (row) this.reset(userId, scope);
     const id = randomUUID();
-    this.db.prepare('INSERT INTO agent_conversations (id, user_id, created_at, driver) VALUES (?, ?, ?, ?)').run(id, userId, new Date().toISOString(), driver === 'builtin' ? null : driver);
+    this.db
+      .prepare('INSERT INTO agent_conversations (id, user_id, created_at, driver, scope) VALUES (?, ?, ?, ?, ?)')
+      .run(id, userId, new Date().toISOString(), driver === 'builtin' ? null : driver, scope === HOME_CHAT ? null : scope);
     return { id, pending: null, sessionId: null };
   }
 
@@ -58,9 +62,9 @@ export class AgentStore {
     this.db.prepare('UPDATE agent_conversations SET session_id = ? WHERE id = ?').run(sessionId, conversationId);
   }
 
-  /** End the active conversation; the next message starts a new one. Old conversations are kept. */
-  reset(userId: string): void {
-    this.db.prepare('UPDATE agent_conversations SET ended_at = ? WHERE user_id = ? AND ended_at IS NULL').run(new Date().toISOString(), userId);
+  /** End the active conversation of a chat; its next message starts a new one. Old conversations are kept. */
+  reset(userId: string, scope: string = HOME_CHAT): void {
+    this.db.prepare("UPDATE agent_conversations SET ended_at = ? WHERE user_id = ? AND COALESCE(scope, 'home') = ? AND ended_at IS NULL").run(new Date().toISOString(), userId, scope);
   }
 
   messages(conversationId: string): MessageParam[] {

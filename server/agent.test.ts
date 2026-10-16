@@ -115,6 +115,37 @@ describe('agent', () => {
     expect(requests[1].messages).toHaveLength(3);
   });
 
+  it('keeps a chat for each file and one for the home page', async () => {
+    const sheet = (await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Chat sheet' } })).json().sheet as { id: string };
+    const onSheet: AgentContext = { page: 'sheet', sheetId: sheet.id, title: 'Chat sheet', tabs: ['Sheet1'], activeTab: 'Sheet1', selection: ['A1'] };
+    const chat = async (scope?: string) => (await app.inject({ method: 'GET', url: `/api/agent${scope ? `?scope=${scope}` : ''}`, headers: { cookie } })).json() as { items: { text?: string }[]; title: string | null };
+
+    replies.push(() => ({ content: [text('On the home page.')] }));
+    await turn({ message: 'Home question', context: home });
+    replies.push(() => ({ content: [text('On the sheet.')] }));
+    await turn({ message: 'Sheet question', context: onSheet });
+
+    // Each chat has only its own messages, and the model only saw the sheet's.
+    expect(requests[1].messages).toHaveLength(1);
+    expect((await chat()).items.map((i) => i.text)).toEqual(['Home question', 'On the home page.']);
+    expect(await chat(sheet.id)).toEqual({ items: [{ kind: 'user', text: 'Sheet question' }, { kind: 'assistant', text: 'On the sheet.' }], title: 'Chat sheet' });
+    expect((await chat()).title).toBeNull();
+
+    // A turn stays in the chat it was sent from, though the page it is on has moved on.
+    replies.push(() => ({ content: [text('Still the sheet’s.')] }));
+    await turn({ message: 'Follow-up', context: home, scope: sheet.id });
+    expect((await chat(sheet.id)).items.map((i) => i.text)).toEqual(['Sheet question', 'On the sheet.', 'Follow-up', 'Still the sheet’s.']);
+    expect((await chat()).items).toHaveLength(2);
+
+    // New chat starts over in that chat only.
+    await app.inject({ method: 'POST', url: '/api/agent/reset', headers: { cookie }, payload: { scope: sheet.id } });
+    expect((await chat(sheet.id)).items).toEqual([]);
+    expect((await chat()).items).toHaveLength(2);
+
+    expect((await app.inject({ method: 'GET', url: '/api/agent?scope=../x', headers: { cookie } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/agent/turn', headers: { cookie }, payload: { message: 'x', context: home, scope: 'a b' } })).statusCode).toBe(400);
+  });
+
   it('runs account tools on the server and feeds the results back', async () => {
     await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Budget 2026' } });
     await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Recipes' } });

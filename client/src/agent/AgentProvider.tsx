@@ -1,15 +1,15 @@
 // Agent chat state for the whole app. Lives above the routes, so the conversation (and a turn in
 // progress) survives navigation such as the agent opening another spreadsheet.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall } from '../../../shared/agent/protocol.ts';
+import { HOME_CHAT, isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, ApiError } from '../api.ts';
 import { editedCopyName } from '../image/limits.ts';
 import { prepareImage } from './images.ts';
-import { WINDOW_ID } from '../desktopBridge.ts';
+import { fileAt, WINDOW_ID } from '../desktopBridge.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
@@ -81,6 +81,13 @@ interface AgentState {
   /** The Markdown page reports the open Markdown document (no tools act on it; the assistant only knows it is open). */
   setOpenMarkdown(doc: OpenMarkdown | null): void;
   setOpenFile(file: StoredFile | null, selectedElement?: string | null, selectedRegion?: ImageRegion | null): void;
+  /** The chat shown: a file's (its id) or the home page's (HOME_CHAT), and the file's name (null for home). */
+  chatScope: string;
+  chatTitle: string | null;
+  /** The chat of the page that is open, which the panel shows unless a turn moved it elsewhere. */
+  pageScope: string;
+  /** Show the open page's chat. */
+  showPageChat(): void;
   /** The latest change to the app's own code, while it runs or until its outcome has been seen. */
   job: AgentJob | null;
   /** Hide a finished job's card. */
@@ -143,6 +150,18 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const waiters = useRef(new Map<string, { resolve(ctl: unknown): void; reject(e: Error): void }>());
   const [job, setJob] = useState<AgentJob | null>(null);
   const sendRef = useRef<(text: string) => void>(() => {});
+  // Each file has its own chat, and the home page one. The panel shows the open page's chat, except that a
+  // turn stays in the chat it started in: when the assistant opens another file, its chat stays shown until
+  // the user moves on.
+  const { pathname } = useLocation();
+  const pageScope = fileAt(pathname)?.id ?? HOME_CHAT;
+  const [scope, setScope] = useState(pageScope);
+  const [chatTitle, setChatTitle] = useState<string | null>(null);
+  const runningRef = useRef(false);
+  runningRef.current = running;
+  useEffect(() => {
+    if (!runningRef.current) setScope(pageScope);
+  }, [pageScope]);
 
   const setOpen = useCallback((o: boolean) => {
     setOpenState(o);
@@ -153,21 +172,38 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Load the conversation when someone signs in; clear it when they sign out. Then pick up the latest app
-  // change: if one finished while we were away (the app restarts when it lands), tell the assistant.
+  // The chat shown: loaded when it changes, and when someone signs in (cleared when they sign out).
+  useEffect(() => {
+    setItems([]);
+    setChatTitle(null);
+    setError(null);
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await api.agentTranscript(scope);
+        if (cancelled) return;
+        // A message sent before the saved transcript arrived goes after it.
+        setItems((prev) => (prev.length ? [...r.items, ...prev] : r.items));
+        setChatTitle(r.title);
+      } catch {
+        // Not signed in any more, or the server is restarting; the panel just starts empty.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, scope]);
+
+  // When someone signs in, pick up the latest app change: if one finished while we were away (the app
+  // restarts when it lands), tell the assistant.
   useEffect(() => {
     abortRef.current?.abort();
-    setItems([]);
-    setError(null);
     setJob(null);
     if (!user) return;
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.agentTranscript();
-        if (cancelled) return;
-        // Don't overwrite a message sent before the saved transcript arrived.
-        setItems((prev) => (prev.length ? prev : r.items));
         const { job } = await api.latestJob();
         if (cancelled || !job) return;
         if (isJobLive(job) && !job.acknowledged) {
@@ -634,6 +670,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     abortRef.current = abort;
     // Everything the agent changes for this message undoes as one step.
     const group = `agent-${Date.now()}`;
+    // The chat the turn belongs to, whatever page the assistant moves to.
+    const turnScope = scope;
     setItems((prev) => [...prev, { kind: 'user', text: message, ...(images.length ? { images: images.map((i) => `data:${i.mediaType};base64,${i.data}`) } : {}) }]);
     setError(null);
     setRunning(true);
@@ -649,7 +687,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           }
         }),
       );
-      let req: AgentTurnRequest = { message, context: context(opts.inline), ...(stored.length ? { images: stored } : {}) };
+      let req: AgentTurnRequest = { message, context: context(opts.inline), scope: turnScope, ...(stored.length ? { images: stored } : {}) };
       try {
         for (;;) {
           let calls: ClientToolCall[] | null = null;
@@ -677,6 +715,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           if (abort.signal.aborted) break;
           req = {
             context: context(),
+            scope: turnScope,
             toolResults,
             // The API only takes text in tool results here, so the tools' pictures follow them in the same message.
             ...(rendered.length
@@ -706,7 +745,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   const reset = async () => {
     if (running) return;
-    await api.agentReset();
+    await api.agentReset(scope);
     setItems([]);
     setError(null);
   };
@@ -732,6 +771,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     doc,
     setOpenMarkdown,
     setOpenFile,
+    chatScope: scope,
+    chatTitle,
+    pageScope,
+    showPageChat: () => !running && setScope(pageScope),
     job,
     dismissJob,
   };
