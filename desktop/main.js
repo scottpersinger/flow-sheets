@@ -409,6 +409,7 @@ function buildMenu() {
           { label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => current && createWindow(`${current.origin}/`) },
           { type: 'separator' },
           { label: 'Connect an Agent (MCP)…', click: () => void connectAgent() },
+          { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => showPage('/settings') },
           { type: 'separator' },
           mac ? { role: 'close' } : { role: 'quit' },
         ],
