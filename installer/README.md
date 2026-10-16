@@ -21,4 +21,15 @@ it. Run `npx @scottpersinger/mcp-docs` again to update both.
 
 Options: `--skip-app` (plugin only), `--skip-plugin` (app only).
 
+To remove it all again:
+
+```
+npx @scottpersinger/mcp-docs --uninstall
+```
+
+This removes the app, its data and settings (the assistant's chats, API keys, connected agents) and what it
+added to Claude Code (the plugin, its marketplace, and an `mcp-docs` server added by hand). It lists what it
+will remove and asks first (`--yes` skips the question). Your documents, in the folders you opened, are not
+touched.
+
 Requires a Mac with Apple silicon and Node.js 18 or later.

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // `npx @scottpersinger/mcp-docs`: install (or update) the MCP Docs desktop app from the latest GitHub release, then the
 // Claude Code plugin that connects Claude Code to it (the claude-plugin folder of the same repository,
-// whose marketplace is .claude-plugin/marketplace.json there).
+// whose marketplace is .claude-plugin/marketplace.json there). With --uninstall, remove all of it again: the
+// app, its data and settings, and what it added to Claude Code.
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -20,12 +22,17 @@ const flag = (name) => args.includes(`--${name}`);
 
 if (flag('help') || flag('h') || args.some((a) => !a.startsWith('--'))) {
   console.log(`Usage: npx @scottpersinger/mcp-docs [--skip-app] [--skip-plugin]
+       npx @scottpersinger/mcp-docs --uninstall [--yes]
 
 Installs the latest MCP Docs desktop app into /Applications (or ~/Applications), and the mcp-docs
 plugin into Claude Code, which connects Claude Code to the app. Run it again to update both.
 
   --skip-app      only install or update the Claude Code plugin
-  --skip-plugin   only install or update the app`);
+  --skip-plugin   only install or update the app
+  --uninstall     remove the app, its data and settings (chats, API keys, connected agents), and the
+                  mcp-docs plugin, marketplace and MCP server from Claude Code. Your documents, in the
+                  folders you opened, are not touched. It lists what it will remove and asks first.
+  --yes           with --uninstall, do not ask`);
   process.exit(args.some((a) => !a.startsWith('--')) ? 1 : 0);
 }
 
@@ -79,10 +86,10 @@ const appPids = (app) => {
   return r.status === 0 ? r.stdout.trim().split('\n').filter(Boolean) : [];
 };
 
-/** Quit the running app (it saves as it goes) so it can be replaced; waits up to 15 seconds. */
-async function quitApp(app) {
+/** Quit the running app (it saves as it goes) so it can be replaced or removed; waits up to 15 seconds. */
+async function quitApp(app, why = 'to update it') {
   if (!appPids(app).length) return false;
-  say(`  Quitting ${APP_NAME} to update it…`);
+  say(`  Quitting ${APP_NAME} ${why}…`);
   run('osascript', ['-e', `tell application "${app}" to quit`]);
   for (let i = 0; i < 30 && appPids(app).length; i++) await new Promise((r) => setTimeout(r, 500));
   if (appPids(app).length) fail(`${APP_NAME} is still running. Quit it and run this again.`);
@@ -173,8 +180,108 @@ function installPlugin() {
   return true;
 }
 
+// --- Uninstall ------------------------------------------------------------------------------------------
+
+/**
+ * Where the app keeps its own things: its data folder (chats, settings with the API keys, connected agents'
+ * tokens, each folder's index, deleted files), under each name it has had, and macOS's files for it.
+ */
+function appData() {
+  const lib = path.join(homedir(), 'Library');
+  const BUNDLE_ID = 'im.freeflow.docs';
+  return [
+    ...['MCP Docs', 'Universal Docs', 'FreeFlow Docs'].map((name) => path.join(lib, 'Application Support', name)),
+    path.join(lib, 'Preferences', `${BUNDLE_ID}.plist`),
+    path.join(lib, 'Saved Application State', `${BUNDLE_ID}.savedState`),
+    path.join(lib, 'Caches', BUNDLE_ID),
+    path.join(lib, 'HTTPStorages', BUNDLE_ID),
+    path.join(lib, 'Logs', APP_NAME),
+  ].filter((p) => existsSync(p));
+}
+
+/** The apps installed, in either place. */
+const installedApps = () => ['/Applications', path.join(homedir(), 'Applications')].map((dir) => path.join(dir, `${APP_NAME}.app`)).filter((p) => existsSync(p));
+
+/** What it added to Claude Code: the plugin, its marketplace, and an MCP server added by hand (by either name it has had). */
+function claudeThings() {
+  if (run('claude', ['--version']).status !== 0) return { plugin: false, marketplace: false, servers: [] };
+  let plugin = false;
+  let marketplace = false;
+  try {
+    plugin = JSON.parse(claude(['plugin', 'list', '--json']).out).some((p) => p.id === PLUGIN);
+  } catch {
+    // An older Claude Code: tried below anyway.
+    plugin = true;
+  }
+  try {
+    marketplace = JSON.parse(claude(['plugin', 'marketplace', 'list', '--json']).out).some((m) => m.name === MARKETPLACE);
+  } catch {
+    marketplace = true;
+  }
+  const servers = ['mcp-docs', 'universal-local'].filter((name) => claude(['mcp', 'get', name]).ok);
+  return { plugin, marketplace, servers };
+}
+
+async function uninstall() {
+  const apps = installedApps();
+  const data = appData();
+  const fromClaude = claudeThings();
+  const lines = [
+    ...apps.map((a) => `  the app: ${a}`),
+    ...data.map((d) => `  its data: ${d.replace(homedir(), '~')}`),
+    ...(fromClaude.plugin ? [`  the ${PLUGIN} plugin in Claude Code`] : []),
+    ...(fromClaude.marketplace ? [`  the ${MARKETPLACE} plugin marketplace in Claude Code`] : []),
+    ...fromClaude.servers.map((s) => `  the ${s} MCP server in Claude Code`),
+  ];
+  if (!lines.length) {
+    say(`\nThere is nothing of ${APP_NAME} to remove.`);
+    return;
+  }
+  say(`\nThis removes:\n${lines.join('\n')}\n\nThe data holds your assistant chats, settings (API keys too) and connected agents. Your documents, in the folders you opened, are not touched.`);
+  if (!flag('yes')) {
+    if (!process.stdin.isTTY) fail('Run it with --yes to remove these without being asked.');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = (await rl.question('\nRemove them? [y/N] ')).trim().toLowerCase();
+    rl.close();
+    if (answer !== 'y' && answer !== 'yes') {
+      say('Nothing was removed.');
+      return;
+    }
+  }
+
+  for (const app of apps) {
+    await quitApp(app, 'to remove it');
+    rmSync(app, { recursive: true, force: true });
+    say(`  Removed ${app}`);
+  }
+  for (const d of data) {
+    rmSync(d, { recursive: true, force: true });
+    say(`  Removed ${d.replace(homedir(), '~')}`);
+  }
+  if (fromClaude.plugin) {
+    const r = claude(['plugin', 'uninstall', PLUGIN]);
+    say(r.ok ? `  Uninstalled the ${PLUGIN} plugin` : `  Could not uninstall the ${PLUGIN} plugin: ${r.out}`);
+  }
+  if (fromClaude.marketplace) {
+    const r = claude(['plugin', 'marketplace', 'remove', MARKETPLACE]);
+    say(r.ok ? `  Removed the ${MARKETPLACE} marketplace` : `  Could not remove the ${MARKETPLACE} marketplace: ${r.out}`);
+  }
+  for (const s of fromClaude.servers) {
+    // Added for the user (File › Connect an Agent's command), or for one project.
+    const r = claude(['mcp', 'remove', s, '--scope', 'user']).ok ? { ok: true } : claude(['mcp', 'remove', s]);
+    say(r.ok ? `  Removed the ${s} MCP server` : `  Could not remove the ${s} MCP server: ${r.out}`);
+  }
+  say(`\n${APP_NAME} is uninstalled. Restart Claude Code to let go of the plugin.`);
+}
+
 if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   fail(`${APP_NAME} is only available for Macs with Apple silicon so far.`);
+}
+
+if (flag('uninstall')) {
+  say(`MCP Docs uninstaller (${REPO})`);
+  await uninstall();
+  process.exit(0);
 }
 
 say(`MCP Docs installer (${REPO})`);
