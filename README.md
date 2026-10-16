@@ -1,49 +1,70 @@
-# Sheets
+# MCP Docs
 
-A web spreadsheet app, similar to Google Sheets, that also makes slide decks and text documents. Users register and sign in with email and password (verified by an emailed link) or with Google, and can create, open, rename and delete spreadsheets. Each spreadsheet has multiple tabs and supports formulas, formatting, sorting and filtering.
-
-A built-in assistant (the live agent) answers chat and edits spreadsheets. When it lacks a capability, a coding agent changes the app's own code, restarts it and publishes the change as a merged pull request. See [Self-improvement](#self-improvement).
-
-![Architecture: browser, server with the live agent, coding agent, app source code, Claude API and GitHub](docs/architecture.png)
-
-## Running
-
-```sh
-npm install
-npm run dev        # API on :3001 and Vite on :5173; open http://localhost:5173
-npm test           # formula engine, spreadsheet operations and API tests
-npm run typecheck
-npm run build && npm start   # production: serves dist/client and the API on :3001
-```
-
-Requires Node 22.18+. The server runs TypeScript directly through Node's built-in type stripping and uses the built-in `node:sqlite`.
-
-## Desktop app
-
-The same app, called MCP Docs on the desktop, runs on your machine with a folder as its library, in Electron (`desktop/`).
+A Mac app for the documents in a folder on your Mac: Word, PowerPoint and Excel files, Markdown, CSV, PDFs, pictures
+and videos, edited in place. It is also an **MCP server**, so your coding agent (Claude Code, or any other MCP client)
+can open, read, create and edit those files with you while you watch each change land in the app.
 
 [![Download MCP Docs for macOS](https://img.shields.io/badge/Download-MCP%20Docs%20for%20macOS-2ea44f?logo=apple)](https://github.com/scottpersinger/universal-docs/releases/latest)
 
-To install the app and connect Claude Code to it in one step:
+## Install
 
 ```
 npx @scottpersinger/mcp-docs
 ```
 
-That installs the latest app and the **mcp-docs** Claude Code plugin (in `claude-plugin/`: the app's MCP server and a
-skill on using it; the marketplace is `.claude-plugin/marketplace.json`). In Claude Code the plugin alone is
-`/plugin install mcp-docs --marketplace scottpersinger/universal-docs`. The installer is the `@scottpersinger/mcp-docs` npm package in
-`installer/`; publish it with `cd installer && npm publish` after the release it installs is on GitHub. `npx @scottpersinger/mcp-docs --uninstall`
-removes the app, its data and settings, and the plugin, marketplace and any `mcp-docs` server from Claude Code.
+This downloads the latest MCP Docs into `/Applications`, installs the **mcp-docs** plugin into Claude Code (the app's
+MCP server and a skill on using it), and starts the app. Run it again to update both. You can also download the app
+from the [latest release](https://github.com/scottpersinger/universal-docs/releases/latest); its notes say how to
+install it by hand. It needs a Mac with Apple silicon.
 
-To run it from a clone of this repository:
+The app works on a folder on your Mac (your home folder the first time; **File › Open Folder…** picks another).
+There is no account and nothing to sign in to: install it locally. A web version is in this repository too
+([Web version](#web-version)) and will come later; for now the desktop app is the way to use MCP Docs.
 
-```
-npm run desktop                 # build the client, then open the current directory
-npm run desktop -- ~/Documents  # or a folder you name
-npm link                        # once, to get the `mcp-docs-dev` command:
-cd ~/Documents && mcp-docs-dev    # open the directory you are in (after `npm run build`)
-```
+To remove it all again, `npx @scottpersinger/mcp-docs --uninstall` removes the app, its data and settings, and what
+it added to Claude Code. Your documents are not touched.
+
+## Connect your coding agent
+
+While the app runs it is an MCP server at `http://127.0.0.1:39217/mcp` (Streamable HTTP).
+
+- **Claude Code**: the installer adds the plugin. Restart Claude Code, run `/mcp`, choose `plugin:mcp-docs:mcp-docs`
+  and sign in; MCP Docs asks you to allow it. In Claude Code the plugin alone is
+  `/plugin install mcp-docs --marketplace scottpersinger/universal-docs`, or add the server without it:
+  `claude mcp add --scope user --transport http mcp-docs http://127.0.0.1:39217/mcp`.
+- **Any other MCP client**: point it at the same address. It signs in with OAuth 2.1 (dynamic client registration
+  and PKCE, as MCP clients do), and MCP Docs shows a dialog asking you to allow each client; nothing is typed into a
+  browser.
+- **File › Connect an Agent (MCP)…** (or the **Connect your agent** tile on the home page) shows the address and the
+  command, lists the agents connected and disconnects them.
+
+An agent gets about 60 tools: list, search, open, create, rename, move and delete files and folders; read and edit
+documents (as Markdown), presentations (slides, their elements and themes; `render_slide` shows it a slide as drawn)
+and spreadsheets (cells, formulas, formatting, sorting, filters, rows, columns and tabs); read PDFs as Markdown or
+convert them; look at and edit pictures, background removal included; import files from the web, or upload them from
+disk.
+
+- **You see what it does.** A file it opens is shown in the window, and its edits to the file open there are made in
+  the editor: they appear as they happen, one ⌘Z undoes its whole run, your own unsaved edits are kept, and deleting
+  rows, slides or blocks asks you first.
+- **The open file is the default.** With no id, the tools act on the file shown in the app, and see your selection.
+- **The folder is the library.** The files are the real files on disk, saved back in their own format.
+
+## The assistant in the app
+
+**Assistant** in the header (or **⌘K**) opens a chat panel beside the file. **Settings** (File › Settings…, ⌘,)
+chooses what powers it:
+
+- **Use an API key**: Anthropic, OpenAI or OpenRouter, with your key, billed for each use to your account there. On
+  the first run a key already set in your login shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
+  is used.
+- **Use a local coding agent**: the Claude Code installed and signed in on your Mac runs the assistant, in the open
+  folder with all of its own tools and settings, on your Claude plan. Routine steps go ahead on their own; it asks in
+  the panel only when it is unsure.
+
+Each file has its own chat, and the home page has one. See [Assistant](#assistant) for how it works.
+
+## Using the app
 
 The folder's files are the file list and its directories are the library's folders (see Folders below; hidden entries and `node_modules` are skipped). A file's name in the list is its file name without the extension. **File → Open Folder…** switches to another folder. There is no account and nothing to sign in to.
 
@@ -53,13 +74,37 @@ The folder's files are the file list and its directories are the library's folde
 - Renaming a file in the app renames it on disk, and **Move to…** moves it into another directory. Deleting moves the file out of the folder into the app's data directory (`trash/`), not the system trash.
 - A file changed by another program while it is open in the app is not overwritten: the save is refused.
 
-The app's own data for a folder (the assistant's chat, settings, pasted images, branch snapshots, deleted files) is kept under Electron's user data directory (`~/Library/Application Support/MCP Docs/folders/` on macOS), not in the folder. Images pasted into a file are therefore not part of the file. The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, entered in Settings; on the first run a key already set in your login shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) is used. Changing the app's own code and background research (see Self-improvement) are only in the hosted app. On macOS the `mcp-docs-dev` command starts the app through LaunchServices, so the app itself (listed as Electron until it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a folder it may not read shows a message saying so. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows.
+The app's own data for a folder (the assistant's chats, pasted images, branch snapshots, deleted files) is kept under its data folder (`~/Library/Application Support/MCP Docs/folders/` on macOS), not in the folder, so images pasted into a file are not part of the file. Its settings are kept there too, for every folder. The app talks to a server it starts on a loopback port (`desktop/server.ts`), which only answers the app's own windows and, through the MCP port, the agents you allowed.
 
-### Packaging
+## Developing
+
+```sh
+npm install
+npm run desktop                 # build the client, then open the current directory in the desktop app
+npm run desktop -- ~/Documents  # or a folder you name
+npm link                        # once, to get the `mcp-docs-dev` command:
+cd ~/Documents && mcp-docs-dev  # open the directory you are in (after `npm run build`)
+npm test                        # vitest
+npm run typecheck
+```
+
+Requires Node 22.18+. The server runs TypeScript directly through Node's built-in type stripping and uses the
+built-in `node:sqlite`. `CLAUDE.md` explains the codebase.
+
+On macOS the `mcp-docs-dev` command starts the app through LaunchServices, so the app itself (listed as Electron until
+it is packaged) is what macOS asks about and grants access to Downloads, Documents and Desktop, not the terminal; a
+folder it may not read shows a message saying so.
+
+### Packaging and releases
 
 `npm run desktop:win` builds the Windows app with electron-builder into `release/`: an installer (`MCP Docs Setup <version>.exe`) and a zip of the same files, both for x64. It can be run on macOS; without Wine the `.exe` keeps Electron's icon and is not code-signed, so Windows shows its "unknown publisher" warning on first run. `npm run desktop:pack` builds the unpacked app for the machine it runs on, to try the packaged layout.
 
 The packaged app holds the server's TypeScript as plain files (`asar` is off), which Electron's Node runs as it does in development. Started from its icon it reopens the folder it showed last, or opens your home folder the first time; a folder can also be given on its command line. It reads no `.env`.
+
+`npm run desktop:mac` builds the macOS app and its zip in `release/`, which a GitHub release (tagged
+`desktop-v<version>`) carries. The installer is the `@scottpersinger/mcp-docs` npm package in `installer/`, and the
+Claude Code plugin is `claude-plugin/` (its marketplace is `.claude-plugin/marketplace.json`): keep their versions with
+the release, and publish the installer with `cd installer && npm publish` once the release is on GitHub.
 
 ## Videos
 
@@ -75,28 +120,6 @@ Clicking a file opens it in place, inside its folder: the page header shows the 
 
 On the server a folder is a row (`folders` table, `server/folders.ts`) and each file records the path of its folder; in the desktop app folders are the directories of the mounted folder. `GET /api/library?folder=` returns a folder's folders, documents and stored files.
 
-## Self-improvement
-
-In the hosted app (not the desktop app), when the assistant can't do something, it offers to add the capability to the app. If the user agrees, it calls `request_app_change` with a spec, the user confirms in the panel, and after the reply ends the server starts a detached worker (`server/agent/worker.ts`) that runs Claude Code in the repository through the Claude Agent SDK. Claude Code reads `CLAUDE.md` (which explains how to add an assistant tool), makes the change, and runs typecheck and tests; the worker verifies both again. When the change is live the browser reloads and sends the assistant a message with the summary, and it finishes the original request with its new tool.
-
-Screenshots: paste, drop or attach images (PNG, JPEG, GIF, WebP; up to four per message) in the chat and the assistant sees them, for example to transcribe a table from a screenshot into the sheet. Images are downscaled in the browser and stored with the conversation.
-
-The assistant can also hand off **research**: `request_research` queues a job that runs Claude Code in a scratch folder with web search and read-only tools (never the app's code), optionally with the open spreadsheet exported as CSV, and its report comes back to the conversation as a message so the assistant can act on it, for example by writing results into the sheet. Research jobs appear on the Changes page with their report and cannot be reverted.
-
-Every job is a record of the change (request, the coding agent's summary, files, cost, pull request) in the `agent_jobs` table, listed on the **Changes** page (`/changes`), where any finished change has a **Revert** button. A revert is a job that applies the change's patch in reverse (or asks the coding agent to undo it when the code has moved on) and goes through the same checks, restart and publishing. One job runs at a time; full Claude Code output is in `data/jobs/<id>.log`.
-
-- **Local development**: the dev server restarts and Vite hot-reloads as files change. Without `GITHUB_TOKEN` the change is left uncommitted in the working tree for review.
-- **A failed job** (checks still failing after the fix rounds, the time limit, or the server not starting again with the change) puts back every file it changed, and rebuilds the client if it had rebuilt it, so nothing unverified is left for the next start to load.
-- **Production (Railway)**: the app edits its own source in the container. The worker makes the source tree a git checkout of the deployed commit (`RAILWAY_GIT_COMMIT_SHA`), runs Claude Code, verifies, rebuilds the client (`npm run build`), asks the server to restart (`npm start` runs `server/supervise.ts`, which restarts it on exit code 75), then commits the job's files plus an entry in `CHANGELOG.md` on a branch, pushes it, opens a pull request and squash-merges it. Railway then redeploys main with the same code. Needs `GITHUB_TOKEN` (a fine-grained token with Contents and Pull requests read/write on the repo) and, if not deploying from GitHub, `GITHUB_REPO=owner/name`. The image needs git and the dev dependencies: `RAILPACK_DEPLOY_APT_PACKAGES=git` and `RAILPACK_PRUNE_DEPS=false` (set in `.railway/railway.ts`).
-
-Password reset: **Forgot your password?** on the sign-in page emails a one-time link (valid for an hour) that opens `/reset` to set a new password and signs the user in; other sessions are signed out. Email goes through Cloudflare Email Service when `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are set (`MAIL_FROM` must then be an address on a domain verified for sending in that account), else through Resend when `RESEND_API_KEY` (and optionally `MAIL_FROM`) is set; otherwise the message, link included, is written to the server log, so on a single-operator deployment the link can be copied from the Railway logs.
-
-Email verification: a password sign-up gets no session until the link in the verification email (valid 24 hours) is opened at `/verify`; signing in before that is refused with a "send it again" option, and signing up again with the same address just replaces the password and resends the link. Opening a password reset link also verifies the address. Accounts that existed before verification was added count as verified.
-
-Google sign-in: with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` set (an OAuth web client whose authorised redirect URIs include `<APP_URL>/api/auth/google/callback`), the sign-in and registration pages show **Continue with Google**. The first Google sign-in links to an existing verified account with the same email, takes over an unverified one (its password stops working, since whoever set it never proved they own the address), or creates a new one with no password (set one later with **Forgot your password?**). `APP_URL` sets the origin used in the link (defaults to the requesting origin). `LEGACY_HOSTS` lists old host names (comma-separated) that redirect to `APP_URL` with the same path, for moving the app to a new domain.
-
-Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments. The assistant needs `ANTHROPIC_API_KEY`. For local development, copy `.env.example` to `.env` (git-ignored) and fill it in; the server loads it on start (`server/env.ts`), so restart it after editing. You can also set `AGENT_MODEL` (`claude-sonnet-5-5` by default, or `claude-opus-5-5`), `AGENT_EFFORT` (`low`, `medium` (default) or `high`) and `AGENT_DAILY_REQUEST_LIMIT` (model calls per user per day, default 500). The coding and research jobs run Claude Code with the same key and its default model unless `CODING_API_KEY` (a separate API key, or a Claude Code OAuth token from `claude setup-token`, billed apart) or `CODING_MODEL` (a model id to pin) is set.
-
 ## Layout
 
 | Path | Contents |
@@ -109,19 +132,39 @@ Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_
 
 ## Assistant
 
-**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. You can ask it in plain language to read, edit, format, sort or restructure the open spreadsheet, or to find, read, create and open other spreadsheets. It knows which spreadsheet, tab and selection you're looking at. It uses Claude Sonnet 5.5 by default (`AGENT_MODEL` switches it, for example to Opus 5.5) through one API key on the server. Under **Settings** (in the More menu on the home page) a user can instead enter their own OpenAI API key and pick a model (Astra, Sol or Luna); their assistant then runs on that key, is billed to them, and is not counted against the daily limit.
+**Assistant** in the header (or **⌘K** / **Ctrl+K**) opens a chat panel on the right. Ask it in plain language to
+read, write, edit, format, sort or restructure the open file, or to find, read, create and open others. It knows which
+file, tab and selection you're looking at. In the desktop app it runs on your API key or your local coding agent (see
+[The assistant in the app](#the-assistant-in-the-app)); in the web version it uses Claude Sonnet 5.5 through the
+server's key by default (`AGENT_MODEL` switches it), and **Settings** lets a user use their own key instead, which is
+then not counted against the daily limit.
 
-- **Edits appear immediately** and save like your own. Everything the assistant changes for one message undoes as a single step with ⌘Z. Deleting tabs, rows or columns, and clearing more than 100 cells, asks you first.
-- **One ongoing conversation per user**, kept across page loads and navigation. **New chat** starts over (old conversations stay in the database).
+- **Edits appear immediately** and save like your own. Everything the assistant changes for one message undoes as a
+  single step with ⌘Z. Deleting tabs, rows, columns, slides or blocks, and clearing more than 100 cells, asks you first.
+- **A chat for each file**, and one for the home page, kept across page loads. A reply stays in the chat it was asked
+  in, even when the assistant opens another file. **New chat** starts that chat over (old conversations stay in the
+  database).
 - Click an action in the chat (such as "Wrote 8 cells at A1") to select that range.
+
+Screenshots: paste, drop or attach images (PNG, JPEG, GIF, WebP; up to four per message) in the chat and the assistant sees them, for example to transcribe a table from a screenshot into the sheet. Images are downscaled in the browser and stored with the conversation.
 
 How it works:
 
-- The **server** (`server/agent/`) runs the agent loop and holds the API key, system prompt and tools. Conversations are stored in SQLite exactly as sent to the API and are only ever appended to. That keeps prompt caching effective and lets the model's thinking blocks be passed back unchanged.
+- The **server** (`server/agent/`) runs the agent loop and holds the API key, system prompt and tools. Conversations
+  are stored in SQLite exactly as sent to the API and are only ever appended to. That keeps prompt caching effective
+  and lets the model's thinking blocks be passed back unchanged.
 - **Account tools** (`list_sheets`, `read_other_sheet`, `create_sheet`) run on the server.
-- **Sheet tools** (`read_range`, `write_range`, `format_range`, `sort_range`, `open_sheet` and the others) run in the **browser**, on the live spreadsheet (`client/src/agent/clientTools.ts`). That way edits recalculate, render, autosave and undo like any other edit. When Claude calls one, the server streams the call to the browser and pauses. The browser runs it and posts the result back, and the loop continues.
-- Every request carries the current context: the page, the spreadsheet, its tabs, the active tab and the selection. It's added in front of the user's message, so the system prompt stays cacheable.
-- Tool inputs are checked against Zod schemas (`server/agent/tools.ts`) before anything runs. The same schemas generate the JSON Schema sent to Claude.
+- **File tools** (`read_range`, `write_range`, `insert_content`, `update_slide` and the others) run in the
+  **browser**, on the open file (`client/src/agent/clientTools.ts`), so edits render, autosave and undo like any
+  other edit. When the model calls one, the server streams the call to the browser and pauses; the browser runs it
+  and posts the result back, and the loop continues.
+- Every request carries the current context: the page, the file, its tabs or slides, and the selection. It's added in
+  front of the user's message, so the system prompt stays cacheable.
+- Tool inputs are checked against Zod schemas (`server/agent/tools.ts`) before anything runs. The same schemas
+  generate the JSON Schema sent to the model.
+- With a **local coding agent** (desktop app), each message is a Claude Agent SDK query on the user's own Claude Code
+  (`server/agent/claudeAgent.ts`), which works through the app's MCP server, so its edits go through the window like
+  any MCP agent's.
 
 ## Presentations
 
@@ -215,6 +258,49 @@ a tab called Brex" calls `list_connections` and then `ingest_connector_data`.
 
 See [docs/connectors.md](docs/connectors.md) for how it works and how to add a connector or dataset (API key or
 OAuth 2.0).
+
+## Web version
+
+The same app runs as a web service with accounts (`npm run dev`, or `npm run build && npm start`), hosted as
+Universal Docs at docs.freeflow.im, where it is also a plugin for ChatGPT (`plugin/`). For now MCP Docs is meant to be
+installed locally; the web version will come later.
+
+```sh
+npm run dev        # API on :3001 and Vite on :5173; open http://localhost:5173
+npm run build && npm start   # production: serves dist/client and the API on :3001
+```
+
+Users register and sign in with email and password (verified by an emailed link) or with Google.
+
+Password reset: **Forgot your password?** on the sign-in page emails a one-time link (valid for an hour) that opens `/reset` to set a new password and signs the user in; other sessions are signed out. Email goes through Cloudflare Email Service when `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are set (`MAIL_FROM` must then be an address on a domain verified for sending in that account), else through Resend when `RESEND_API_KEY` (and optionally `MAIL_FROM`) is set; otherwise the message, link included, is written to the server log, so on a single-operator deployment the link can be copied from the Railway logs.
+
+Email verification: a password sign-up gets no session until the link in the verification email (valid 24 hours) is opened at `/verify`; signing in before that is refused with a "send it again" option, and signing up again with the same address just replaces the password and resends the link. Opening a password reset link also verifies the address. Accounts that existed before verification was added count as verified.
+
+Google sign-in: with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` set (an OAuth web client whose authorised redirect URIs include `<APP_URL>/api/auth/google/callback`), the sign-in and registration pages show **Continue with Google**. The first Google sign-in links to an existing verified account with the same email, takes over an unverified one (its password stops working, since whoever set it never proved they own the address), or creates a new one with no password (set one later with **Forgot your password?**). `APP_URL` sets the origin used in the link (defaults to the requesting origin). `LEGACY_HOSTS` lists old host names (comma-separated) that redirect to `APP_URL` with the same path, for moving the app to a new domain.
+
+Environment variables: `PORT` (default 3001), `HOST` (default 127.0.0.1), `DATA_DIR` (default `./data`), and `SECURE_COOKIES=1` for HTTPS deployments. The assistant needs `ANTHROPIC_API_KEY`. For local development, copy `.env.example` to `.env` (git-ignored) and fill it in; the server loads it on start (`server/env.ts`), so restart it after editing. You can also set `AGENT_MODEL` (`claude-sonnet-5-5` by default, or `claude-opus-5-5`), `AGENT_EFFORT` (`low`, `medium` (default) or `high`) and `AGENT_DAILY_REQUEST_LIMIT` (model calls per user per day, default 500). The coding and research jobs run Claude Code with the same key and its default model unless `CODING_API_KEY` (a separate API key, or a Claude Code OAuth token from `claude setup-token`, billed apart) or `CODING_MODEL` (a model id to pin) is set.
+
+## Self-improvement (experimental)
+
+An experiment, for the web version running from a source code checkout (and its hosted deployment): not in the
+desktop app.
+
+![Architecture: browser, server with the live agent, coding agent, app source code, Claude API and GitHub](docs/architecture.png)
+
+When the assistant can't do something, it offers to add the capability to the app. If the user agrees, it calls
+`request_app_change` with a spec, the user confirms in the panel, and after the reply ends the server starts a
+detached worker (`server/agent/worker.ts`) that runs Claude Code in the repository through the Claude Agent SDK.
+Claude Code reads `CLAUDE.md` (which explains how to add an assistant tool), makes the change, and runs typecheck and
+tests; the worker verifies both again. When the change is live the browser reloads and sends the assistant a message
+with the summary, and it finishes the original request with its new tool.
+
+The assistant can also hand off **research**: `request_research` queues a job that runs Claude Code in a scratch folder with web search and read-only tools (never the app's code), optionally with the open spreadsheet exported as CSV, and its report comes back to the conversation as a message so the assistant can act on it, for example by writing results into the sheet. Research jobs appear on the Changes page with their report and cannot be reverted.
+
+Every job is a record of the change (request, the coding agent's summary, files, cost, pull request) in the `agent_jobs` table, listed on the **Changes** page (`/changes`), where any finished change has a **Revert** button. A revert is a job that applies the change's patch in reverse (or asks the coding agent to undo it when the code has moved on) and goes through the same checks, restart and publishing. One job runs at a time; full Claude Code output is in `data/jobs/<id>.log`.
+
+- **Local development**: the dev server restarts and Vite hot-reloads as files change. Without `GITHUB_TOKEN` the change is left uncommitted in the working tree for review.
+- **A failed job** (checks still failing after the fix rounds, the time limit, or the server not starting again with the change) puts back every file it changed, and rebuilds the client if it had rebuilt it, so nothing unverified is left for the next start to load.
+- **Production (Railway)**: the app edits its own source in the container. The worker makes the source tree a git checkout of the deployed commit (`RAILWAY_GIT_COMMIT_SHA`), runs Claude Code, verifies, rebuilds the client (`npm run build`), asks the server to restart (`npm start` runs `server/supervise.ts`, which restarts it on exit code 75), then commits the job's files plus an entry in `CHANGELOG.md` on a branch, pushes it, opens a pull request and squash-merges it. Railway then redeploys main with the same code. Needs `GITHUB_TOKEN` (a fine-grained token with Contents and Pull requests read/write on the repo) and, if not deploying from GitHub, `GITHUB_REPO=owner/name`. The image needs git and the dev dependencies: `RAILPACK_DEPLOY_APT_PACKAGES=git` and `RAILPACK_PRUNE_DEPS=false` (set in `.railway/railway.ts`).
 
 ## Storage
 
