@@ -120,7 +120,7 @@ export function SettingsPage() {
             {provider === 'claude-agent' && (
               <p className="field-hint">
                 The assistant runs on the Claude Code installed on this Mac, signed in as you are there: no key is needed here, and its use counts against your Claude plan.
-                It works in the open folder with all of Claude Code’s own tools; it asks here before using one that needs your permission.
+                It works in the open folder with all of Claude Code’s own tools, in its auto permission mode: routine steps go ahead, and it asks here only when it is unsure.
               </p>
             )}
             {current && (

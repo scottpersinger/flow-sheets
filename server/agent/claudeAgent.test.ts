@@ -86,6 +86,7 @@ describe('ClaudeAgentDriver', () => {
       mcpServers: { [APP_SERVER]: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: { Authorization: 'Bearer secret' } } },
       disallowedTools: ['mcp__plugin_mcp-docs_mcp-docs'],
       includePartialMessages: true,
+      permissionMode: 'auto',
     });
     expect(seen.options).not.toHaveProperty('resume');
     expect((seen.prompt![0] as { message: { content: { text: string }[] } }).message.content.at(-1)).toEqual({ type: 'text', text: 'Fill in A1' });

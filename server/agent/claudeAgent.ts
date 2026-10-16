@@ -3,8 +3,9 @@
 // open folder, resuming the conversation's session. It has all of Claude Code's own tools, and the app's MCP
 // server (the plugin's tools, server/localMcp.ts) with this server's own token, whose edits on the file open
 // in the window run there (server/windowTools.ts): undoable, one undo step per turn. Its text and tool calls
-// stream to the panel as the built-in loop's do, and are kept in the conversation for the transcript; a
-// permission Claude Code asks for is asked in the panel (AgentEvent 'permission').
+// stream to the panel as the built-in loop's do, and are kept in the conversation for the transcript. It runs
+// in Claude Code's auto permission mode: its classifier approves routine tool use, and a permission it cannot
+// decide is asked in the panel (AgentEvent 'permission').
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
@@ -118,7 +119,8 @@ export class ClaudeAgentDriver {
           systemPrompt: { type: 'preset', preset: 'claude_code', append: PROMPT },
           mcpServers: { [APP_SERVER]: { type: 'http', url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` } } },
           disallowedTools: [PLUGIN_SERVER],
-          permissionMode: 'default',
+          // Claude Code's classifier approves routine tool use; only what it cannot decide is asked in the panel.
+          permissionMode: 'auto',
           canUseTool: (name: string, input: Record<string, unknown>, o: { signal: AbortSignal; title?: string; description?: string; displayName?: string }) => this.permit(name, input, o, emit),
         },
       });

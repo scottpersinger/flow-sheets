@@ -173,8 +173,9 @@ starts a new one). It keeps all of Claude Code's own tools and gets the app's MC
 server's `/mcp` with its own token; the user's plugin's copy is disallowed), whose edits on the open file run in
 the window (`windowTools.ts`, one undo group per turn: `pinGroup`). Its text and tool calls stream to the panel
 as the loop's do (labels for Claude Code's tools in `describe.ts`'s `agentToolLabel`) and are stored for the
-transcript; a permission Claude Code asks for is an AgentEvent `permission`, answered in the panel
-(`POST /api/agent/permission`). The desktop build ships the SDK's JavaScript but not its bundled binaries.
+transcript. It runs in Claude Code's `auto` permission mode; a permission its classifier cannot decide is an
+AgentEvent `permission`, answered in the panel (`POST /api/agent/permission`). The desktop build ships the SDK's
+JavaScript but not its bundled binaries.
 
 Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
 model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,
