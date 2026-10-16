@@ -75,6 +75,11 @@ function textOptions(el: TextElement, theme: (typeof THEMES)[keyof typeof THEMES
   };
 }
 
+/** A shape's name in the file for an element of ours: its id, marked as ours (SHAPE_ID_RE reads it back). */
+export const shapeName = (id: string): string => `ff-${id}`;
+/** An element id kept in a shape's name by shapeName. */
+export const SHAPE_ID_RE = /^ff-([\w.-]{1,80})$/;
+
 /** Build the presentation. Returns the pptxgenjs instance (write it with writeFile or write) and warnings. */
 export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoader): Promise<{ pres: PptxGenJS; warnings: string[] }> {
   const { default: PptxGen } = await import('pptxgenjs');
@@ -98,7 +103,8 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
   return { pres, warnings };
 
   async function addElement(s: PptxGenJS.Slide, el: SlideElement): Promise<void> {
-    const box = { x: inch(el.x), y: inch(el.y), w: inch(el.w), h: inch(el.h), ...(el.rot ? { rotate: ((el.rot % 360) + 360) % 360 } : {}) };
+    // The element's id is the shape's name, so reading the file back keeps it (server/pptxImport.ts).
+    const box = { x: inch(el.x), y: inch(el.y), w: inch(el.w), h: inch(el.h), ...(el.rot ? { rotate: ((el.rot % 360) + 360) % 360 } : {}), objectName: shapeName(el.id) };
     if (el.type === 'text') {
       const runs: PptxGenJS.TextProps[] = el.paragraphs.flatMap((p) => {
         const para: PptxGenJS.TextPropsOptions = {
@@ -124,7 +130,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
           },
         }));
       });
-      s.addText(runs.length ? runs : [{ text: '' }], { ...textOptions(el, theme), ...(el.rot ? { rotate: box.rotate } : {}) });
+      s.addText(runs.length ? runs : [{ text: '' }], { ...textOptions(el, theme), ...(el.rot ? { rotate: box.rotate } : {}), objectName: box.objectName });
       return;
     }
     if (el.type === 'image') {
@@ -140,7 +146,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     if (el.type === 'video') {
       // A YouTube video plays in PowerPoint too; a stored file is not copied into the presentation.
       const yt = youtubeId(el.src);
-      if (yt) s.addMedia({ type: 'online', link: `https://www.youtube.com/embed/${yt}`, x: box.x, y: box.y, w: box.w, h: box.h });
+      if (yt) s.addMedia({ type: 'online', link: `https://www.youtube.com/embed/${yt}`, x: box.x, y: box.y, w: box.w, h: box.h, objectName: box.objectName });
       else {
         storedVideos++;
         s.addText('Video', { ...box, shape: pres.ShapeType.rect, line: { color: '9AA0A6', width: 1 }, fill: { color: '202124' }, align: 'center', valign: 'middle', fontSize: 14, color: 'FFFFFF' });
@@ -199,7 +205,7 @@ export async function buildPptx(deck: Deck, title: string, loadImage: ImageLoade
     // PowerPoint's arc box is the whole ellipse; ours is the tight box around the stroke.
     const g = el.shape === 'arc' ? arcGeometry(el, sw) : undefined;
     const common = {
-      ...(g ? { x: inch(g.cx - g.rx), y: inch(g.cy - g.ry), w: inch(2 * g.rx), h: inch(2 * g.ry) } : box),
+      ...(g ? { x: inch(g.cx - g.rx), y: inch(g.cy - g.ry), w: inch(2 * g.rx), h: inch(2 * g.ry), objectName: box.objectName } : box),
       fill,
       line,
       ...(el.shape === 'rounded' ? { rectRadius: inch(16) } : {}),

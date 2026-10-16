@@ -8,7 +8,6 @@ import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import {
   fillColor as firstColor,
-  newId,
   SLIDE_H,
   SLIDE_W,
   validateDeck,
@@ -28,6 +27,7 @@ import {
   type TextStyle,
 } from '../shared/deck.ts';
 import { safeLinkUrl } from '../shared/links.ts';
+import { SHAPE_ID_RE } from '../shared/pptxExport.ts';
 import { shapeFromPptx, tightArc } from '../shared/shapes.ts';
 import { MAX_CELL_IMAGE_BYTES } from '../shared/types.ts';
 import { ImportError, IMPORT_LIMITS } from './xlsxImport.ts';
@@ -130,10 +130,33 @@ class Importer {
   /** Per slide: our element id for each shape id in the file, and the connector ends waiting to be attached to them. */
   private idMap = new Map<string, string>();
   private pending: { el: LineElement; start?: [string, number]; end?: [string, number] }[] = [];
+  /**
+   * Ids are the same each time the same file is read, so an agent's read and its next edit of a presentation
+   * loaded afresh agree on them: by slide and order, or the id of ours a shape's name keeps (shapeName).
+   */
+  private slideNo = 0;
+  private seq = 0;
+  private usedIds = new Set<string>();
 
   constructor(zip: JSZip, sink: ImageSink) {
     this.zip = zip;
     this.sink = sink;
+  }
+
+  private nextId(): string {
+    let id: string;
+    do id = `s${this.slideNo}e${++this.seq}`;
+    while (this.usedIds.has(id));
+    this.usedIds.add(id);
+    return id;
+  }
+
+  /** Give the element the id of ours its shape's name keeps (written by the export), when it has one not yet used. */
+  private keepId(name: string | undefined, el: SlideElement | undefined): void {
+    const id = name ? SHAPE_ID_RE.exec(name)?.[1] : undefined;
+    if (!el || !id || this.usedIds.has(id)) return;
+    this.usedIds.add(id);
+    el.id = id;
   }
 
   private note(msg: string): void {
@@ -201,6 +224,8 @@ class Importer {
   }
 
   private async slide(file: string): Promise<Slide> {
+    this.slideNo++;
+    this.seq = 0;
     const doc = await this.xml(file);
     const sld = doc && root(doc, 'p:sld');
     const rels = await this.rels(file);
@@ -233,7 +258,7 @@ class Importer {
     }
 
     assignRoles(elements);
-    const slide: Slide = { id: newId(), layout: guessLayout(elements), elements };
+    const slide: Slide = { id: this.nextId(), layout: guessLayout(elements), elements };
     // The slide's own background, else its layout's, else its master's.
     const parts: [XNode | null | undefined, string | undefined][] = [[sld, file], [layout, layoutFile], [master, masterFile]];
     for (const [part, partFile] of parts) {
@@ -251,7 +276,7 @@ class Importer {
         const target = embed ? (await this.rels(partFile)).find((r) => r.id === embed)?.target : undefined;
         const src = target ? await this.image(target) : null;
         const gradient = this.gradientOf(bgPr, false, false);
-        if (src) elements.unshift({ id: newId(), type: 'image', x: 0, y: 0, w: SLIDE_W, h: SLIDE_H, src, fit: 'cover' });
+        if (src) elements.unshift({ id: this.nextId(), type: 'image', x: 0, y: 0, w: SLIDE_W, h: SLIDE_H, src, fit: 'cover' });
         else if (gradient) slide.bg = gradient;
         else if (!bg) this.note('Some slide backgrounds could not be converted and were dropped.');
       }
@@ -288,22 +313,25 @@ class Importer {
       if (tag === 'p:sp') {
         const made = await this.shape(node, rels, inherit, group);
         out.push(...made);
+        if (!decor) this.keepId(attrs(path(node, 'p:nvSpPr', 'p:cNvPr')).name, made[0]);
         this.remember(attrs(path(node, 'p:nvSpPr', 'p:cNvPr')).id, made[0]);
       } else if (tag === 'p:pic') {
         const el = await this.picture(node, rels, inherit, group);
         if (el) out.push(el);
+        if (!decor) this.keepId(attrs(path(node, 'p:nvPicPr', 'p:cNvPr')).name, el ?? undefined);
         this.remember(attrs(path(node, 'p:nvPicPr', 'p:cNvPr')).id, el ?? undefined);
         // A picture's outline is a frame drawn over it.
         const ln = path(node, 'p:spPr', 'a:ln');
         const stroke = this.solidColor(ln);
         if (el && stroke && !el.clip) {
-          const frame: ShapeElement = { id: newId(), type: 'shape', shape: 'rect', x: el.x, y: el.y, w: el.w, h: el.h, fill: 'none', stroke, strokeWidth: Math.max(1, Math.round((((num(attrs(ln).w) ?? 9525) / EMU_PER_PX) * this.scale))) };
+          const frame: ShapeElement = { id: this.nextId(), type: 'shape', shape: 'rect', x: el.x, y: el.y, w: el.w, h: el.h, fill: 'none', stroke, strokeWidth: Math.max(1, Math.round((((num(attrs(ln).w) ?? 9525) / EMU_PER_PX) * this.scale))) };
           if (el.rot) frame.rot = el.rot;
           out.push(frame);
         }
       } else if (tag === 'p:cxnSp') {
         const el = this.connector(node, group);
         if (el) out.push(el);
+        if (!decor) this.keepId(attrs(path(node, 'p:nvCxnSpPr', 'p:cNvPr')).name, el ?? undefined);
       } else if (tag === 'p:grpSp') {
         const inner = this.groupTransform(child(node, 'p:grpSpPr'), group);
         await this.shapes(node, rels, inherit, out, inner, decor);
@@ -347,7 +375,7 @@ class Importer {
         const [x0, y0, x1, y1] = [xs[col], ys[r], xs[Math.min(cols.length, col + span)], ys[Math.min(rows.length, r + rowSpan)]];
         const tcPr = child(tc, 'a:tcPr');
         const fill = this.colorOf(tcPr);
-        if (fill && fill !== 'none') fills.push({ id: newId(), type: 'shape', shape: 'rect', ...boxOf(at(x0, y0, x1, y1)), fill });
+        if (fill && fill !== 'none') fills.push({ id: this.nextId(), type: 'shape', shape: 'rect', ...boxOf(at(x0, y0, x1, y1)), fill });
         const sides: [string, boolean, number, number, number][] = [['a:lnL', true, x0, y0, y1], ['a:lnR', true, x1, y0, y1], ['a:lnT', false, y0, x0, x1], ['a:lnB', false, y1, x0, x1]];
         for (const [name, vertical, pos, from, to] of sides) {
           const ln = child(tcPr, name);
@@ -386,7 +414,7 @@ class Importer {
   }
 
   private rule(p: Placed, color: string, width: number): LineElement {
-    return { id: newId(), type: 'line', kind: 'straight', ...boxOf(p), strokeColor: color, strokeWidth: width };
+    return { id: this.nextId(), type: 'line', kind: 'straight', ...boxOf(p), strokeColor: color, strokeWidth: width };
   }
 
   /** SmartArt: the shapes PowerPoint saved for it (its drawing part), placed inside the frame. */
@@ -781,7 +809,7 @@ class Importer {
 
     let onShape: ShapeElement | null = null;
     if (!picture && (filled || stroked || (!ph && geometric && !custom))) {
-      const el: ShapeElement = { id: newId(), type: 'shape', shape: custom ? 'rect' : shapeKind(prst, (m) => this.note(m)), ...boxOf(at) };
+      const el: ShapeElement = { id: this.nextId(), type: 'shape', shape: custom ? 'rect' : shapeKind(prst, (m) => this.note(m)), ...boxOf(at) };
       const outline = custom ? customPath(custom, at.flipH, at.flipV, at.w, at.h) : undefined;
       if (outline) el.path = outline.d;
       const plain = !outline && ['rect', 'rounded', 'ellipse'].includes(el.shape);
@@ -881,7 +909,7 @@ class Importer {
     while (ps.length > 1 && ps[ps.length - 1].text.trim() === '') ps.pop();
     if (!ps.length) ps.push({ text: '' });
 
-    const el: TextElement = { id: newId(), type: 'text', role, ...box, paragraphs: ps };
+    const el: TextElement = { id: this.nextId(), type: 'text', role, ...box, paragraphs: ps };
     if (at.rot) el.rot = at.rot;
     const st = this.textStyle(paragraphs, bp, role, defaults, fontScale) ?? {};
     if (bulletSeen) {
@@ -1076,7 +1104,7 @@ class Importer {
       flipH = a[0] > b[0] + 0.5;
       flipV = a[1] > b[1] + 0.5;
     }
-    const el: LineElement = { id: newId(), type: 'line', kind, x, y, w, h };
+    const el: LineElement = { id: this.nextId(), type: 'line', kind, x, y, w, h };
     if (kind === 'straight' && !(el.w > 2 && el.h > 2)) {
       // A horizontal or vertical line: the thin side is the stroke, not a size.
       if (el.h > el.w) el.w = 0;
@@ -1164,7 +1192,7 @@ class Importer {
     }
     const src = await this.image(target);
     if (!src) return null;
-    const el: ImageElement = { id: newId(), type: 'image', ...boxOf(at), src };
+    const el: ImageElement = { id: this.nextId(), type: 'image', ...boxOf(at), src };
     if (at.rot) el.rot = at.rot;
     const sr = attrs(child(blipFill, 'a:srcRect'));
     const side = (v: string | undefined) => Math.max(-10, Math.min(0.99, Math.round(((num(v) ?? 0) / 100000) * 10000) / 10000));

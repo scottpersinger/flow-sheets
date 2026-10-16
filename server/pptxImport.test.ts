@@ -331,6 +331,26 @@ describe('pptx export and import', () => {
     expect(stored).toEqual([{ type: 'image/png', size: expect.any(Number) }]);
   });
 
+  it('gives the same ids each time a file is read, and keeps the ids of a presentation it wrote', async () => {
+    const IMG = '/api/images/00000000-0000-0000-0000-000000000000';
+    const ids = (d: Deck) => d.slides.map((sl) => sl.elements.map((e) => e.id));
+    // A file the app did not write: the same ids on every read.
+    const template = await templatePptx();
+    const first = (await importPptx(template, async () => IMG)).deck;
+    const again = (await importPptx(template, async () => IMG)).deck;
+    expect(ids(again)).toEqual(ids(first));
+    expect(new Set(ids(first).flat()).size).toBe(ids(first).flat().length);
+
+    // One the app wrote: its elements come back with the ids they had.
+    const slide = buildSlide('title-body', { title: 'Plan', body: ['One', 'Two'] }, newId);
+    slide.elements.push({ id: newId(), type: 'shape', shape: 'rect', x: 100, y: 400, w: 80, h: 40, fill: '#ff0000' });
+    const deck: Deck = { version: 1, theme: 'light', slides: [slide] };
+    const { buf } = await pptxBuffer(deck);
+    const back = (await importPptx(buf, async () => IMG)).deck;
+    expect(ids(back)).toEqual(ids(deck));
+    expect(ids((await importPptx(buf, async () => IMG)).deck)).toEqual(ids(deck));
+  });
+
   it('reports what it drops and rejects files that are not presentations', async () => {
     await expect(importPptx(Buffer.from('nope'), async () => '')).rejects.toThrow(/not a valid PowerPoint/);
     const deck: Deck = { version: 1, theme: 'dark', slides: [buildSlide('image', { title: 'Pic', image: 'https://example.com/missing.png' }, newId)] };
