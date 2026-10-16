@@ -3,12 +3,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../shared/agent/protocol.ts';
+import { isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, ApiError } from '../api.ts';
 import { editedCopyName } from '../image/limits.ts';
 import { prepareImage } from './images.ts';
+import { WINDOW_ID } from '../desktopBridge.ts';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
@@ -117,7 +118,7 @@ function readOpen(): boolean {
 }
 
 export function AgentProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, local } = useAuth();
   const navigate = useNavigate();
   const [open, setOpenState] = useState(readOpen);
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -470,6 +471,90 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       });
     });
 
+  /** Run one tool on what is open, as the assistant's step `group`; `rendered` collects pictures it returns (render_slide). */
+  const runTool = async (call: ClientToolCall, group: string, rendered: AgentImage[]): Promise<string> =>
+    // A picture from the web that is going on a slide is stored with the presentation first.
+    runClientTool(await keepDeckPictures(call, api.keepWebImage), {
+      ctl: sheetRef.current?.ctl ?? null,
+      deck: deckRef.current?.ctl ?? null,
+      doc: docRef.current?.ctl ?? null,
+      markdown: markdownRef.current?.ctl ?? null,
+      deckId: deckRef.current?.meta.id ?? null,
+      loadDeck: async (id) => (await api.getDeck(id)).deck,
+      renderSlide: renderSlideImage,
+      deckTitle: deckRef.current?.meta.title ?? null,
+      loadDeckTitle: async (id) => (await api.getDeck(id)).meta.title,
+      makePdf: deckToPdf,
+      uploadFile: api.uploadFile,
+      listFiles: async () => (await api.listFiles()).files,
+      openFile: openFileById,
+      readFile: async (id) => {
+        let file: StoredFile;
+        try {
+          file = (await api.getFile(id)).file;
+        } catch {
+          throw new ToolError(`No file with id "${id}". Use list_files to find ids.`);
+        }
+        const res = await fetch(file.url, { credentials: 'same-origin' });
+        if (!res.ok) throw new ToolError(`Could not read ${file.filename} (${res.status}).`);
+        return { file, data: await res.arrayBuffer() };
+      },
+      // After a change the file's preview page shows the new version.
+      writeFile: async (id, text) => {
+        const file = await api.updateFile(id, text);
+        window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
+        return file;
+      },
+      revertFile: async (id) => {
+        let file: StoredFile;
+        try {
+          file = (await api.revertFile(id)).file;
+        } catch {
+          throw new ToolError('There is no earlier version of this file to go back to.');
+        }
+        window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
+        return file;
+      },
+      imageSize: async (data, type) => {
+        const bitmap = await createImageBitmap(new Blob([data], { type }));
+        const size = { width: bitmap.width, height: bitmap.height };
+        bitmap.close();
+        return size;
+      },
+      readImage: async (src) => {
+        const res = await fetch(src, { credentials: 'same-origin' });
+        if (!res.ok) throw new ToolError(`There is no stored picture at ${src}.`);
+        return res.blob();
+      },
+      saveImage: async (id, image) => {
+        const file = await api.updateImageFile(id, image);
+        window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
+        return file;
+      },
+      saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename, image.type), image, of.folder),
+      openImageEngine: async (source) => (await import('../image/hiddenEngine.ts')).openHiddenEngine(source, { backgroundRemovalLoader: () => import('@imgly/background-removal') }),
+      toAgentImage: async (file, data) => {
+        const { mediaType, data: base64 } = await prepareImage(new File([data], file.filename, { type: file.type }));
+        return { mediaType, data: base64 };
+      },
+      editImage: async (id, prompt) => {
+        try {
+          return (await api.editImage(id, prompt)).file;
+        } catch (e) {
+          throw new ToolError(e instanceof ApiError ? e.message : 'The picture could not be edited.');
+        }
+      },
+      attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
+      group,
+      openSheet: openSheetById,
+      openDeck: openDeckById,
+      openDoc: openDocById,
+      requestAppChange,
+      requestResearch,
+      uploadImage: api.uploadImage,
+      fetchConnectorData: api.fetchConnectorData,
+    });
+
   /** `rendered` collects pictures from render_slide, sent along with the results. */
   const runClientCalls = async (calls: ClientToolCall[], group: string, signal: AbortSignal, rendered: AgentImage[]): Promise<ClientToolResult[]> => {
     const results: ClientToolResult[] = [];
@@ -485,87 +570,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
       if (signal.aborted) break;
       try {
-        // A picture from the web that is going on a slide is stored with the presentation first.
-        const content = await runClientTool(await keepDeckPictures(call, api.keepWebImage), {
-          ctl: sheetRef.current?.ctl ?? null,
-          deck: deckRef.current?.ctl ?? null,
-          doc: docRef.current?.ctl ?? null,
-          markdown: markdownRef.current?.ctl ?? null,
-          deckId: deckRef.current?.meta.id ?? null,
-          loadDeck: async (id) => (await api.getDeck(id)).deck,
-          renderSlide: renderSlideImage,
-          deckTitle: deckRef.current?.meta.title ?? null,
-          loadDeckTitle: async (id) => (await api.getDeck(id)).meta.title,
-          makePdf: deckToPdf,
-          uploadFile: api.uploadFile,
-          listFiles: async () => (await api.listFiles()).files,
-          openFile: openFileById,
-          readFile: async (id) => {
-            let file: StoredFile;
-            try {
-              file = (await api.getFile(id)).file;
-            } catch {
-              throw new ToolError(`No file with id "${id}". Use list_files to find ids.`);
-            }
-            const res = await fetch(file.url, { credentials: 'same-origin' });
-            if (!res.ok) throw new ToolError(`Could not read ${file.filename} (${res.status}).`);
-            return { file, data: await res.arrayBuffer() };
-          },
-          // After a change the file's preview page shows the new version.
-          writeFile: async (id, text) => {
-            const file = await api.updateFile(id, text);
-            window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
-            return file;
-          },
-          revertFile: async (id) => {
-            let file: StoredFile;
-            try {
-              file = (await api.revertFile(id)).file;
-            } catch {
-              throw new ToolError('There is no earlier version of this file to go back to.');
-            }
-            window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
-            return file;
-          },
-          imageSize: async (data, type) => {
-            const bitmap = await createImageBitmap(new Blob([data], { type }));
-            const size = { width: bitmap.width, height: bitmap.height };
-            bitmap.close();
-            return size;
-          },
-          readImage: async (src) => {
-            const res = await fetch(src, { credentials: 'same-origin' });
-            if (!res.ok) throw new ToolError(`There is no stored picture at ${src}.`);
-            return res.blob();
-          },
-          saveImage: async (id, image) => {
-            const file = await api.updateImageFile(id, image);
-            window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
-            return file;
-          },
-          saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename, image.type), image, of.folder),
-          openImageEngine: async (source) => (await import('../image/hiddenEngine.ts')).openHiddenEngine(source, { backgroundRemovalLoader: () => import('@imgly/background-removal') }),
-          toAgentImage: async (file, data) => {
-            const { mediaType, data: base64 } = await prepareImage(new File([data], file.filename, { type: file.type }));
-            return { mediaType, data: base64 };
-          },
-          editImage: async (id, prompt) => {
-            try {
-              return (await api.editImage(id, prompt)).file;
-            } catch (e) {
-              throw new ToolError(e instanceof ApiError ? e.message : 'The picture could not be edited.');
-            }
-          },
-          attachImage: (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0,
-          group,
-          openSheet: openSheetById,
-          openDeck: openDeckById,
-          openDoc: openDocById,
-          requestAppChange,
-          requestResearch,
-          uploadImage: api.uploadImage,
-          fetchConnectorData: api.fetchConnectorData,
-        });
+        const content = await runTool(call, group, rendered);
         results.push({ id: call.id, content });
         updateTool(call.id, { status: 'ok', ...(call.name === 'export_deck' || call.name === 'edit_image' ? { result: content } : {}) });
       } catch (e) {
@@ -577,6 +582,50 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
     return results;
   };
+
+  /**
+   * The desktop app: an MCP agent's edit tool on the file open here, run as the assistant's own tools are (on
+   * the open editor, undoable as one step with the agent's other changes, destructive ones asked about here),
+   * then answered to the server (server/windowTools.ts).
+   */
+  const runWindowCall = async (call: WindowToolCall): Promise<void> => {
+    const open = { sheet: sheetRef.current, deck: deckRef.current, doc: docRef.current, markdown: markdownRef.current }[call.kind];
+    // The page moved on since the server asked: it runs the tool on the stored file instead.
+    if (open?.meta.id !== call.fileId) return void (await api.answerToolCall(call.id, { unavailable: true }));
+    const tool: ClientToolCall = { id: call.id, name: call.name, input: call.input };
+    const question = confirmationFor(tool, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null, markdownRef.current?.ctl ?? null);
+    if (question) {
+      setOpen(true);
+      if (!(await ask(question))) return void (await api.answerToolCall(call.id, { content: 'The user declined this action.', isError: true }));
+    }
+    const rendered: AgentImage[] = [];
+    try {
+      const content = await runTool(tool, call.group, rendered);
+      await api.answerToolCall(call.id, { content, ...(rendered.length ? { images: rendered.map((i) => ({ mediaType: i.mediaType, data: i.data })) } : {}) });
+    } catch (e) {
+      if (!(e instanceof ToolError)) console.error(e);
+      await api.answerToolCall(call.id, { content: e instanceof ToolError ? e.message : `The tool failed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
+    }
+  };
+  const windowCallRef = useRef(runWindowCall);
+  windowCallRef.current = runWindowCall;
+
+  useEffect(() => {
+    if (!user || !local || typeof EventSource === 'undefined') return;
+    const events = new EventSource(`/api/local/tool-calls?window=${encodeURIComponent(WINDOW_ID)}`);
+    // One at a time, in the order the agent made them.
+    let queue = Promise.resolve();
+    events.onmessage = (e) => {
+      let call: WindowToolCall;
+      try {
+        call = JSON.parse(e.data as string) as WindowToolCall;
+      } catch {
+        return;
+      }
+      queue = queue.then(() => windowCallRef.current(call)).catch((err: unknown) => console.error(err));
+    };
+    return () => events.close();
+  }, [user, local]);
 
   const send = (text: string, images: AgentImage[] = [], opts: { inline?: boolean } = {}) => {
     const message = text.trim();

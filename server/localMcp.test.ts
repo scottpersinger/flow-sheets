@@ -51,6 +51,8 @@ describe("the desktop app's MCP server", () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(['list_files', 'open_file', 'read_doc', 'insert_content', 'write_range', 'create_folder', 'move_file', 'upload_file']));
+    // And the tools only the window can run, here only.
+    expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(['render_slide', 'export_deck', 'select_range']));
     // Only the model's tools: none of the parts for ChatGPT's own app.
     expect(tools.map((t) => t.name)).not.toContain('app_state');
 
@@ -83,6 +85,70 @@ describe("the desktop app's MCP server", () => {
     const read = await client.callTool({ name: 'read_doc', arguments: {} });
     expect(read.isError).not.toBe(true);
     expect(text(read)).toContain('Notes');
+    await client.close();
+  });
+
+  it('runs an edit on the file a window has open in that window, and answers with what the window did', async () => {
+    const list = await app.inject({ method: 'GET', url: '/api/library' });
+    const md = (list.json().docs as { id: string; kind: string }[]).find((d) => d.kind === 'markdown')!;
+    const before = readFileSync(path.join(folder, 'notes.md'), 'utf8');
+
+    // The window: takes calls as server-sent events.
+    const stop = new AbortController();
+    const res = await fetch(`${origin}/api/local/tool-calls?window=w1`, { signal: stop.signal });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const nextCall = async (): Promise<{ id: string; name: string; kind: string; fileId: string; input: Record<string, unknown> }> => {
+      for (;;) {
+        const end = buffer.indexOf('\n\n');
+        if (end >= 0) {
+          const event = /^data: (.*)$/m.exec(buffer.slice(0, end));
+          buffer = buffer.slice(end + 2);
+          if (event) return JSON.parse(event[1]);
+          continue;
+        }
+        const { value, done } = await reader.read();
+        if (done) throw new Error('The stream ended.');
+        buffer += decoder.decode(value, { stream: true });
+      }
+    };
+    await app.inject({ method: 'POST', url: '/api/local/showing', payload: { kind: 'markdown', id: md.id, window: 'w1' } });
+
+    const client = await connect();
+    try {
+      const pending = client.callTool({ name: 'insert_content', arguments: { markdown: 'From the window.' } });
+      const call = await nextCall();
+      expect(call).toMatchObject({ name: 'insert_content', kind: 'markdown', fileId: md.id, input: { markdown: 'From the window.' } });
+      const answered = await app.inject({ method: 'POST', url: `/api/local/tool-calls/${call.id}`, payload: { content: JSON.stringify({ inserted_blocks: 1 }), images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] } });
+      expect(answered.statusCode).toBe(200);
+      const r = await pending;
+      expect(r.isError).not.toBe(true);
+      expect(JSON.parse(text(r))).toMatchObject({ doc_id: md.id, inserted_blocks: 1 });
+      expect(r.content).toContainEqual({ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' });
+      // The window made the change in its editor; the server did not write the file.
+      expect(readFileSync(path.join(folder, 'notes.md'), 'utf8')).toBe(before);
+
+      // A window that has moved on answers unavailable, and the server makes the change itself.
+      const again = client.callTool({ name: 'insert_content', arguments: { markdown: 'Saved by the server.' } });
+      const second = await nextCall();
+      await app.inject({ method: 'POST', url: `/api/local/tool-calls/${second.id}`, payload: { unavailable: true } });
+      expect((await again).isError).not.toBe(true);
+      expect(readFileSync(path.join(folder, 'notes.md'), 'utf8')).toContain('Saved by the server.');
+      expect((await app.inject({ method: 'POST', url: `/api/local/tool-calls/${second.id}`, payload: { content: 'late' } })).statusCode).toBe(404);
+    } finally {
+      stop.abort();
+      await client.close();
+    }
+  });
+
+  it('says to open the file first for a tool only the window can run', async () => {
+    await app.inject({ method: 'POST', url: '/api/local/showing', payload: {} });
+    const client = await connect();
+    const r = await client.callTool({ name: 'render_slide', arguments: { slide: 1 } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('Open one with open_file');
     await client.close();
   });
 

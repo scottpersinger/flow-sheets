@@ -44,6 +44,31 @@ export type FileData = Doc | Deck | Workbook | MarkdownDoc;
 export type LibraryKind = FileKind | 'file';
 export const LIBRARY_KINDS: readonly LibraryKind[] = [...FILE_KINDS, 'file'];
 
+/** A picture a tool returned for the model to look at (render_slide, view_image). */
+export interface ToolImage {
+  mediaType: string;
+  data: string;
+}
+
+/** What a tool run in the app's window returned: its JSON text, or the message it failed with. */
+export interface LiveResult {
+  content: string;
+  isError?: boolean;
+  images?: ToolImage[];
+}
+
+/**
+ * Runs a tool on a file in the window that shows it (the desktop app, server/windowTools.ts): the change is
+ * made in the open editor, undoable there with the agent's other changes, and a destructive one is asked
+ * about there. Null when no window has the file open, and the tool runs here on the stored file instead.
+ */
+export interface LiveEditor {
+  run(file: { kind: FileKind; id: string }, tool: string, input: Record<string, unknown>): Promise<LiveResult | null>;
+}
+
+/** Where an edit tool's result keeps the pictures it returned (not part of its JSON), for the MCP layer to attach. */
+export const RESULT_IMAGES = Symbol('result images');
+
 export { importLimit, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType } from '../../server/importFile.ts';
 /** How long a link to a stored file's bytes works (the player asks for the file in pieces as it plays). */
 const FILE_LINK_MS = 6 * 60 * 60 * 1000;
@@ -237,6 +262,8 @@ export class FileHub {
   onShow: ((userId: string, file: { kind: LibraryKind; id: string }) => void) | null = null;
   /** Told when the model rewrote a stored file (edit_file), for a host showing it to load it again. */
   onFileChanged: ((userId: string, id: string) => void) | null = null;
+  /** The host's open editors, where the edit tools run on a file open in one (the desktop app); null here otherwise. */
+  live: LiveEditor | null = null;
   /** Links to stored files' bytes: the app's iframe has no credentials, so the address carries a token. */
   private readonly fileLinks = new Map<string, { userId: string; id: string; expires: number }>();
   /** One-time tickets letting the app upload a file for import without a bearer token (it has none). */
@@ -770,10 +797,46 @@ export class FileService {
   // --- Headless editing for the model's tools --------------------------------------------
 
   /**
+   * Run the tool in the window that has the file open (FileHub.live), when there is one: the result, with its
+   * pictures under RESULT_IMAGES. Null when no window has it open, to run it here.
+   */
+  private async runLive(kind: FileKind, id: string, idKey: string, tool: string, input: Record<string, unknown>): Promise<Record<string | symbol, unknown> | null> {
+    if (!this.hub.live || this.open?.id !== id) return null;
+    const r = await this.hub.live.run({ kind, id }, tool, input);
+    if (!r) return null;
+    if (r.isError) throw new ToolError(r.content);
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(r.content) as Record<string, unknown>;
+    } catch {
+      parsed = { result: r.content };
+    }
+    // The assistant's tools say where their picture is in its own conversation; here it comes with the result.
+    if (r.images?.length && typeof parsed.image === 'string') parsed.image = 'The picture comes with this result. Look at it before reporting back.';
+    return { [idKey]: id, title: this.sheets.get(this.userId, id)?.title ?? '', ...parsed, ...(r.images?.length ? { [RESULT_IMAGES]: r.images } : {}) };
+  }
+
+  /**
+   * A tool only the app's window can run (it draws a slide, or moves the selection there), on the file open
+   * in it. A file the model has just opened takes a moment to load there, so it is waited for a little.
+   */
+  async runInWindow(kind: FileKind, id: string, idKey: string, tool: string, input: Record<string, unknown>): Promise<Record<string | symbol, unknown>> {
+    for (let i = 0; i < 10; i++) {
+      const r = await this.runLive(kind, id, idKey, tool, input);
+      if (r) return r;
+      if (!this.hub.live || this.open?.id !== id) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new ToolError(`${tool} works on the ${noun(kind)} open in the app’s window. Open it with open_file, then try again.`);
+  }
+
+  /**
    * Run one of the app's document tools on a stored document and save the result. Returns what the tool
    * returned (parsed), with the document id and its new revision.
    */
   async editDoc(id: string, tool: DocEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const live = await this.runLive('doc', id, 'doc_id', tool, input);
+    if (live) return live;
     const loaded = await this.sheets.loadDoc(this.userId, id);
     if (!loaded) throw new ToolError(`There is no document ${id}.`);
     const before = JSON.stringify(loaded.doc);
@@ -802,6 +865,8 @@ export class FileService {
   async editMarkdown(id: string, tool: DocEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const problem = markdownToolProblem(tool);
     if (problem) throw new ToolError(problem.replace('The open file', 'This file'));
+    const live = await this.runLive('markdown', id, 'doc_id', tool, input);
+    if (live) return live;
     const loaded = await this.sheets.loadMarkdown(this.userId, id);
     if (!loaded) throw new ToolError(`There is no Markdown document ${id}.`);
     const ctl = new MarkdownController(loaded.doc, async () => {});
@@ -825,6 +890,8 @@ export class FileService {
 
   /** The same for a presentation and the app's deck tools. */
   async editDeck(id: string, tool: DeckEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const live = await this.runLive('deck', id, 'deck_id', tool, input);
+    if (live) return live;
     const loaded = await this.sheets.loadDeck(this.userId, id);
     if (!loaded) throw new ToolError(`There is no presentation ${id}.`);
     const before = JSON.stringify(loaded.deck);
@@ -847,6 +914,8 @@ export class FileService {
 
   /** The same for a spreadsheet and the app's sheet tools (which run against a SheetController). */
   async editSheet(id: string, tool: SheetEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const live = await this.runLive('sheet', id, 'sheet_id', tool, input);
+    if (live) return live;
     const loaded = await this.sheets.load(this.userId, id);
     if (!loaded || loaded.meta.kind !== 'sheet') throw new ToolError(`There is no spreadsheet ${id}.`);
     const before = JSON.stringify(loaded.workbook);

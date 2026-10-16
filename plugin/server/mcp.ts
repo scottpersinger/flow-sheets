@@ -14,8 +14,8 @@ import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
 import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
 import { appName } from '../../shared/brand.ts';
-import type { ImageJobResult } from './files.ts';
-import { ConflictError, DECK_EDIT_TOOLS, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, UPLOAD_TICKET_MS, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
+import type { ImageJobResult, ToolImage } from './files.ts';
+import { ConflictError, DECK_EDIT_TOOLS, RESULT_IMAGES, DOC_EDIT_TOOLS, FILE_KINDS, FileService, importLimit, LIBRARY_KINDS, MAX_IMPORT_BYTES, MAX_PDF_BYTES, sniffImageType, SHEET_EDIT_TOOLS, ToolError, UPLOAD_TICKET_MS, type LibraryKind, type DeckEditTool, type DocEditTool, type FileData, type FileKind, type SheetEditTool, type SlideSpec } from './files.ts';
 
 /**
  * The app's resource URI. Hosts capture the HTML by URI when the plugin is created or its tools refreshed, so
@@ -206,6 +206,13 @@ async function download(url: string, fetchFn: typeof fetch, limit: number | ((na
 
 function ok(data: Record<string, unknown>): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data };
+}
+
+/** An edit tool's result, with the pictures it returned (render_slide run in the app's window) after its JSON. */
+function okEdit(result: Record<string | symbol, unknown>): CallToolResult {
+  const { [RESULT_IMAGES]: images, ...data } = result as Record<string, unknown> & { [RESULT_IMAGES]?: ToolImage[] };
+  const r = ok(data);
+  return images?.length ? { ...r, content: [...r.content, ...images.map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mediaType }))] } : r;
 }
 
 function fail(message: string): CallToolResult {
@@ -909,8 +916,8 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           }
           const target = service.docTarget(doc_id);
           if (!target) return fail('No document is open in the app. Pass doc_id (see list_files), or open one with open_file.');
-          if (target.kind === 'markdown') return ok(await service.editMarkdown(target.id, name, input));
-          return ok(await service.editDoc(target.id, name, await resolveImage(name, input)));
+          if (target.kind === 'markdown') return okEdit(await service.editMarkdown(target.id, name, input));
+          return okEdit(await service.editDoc(target.id, name, await resolveImage(name, input)));
         }),
     );
   }
@@ -924,7 +931,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           const { deck_id, ...input } = args as Record<string, unknown> & { deck_id?: string };
           const id = service.target('deck', deck_id);
           if (!id) return fail('No presentation is open in the app. Pass deck_id (see list_files), or open one with open_file.');
-          return ok(await service.editDeck(id, name, name === 'edit_elements' && version === 1 ? arcsAsEllipseBoxes(input) : input));
+          return okEdit(await service.editDeck(id, name, name === 'edit_elements' && version === 1 ? arcsAsEllipseBoxes(input) : input));
         }),
     );
   }
@@ -938,9 +945,48 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           const { sheet_id, ...input } = args as Record<string, unknown> & { sheet_id?: string };
           const id = service.target('sheet', sheet_id);
           if (!id) return fail('No spreadsheet is open in the app. Pass sheet_id (see list_files), or open one with open_file.');
-          return ok(await service.editSheet(id, name, await resolveImage(name, input)));
+          return okEdit(await service.editSheet(id, name, await resolveImage(name, input)));
         }),
     );
+  }
+
+  // --- Tools only the desktop app's window can run (it draws the slide, or moves the selection there) ---
+
+  if (opts.local) {
+    const windowOnly = [
+      {
+        name: 'render_slide',
+        kind: 'deck',
+        description:
+          'Take a picture of a slide of the presentation open in the app, drawn exactly as the editor and present mode draw it (same fonts, theme, images, wrapping), to check your work: the PNG comes with the result. Returns its stored /api/images/... address, its size in pixels, and "overflow": text boxes and shape labels whose rendered text is taller or wider than their box (box and rendered sizes in points).',
+        inputSchema: { slide: schemas.render_slide.shape.slide, scale: schemas.render_slide.shape.scale, deck_id: optionalDeckId },
+        readOnly: true,
+      },
+      {
+        name: 'export_deck',
+        kind: 'deck',
+        description: 'Export the presentation open in the app as a PDF, every slide drawn exactly as present mode draws it, one 960×540 page per slide. The PDF is saved beside it in the folder. Returns file_id, filename and pages; open_file shows it.',
+        inputSchema: { format: schemas.export_deck.shape.format, deck_id: optionalDeckId },
+        readOnly: false,
+      },
+      {
+        name: 'select_range',
+        kind: 'sheet',
+        description: 'Select a range of the spreadsheet open in the app and scroll to it, to show the user something.',
+        inputSchema: { ...schemas.select_range.shape, sheet_id: optionalSheetId },
+        readOnly: true,
+      },
+    ] as const;
+    for (const t of windowOnly) {
+      server.registerTool(t.name, { description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.readOnly, destructiveHint: false, openWorldHint: false } }, async (args: Record<string, unknown>) =>
+        guard(async () => {
+          const { deck_id, sheet_id, ...input } = args as Record<string, unknown> & { deck_id?: string; sheet_id?: string };
+          const id = service.target(t.kind, t.kind === 'deck' ? deck_id : sheet_id);
+          if (!id) return fail(`No ${t.kind === 'deck' ? 'presentation' : 'spreadsheet'} is open in the app. Open one with open_file.`);
+          return okEdit(await service.runInWindow(t.kind, id, t.kind === 'deck' ? 'deck_id' : 'sheet_id', t.name, input));
+        }),
+      );
+    }
   }
 
   // --- Tools for the app only (hidden from the model) ------------------------------------

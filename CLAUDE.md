@@ -88,7 +88,15 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   the plugin's and the marketplace entry's with the desktop release they go with). A file
   the model opens, creates or imports is shown in the window (`FileHub.onShow`, a `show` message to `main.js`,
   a `universal-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
-  `client/src/desktopBridge.ts`), which the tools act on when no id is given.
+  `client/src/desktopBridge.ts`, with the window's `WINDOW_ID`), which the tools act on when no id is given.
+  An edit tool on the file a window shows runs in that window, as the built-in assistant's tools do: `FileHub.live`
+  (`LiveEditor`) is `server/windowTools.ts`, which sends the call to the window (`GET /api/local/tool-calls`,
+  server-sent events) and waits for its answer (`POST /api/local/tool-calls/:id`); `AgentProvider`'s
+  `runWindowCall` runs it with `runTool` on the open editor, so it is undoable (calls less than a minute apart
+  share an undo group), asks about destructive changes (`confirmationFor`, opening the panel), and is saved by
+  the editor. A window that no longer has the file answers `unavailable`, and the tool runs headless on the
+  stored file (`FileService.editDoc`/`editDeck`/`editSheet`). `render_slide`, `export_deck` and `select_range`
+  only run in the window, and only the desktop MCP server has them (`McpOptions.local`).
 - The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
   (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
   `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;

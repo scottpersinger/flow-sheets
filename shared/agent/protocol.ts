@@ -109,6 +109,16 @@ export interface ClientToolCall {
   input: Record<string, unknown>;
 }
 
+/**
+ * The desktop app: an MCP agent's edit tool on the file a window shows, sent to that window to run on its
+ * open editor (server/windowTools.ts). `group` is the undo step: a run of the agent's calls undoes as one.
+ */
+export interface WindowToolCall extends ClientToolCall {
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown';
+  fileId: string;
+  group: string;
+}
+
 export interface ClientToolResult {
   id: string;
   content: string;

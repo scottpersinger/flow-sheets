@@ -7,6 +7,9 @@ import { api } from './api.ts';
 
 const KINDS = { doc: 'doc', d: 'deck', s: 'sheet', md: 'markdown', f: 'file' } as const;
 
+/** This window, to the server: an agent's tool on the file it shows runs here (server/windowTools.ts). */
+export const WINDOW_ID = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `w-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 /** The file at an address of the app (/doc/<id>, /d/<id>, ...), or null for any other page. */
 export function fileAt(pathname: string): { kind: (typeof KINDS)[keyof typeof KINDS]; id: string } | null {
   const m = /^\/(doc|d|s|md|f)\/([^/]+)$/.exec(pathname);
@@ -17,12 +20,12 @@ export function useDesktopBridge(on: boolean): void {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   useEffect(() => {
-    if (on) api.localShowing(fileAt(pathname)).catch(() => {});
+    if (on) api.localShowing(fileAt(pathname), WINDOW_ID).catch(() => {});
   }, [on, pathname]);
   // The page reports itself again when it is brought forward: of several windows, the one in front is shown.
   useEffect(() => {
     if (!on) return;
-    const report = () => document.visibilityState === 'visible' && document.hasFocus() && api.localShowing(fileAt(location.pathname)).catch(() => {});
+    const report = () => document.visibilityState === 'visible' && document.hasFocus() && api.localShowing(fileAt(location.pathname), WINDOW_ID).catch(() => {});
     window.addEventListener('focus', report);
     return () => window.removeEventListener('focus', report);
   }, [on]);

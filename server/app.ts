@@ -52,6 +52,7 @@ import { RevisionFeed } from './revisionFeed.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { importPptx } from './pptxImport.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
+import { WindowTools, type WindowToolAnswer, type WindowToolCall } from './windowTools.ts';
 import { mountLocalMcp } from './localMcp.ts';
 import { MAX_OFFICE_ENTRY_BYTES, openZip, ZipError, zipEntries, zipEntryBytes, zipOfficeView } from './zipView.ts';
 import { isZipName } from '../shared/zip.ts';
@@ -266,9 +267,11 @@ export async function buildApp(opts: AppOptions) {
   }
   // The pictures of the folder's PowerPoint and Word files, read each time one is opened, are stored once.
   if (localUser && sheets instanceof LocalSheetStore) sheets.media = { store: (type, data) => images.createOnce(localUser.id, type, data), source: imageSource(images, localUser.id) };
-  // The desktop app's MCP server, and the file its window shows (the one the tools act on by default).
+  // The desktop app's MCP server, and the file its window shows (the one the tools act on by default). Its
+  // edit tools on a file open in a window run in that window (windowTools.ts).
+  const windowTools = opts.local?.mcp ? new WindowTools() : null;
   const localMcp = opts.local?.mcp
-    ? await mountLocalMcp(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, folders, userId: localUser!.id, token: opts.local.mcp.token, publicUrl: opts.local.mcp.url ?? null, show: opts.local.mcp.show, changed: opts.local.mcp.changed })
+    ? await mountLocalMcp(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, folders, userId: localUser!.id, token: opts.local.mcp.token, publicUrl: opts.local.mcp.url ?? null, show: opts.local.mcp.show, changed: opts.local.mcp.changed, live: windowTools })
     : null;
   app.addHook('onRequest', async (req) => {
     if (localUser) req.user = !opts.local!.token || req.cookies[LOCAL_COOKIE] === opts.local!.token ? localUser : null;
@@ -1224,7 +1227,7 @@ export async function buildApp(opts: AppOptions) {
 
     // The file the window shows ({kind, id}, or nothing): what the MCP tools act on when no id is given.
     r.post('/api/local/showing', async (req) => {
-      const { kind, id } = (req.body ?? {}) as { kind?: unknown; id?: unknown };
+      const { kind, id, window } = (req.body ?? {}) as { kind?: unknown; id?: unknown; window?: unknown };
       const shown = typeof id === 'string' && (['doc', 'deck', 'sheet', 'markdown', 'file'] as const).find((k) => k === kind);
       try {
         localMcp?.setOpen(shown ? { kind: shown, id } : null);
@@ -1232,6 +1235,40 @@ export async function buildApp(opts: AppOptions) {
         // Not a file of this folder (any more): nothing is open.
         localMcp?.setOpen(null);
       }
+      if (typeof window === 'string') windowTools?.showing(window, shown ? (id as string) : null);
+      return { ok: true };
+    });
+
+    // A window takes the agent's edit tools on the file it shows (windowTools.ts): the calls come as
+    // server-sent events, and each answer is posted back.
+    r.get('/api/local/tool-calls', async (req, reply) => {
+      const window = (req.query as { window?: unknown }).window;
+      if (!windowTools || typeof window !== 'string' || !window) return reply.code(404).send({ error: 'There are no agent tools here.' });
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      res.write(': connected\n\n');
+      const disconnect = windowTools.connect(window, (call: WindowToolCall) => res.write(`data: ${JSON.stringify(call)}\n\n`));
+      const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+      revisionStreams.add(res);
+      res.on('close', () => {
+        disconnect();
+        clearInterval(ping);
+        revisionStreams.delete(res);
+      });
+    });
+
+    r.post('/api/local/tool-calls/:id', async (req, reply) => {
+      const body = (req.body ?? {}) as { content?: unknown; isError?: unknown; images?: unknown; unavailable?: unknown };
+      let answer: WindowToolAnswer;
+      if (body.unavailable === true) answer = { unavailable: true };
+      else if (typeof body.content === 'string') {
+        const images = Array.isArray(body.images)
+          ? body.images.filter((i): i is { mediaType: string; data: string } => !!i && typeof (i as { mediaType?: unknown }).mediaType === 'string' && typeof (i as { data?: unknown }).data === 'string')
+          : [];
+        answer = { content: body.content, isError: body.isError === true, ...(images.length ? { images } : {}) };
+      } else return reply.code(400).send({ error: 'Give the tool’s content, or unavailable.' });
+      if (!windowTools?.answer((req.params as { id: string }).id, answer)) return reply.code(404).send({ error: 'No such tool call (it timed out, or was answered).' });
       return { ok: true };
     });
 

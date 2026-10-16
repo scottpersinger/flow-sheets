@@ -7,7 +7,7 @@
 // editor follows them as it follows any other save (the revision feed).
 import type { FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
-import { FileHub, type FileService, type LibraryKind } from '../plugin/server/files.ts';
+import { FileHub, type FileService, type LibraryKind, type LiveEditor } from '../plugin/server/files.ts';
 import { createPluginHandler, mcpVersion } from '../plugin/server/http.ts';
 import { MCP_VERSIONS } from '../plugin/server/mcp.ts';
 import type { DB } from './db.ts';
@@ -33,6 +33,8 @@ export interface LocalMcpOptions {
   show(path: string): void;
   /** A stored file was rewritten (edit_file): a window showing it loads it again. */
   changed?(id: string): void;
+  /** The windows, where the edit tools run on a file open in one (windowTools.ts). */
+  live?: LiveEditor | null;
 }
 
 /** The app's address of a file. */
@@ -52,6 +54,7 @@ export async function mountLocalMcp(app: FastifyInstance, opts: LocalMcpOptions)
   const hub = new FileHub({ db: opts.db, dataDir: opts.dataDir, publicUrl: opts.publicUrl, sheets: opts.sheets, images: opts.images, files: opts.files, folders: opts.folders });
   hub.onShow = (_userId, file) => opts.show(pathOfFile(file.kind, file.id));
   hub.onFileChanged = (_userId, id) => opts.changed?.(id);
+  hub.live = opts.live ?? null;
   // The model's tools only: none of the parts for ChatGPT's own app (its UI resource and app-only tools).
   const handler = createPluginHandler({ hub, oauth: null, devUserId: opts.userId, publicUrl: opts.publicUrl, webDir: '', production: true, mcp: { level: 'tools', local: true } });
   app.addHook('onRequest', (req, reply, done) => {

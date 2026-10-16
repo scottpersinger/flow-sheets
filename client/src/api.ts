@@ -146,7 +146,9 @@ export const api = {
   localRecents: () => request<{ files: RecentFile[]; /** Folders macOS does not let the app read. */ blocked: string[] }>('GET', '/api/local/recents'),
   /** Open one of them: answers with its path in the open folder, or that the app is switching to the file's folder. */
   /** The desktop app: the file the window shows, for the MCP tools to act on (server/localMcp.ts); null for none. */
-  localShowing: (file: { kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file'; id: string } | null) => request<{ ok: true }>('POST', '/api/local/showing', file ?? {}),
+  localShowing: (file: { kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file'; id: string } | null, window?: string) => request<{ ok: true }>('POST', '/api/local/showing', { ...(file ?? {}), ...(window ? { window } : {}) }),
+  /** The desktop app: answer an agent's tool call that ran in this window (server/windowTools.ts). */
+  answerToolCall: (id: string, answer: { content: string; isError?: boolean; images?: { mediaType: string; data: string }[] } | { unavailable: true }) => request<{ ok: true }>('POST', `/api/local/tool-calls/${encodeURIComponent(id)}`, answer),
   openLocal: (path: string) => request<{ file?: string; switching?: true }>('POST', '/api/local/open', { path }),
   /** The desktop app: open a file or folder by its path (absolute, ~/..., or in the open folder). */
   openLocalPath: (path: string) => request<{ file?: string; folder?: string; switching?: true }>('POST', '/api/local/open-path', { path }),
