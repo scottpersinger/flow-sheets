@@ -5,6 +5,7 @@ and videos, edited in place. It is also an **MCP server**, so your coding agent 
 can open, read, create and edit those files with you while you watch each change land in the app.
 
 [![Download MCP Docs for macOS](https://img.shields.io/badge/Download-MCP%20Docs%20for%20macOS-2ea44f?logo=apple)](https://github.com/scottpersinger/universal-docs/releases/latest)
+[![npm](https://img.shields.io/npm/v/@scottpersinger/mcp-docs?label=npx%20%40scottpersinger%2Fmcp-docs)](https://www.npmjs.com/package/@scottpersinger/mcp-docs)
 
 ## Install
 
