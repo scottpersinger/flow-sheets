@@ -208,6 +208,24 @@
             "LSItemContentTypes": [
               "com.adobe.pdf"
             ]
+          },
+          {
+            "CFBundleTypeName": "Picture",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.png",
+              "public.jpeg",
+              "org.webmproject.webp"
+            ]
+          },
+          {
+            "CFBundleTypeName": "GIF Picture",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "com.compuserve.gif"
+            ]
           }
         ],
         "UTExportedTypeDeclarations": [

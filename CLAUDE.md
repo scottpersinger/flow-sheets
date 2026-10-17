@@ -62,7 +62,8 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   `client/src/components/OfficeFile.tsx`) until the user allows editing, and the first save over it keeps a
   copy in the trash.
   On macOS the app declares the file types it opens (`build.mac.extendInfo` in `package.json`: it owns
-  `.ffsheet`/`.ffslides`/`.ffdoc` and edits Markdown, CSV, Office files and PDFs). macOS keeps Apple's apps
+  `.ffsheet`/`.ffslides`/`.ffdoc` and edits Markdown, CSV, Office files and PDFs, and is an Open With
+  choice, never the default, for PNG, JPEG, WebP and GIF pictures). macOS keeps Apple's apps
   the default for the standard ones whatever the app declares, so the installed app offers once, and has
   Make Default App… in the app menu, to set itself as the person's default (`setDefaultApp`). Finder's
   `open-file` shows the file in the open folder when it is inside it, else opens the file's own folder.
