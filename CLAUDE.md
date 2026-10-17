@@ -84,8 +84,10 @@ assistant. The server runs TypeScript directly with Node's type stripping; impor
   dialog, not on the web page; tokens hashed in `mcp-auth.json` in the app's data folder), and File › Connect
   an Agent (MCP)… shows the `claude mcp add` command and disconnects them. For Claude Code it is also a plugin,
   `claude-plugin/` (the server and a skill, `skills/mcp-docs/SKILL.md`; the marketplace is `.claude-plugin/marketplace.json`
-  at the root), installed with the app by `npx @scottpersinger/mcp-docs` (`installer/`, its own npm package; keep its version,
-  the plugin's and the marketplace entry's with the desktop release they go with). A file
+  at the root), installed with the app by `npx @scottpersinger/mcp-docs` (`installer/`, its own npm package; its version,
+  the plugin's and the marketplace entry's are the desktop release's: `npm run release -- <version>` sets them all and tags
+  `desktop-v<version>`, and pushing the tag has `.github/workflows/desktop-release.yml` build the app, make the GitHub
+  release and publish the installer to npm, with the notes in `release-notes/<version>.md`). A file
   the model opens, creates or imports is shown in the window (`FileHub.onShow`, a `show` message to `main.js`,
   a `universal-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
   `client/src/desktopBridge.ts`, with the window's `WINDOW_ID`), which the tools act on when no id is given.

@@ -12,6 +12,7 @@
     "dev:client": "vite",
     "build": "vite build && vite build --config plugin/vite.config.ts",
     "start": "NODE_ENV=production node server/supervise.ts",
+    "release": "node scripts/release.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "plugin:dev": "node --watch --watch-path=plugin/server --watch-path=server --watch-path=shared plugin/server/index.ts",

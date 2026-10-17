@@ -101,10 +101,18 @@ folder it may not read shows a message saying so.
 
 The packaged app holds the server's TypeScript as plain files (`asar` is off), which Electron's Node runs as it does in development. Started from its icon it reopens the folder it showed last, or opens your home folder the first time; a folder can also be given on its command line. It reads no `.env`.
 
-`npm run desktop:mac` builds the macOS app and its zip in `release/`, which a GitHub release (tagged
-`desktop-v<version>`) carries. The installer is the `@scottpersinger/mcp-docs` npm package in `installer/`, and the
-Claude Code plugin is `claude-plugin/` (its marketplace is `.claude-plugin/marketplace.json`): keep their versions with
-the release, and publish the installer with `cd installer && npm publish` once the release is on GitHub.
+`npm run desktop:mac` builds the macOS app and its zip in `release/`. A release is made by GitHub Actions
+(`.github/workflows/desktop-release.yml`):
+
+1. Write what is new in `release-notes/<version>.md` (a Markdown list; `release-notes/template.md` adds the install
+   steps).
+2. `npm run release -- <version>` sets the version of the app, the Claude Code plugin (`claude-plugin/`), its
+   marketplace entry (`.claude-plugin/marketplace.json`) and the installer (`installer/`, the `@scottpersinger/mcp-docs`
+   npm package), commits that and tags it `desktop-v<version>`.
+3. `git push origin main desktop-v<version>`. The workflow checks, builds the app on Apple silicon, makes the GitHub
+   release with its zip and publishes the installer to npm (trusted publishing: no npm token or one-time code).
+
+Running the workflow by hand (Actions › Desktop release › Run workflow) builds without publishing anything.
 
 ## Videos
 
