@@ -63,7 +63,9 @@ jobs:
         if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+        # Already made when a run that failed later is run again.
         run: >
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "MCP Docs $VERSION (macOS)"
           --notes-file release/notes.md "release/MCP-Docs-$VERSION-mac-arm64.zip"
 
